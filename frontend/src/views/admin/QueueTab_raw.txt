@@ -1,0 +1,114 @@
+          <div v-if="activeTab === 'queue'">
+            <div v-if="queueStats" class="queue-panel">
+              <div class="queue-header">
+                <div class="queue-status-badge">
+                  <span class="qsb-dot" :class="queueStats.paused ? 'qsb-paused' : 'qsb-live'"></span>
+                  <span class="qsb-text">{{ queueStats.paused ? '已暂停' : '运行中' }}</span>
+                </div>
+                <div class="queue-actions">
+                  <button v-if="!queueStats.paused" class="btn btn-warn btn-sm" :disabled="queuePausing" @click="pauseQueue">
+                    {{ queuePausing ? '...' : '暂停队列' }}
+                  </button>
+                  <button v-if="queueStats.paused" class="btn btn-success btn-sm" :disabled="queuePausing" @click="resumeQueue">
+                    {{ queuePausing ? '...' : '恢复队列' }}
+                  </button>
+                  <button class="btn btn-ghost btn-sm" @click="loadQueueData" :disabled="loadingQueue">
+                    {{ loadingQueue ? '刷新中' : '刷新' }}
+                  </button>
+                </div>
+              </div>
+
+              <div class="queue-kpi-row">
+                <div class="qkpi">
+                  <div class="qkpi-val">{{ queueStats.queue?.pending || 0 }}</div>
+                  <div class="qkpi-label">待处理</div>
+                </div>
+                <div class="qkpi">
+                  <div class="qkpi-val qkpi-running">{{ queueStats.queue?.running || 0 }}</div>
+                  <div class="qkpi-label">执行中</div>
+                </div>
+                <div class="qkpi">
+                  <div class="qkpi-val qkpi-ok">{{ queueStats.queue?.completed || 0 }}</div>
+                  <div class="qkpi-label">已完成</div>
+                </div>
+                <div class="qkpi">
+                  <div class="qkpi-val qkpi-bad">{{ queueStats.queue?.failed || 0 }}</div>
+                  <div class="qkpi-label">失败</div>
+                </div>
+                <div class="qkpi">
+                  <div class="qkpi-val qkpi-blue">{{ queueStats.active_workers || 0 }}</div>
+                  <div class="qkpi-label">工作线程</div>
+                </div>
+              </div>
+
+              <div class="queue-config-row">
+                <label class="qcfg-label">最大并发数</label>
+                <input v-model.number="maxWorkersInput" type="number" min="1" max="10" class="qcfg-input" />
+                <button class="btn btn-primary btn-sm" @click="setMaxWorkers">应用</button>
+                <button class="btn btn-ghost btn-sm" @click="applyAutoConcurrency" title="根据服务器配置自动设置">智能检测</button>
+                <button class="btn btn-ghost btn-sm" @click="detectServerSpecs" title="查看服务器配置">服务器配置</button>
+              </div>
+
+              <div v-if="serverSpecs" class="queue-specs-card">
+                <div class="spec-row"><span class="spec-label">CPU</span><span class="spec-val">{{ serverSpecs.cpu_count }} 核</span></div>
+                <div class="spec-row"><span class="spec-label">内存</span><span class="spec-val">{{ serverSpecs.total_mem_gb }} GB</span></div>
+                <div class="spec-row"><span class="spec-label">推荐并发</span><span class="spec-val spec-highlight">{{ serverSpecs.recommended_workers }} 个任务</span></div>
+                <div class="spec-row"><span class="spec-label">当前设置</span><span class="spec-val">{{ serverSpecs.current_workers }} 个任务</span></div>
+              </div>
+
+              <div class="section-actions" style="margin-top: 20px;">
+                <div class="filter-group">
+                  <button :class="['chip', { active: queueStatusFilter === '' }]" @click="queueStatusFilter = ''; loadQueueData()">全部</button>
+                  <button :class="['chip', { active: queueStatusFilter === 'pending' }]" @click="queueStatusFilter = 'pending'; loadQueueData()">待处理</button>
+                  <button :class="['chip', { active: queueStatusFilter === 'running' }]" @click="queueStatusFilter = 'running'; loadQueueData()">执行中</button>
+                  <button :class="['chip', { active: queueStatusFilter === 'completed' }]" @click="queueStatusFilter = 'completed'; loadQueueData()">已完成</button>
+                  <button :class="['chip', { active: queueStatusFilter === 'failed' }]" @click="queueStatusFilter = 'failed'; loadQueueData()">失败</button>
+                </div>
+                <button class="btn btn-ghost btn-sm" @click="clearQueueHistory" style="margin-left:auto; color:#ef4444;">清除历史</button>
+              </div>
+
+              <div class="table-wrap" v-if="queueJobs.length > 0">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>任务ID</th><th>用户</th><th>订单编号</th><th>状态</th><th>进度</th><th>创建时间</th><th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="j in queueJobs" :key="j.job_id">
+                      <td><code class="code-tag">{{ j.job_id?.slice(0, 10) }}...</code></td>
+                      <td>{{ j.username || '-' }}</td>
+                      <td><code class="code-tag" v-if="j.order_id">{{ j.order_id?.slice(0, 10) }}...</code><span v-else>-</span></td>
+                      <td>
+                        <span :class="['status-tag',
+                          j.status === 'completed' ? 'ok' :
+                          j.status === 'running' ? 'primary' :
+                          j.status === 'failed' ? 'bad' :
+                          j.status === 'cancelled' ? 'muted' :
+                          j.status === 'pending' ? 'warn' : 'muted'
+                        ]">
+                          {{ j.status === 'completed' ? '已完成' : j.status === 'running' ? '执行中' : j.status === 'failed' ? '失败' : j.status === 'cancelled' ? '已取消' : j.status === 'pending' ? '待处理' : j.status }}
+                        </span>
+                        <span v-if="j.status === 'completed' && j.verified" class="status-tag ok" style="margin-left:4px;font-size:11px;">已核查</span>
+                      </td>
+                      <td>
+                        <div class="q-progress" v-if="j.progress !== undefined">
+                          <div class="q-prog-bar" :style="{ width: j.progress + '%' }"></div>
+                        </div>
+                        <span v-else>-</span>
+                      </td>
+                      <td class="date-cell">{{ fmtDate(j.created_at) }}</td>
+                      <td>
+                        <div class="action-group">
+                          <button v-if="j.status === 'pending' || j.status === 'running'" class="btn btn-xs btn-danger" @click="cancelQueueJob(j.job_id)">取消</button>
+                          <button v-if="j.status === 'failed'" class="btn btn-xs btn-primary" @click="retryQueueJob(j.job_id)">重试</button>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div v-else-if="!loadingQueue" class="empty"><p>暂无任务</p></div>
+            </div>
+            <div v-else-if="!loadingQueue" class="empty"><p>点击刷新加载队列数据</p></div>
+          </div>

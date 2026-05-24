@@ -1,0 +1,1431 @@
+{
+  "251060150506": {
+    "total_videos": 19,
+    "completed": 19,
+    "videos": [
+      {
+        "name": "1.2.1实验室相关法律法规",
+        "final_time": "05-17 23:41:36",
+        "begin_time": "04-28 15:02:49",
+        "progress": "1.00",
+        "view_count": "6",
+        "video_duration": "00:03:52",
+        "viewed_duration": "00:23:11"
+      },
+      {
+        "name": "1.1.2实验室安全形势",
+        "final_time": "05-17 23:45:29",
+        "begin_time": "04-26 20:33:30",
+        "progress": "1.00",
+        "view_count": "7",
+        "video_duration": "00:07:43",
+        "viewed_duration": "00:46:18"
+      },
+      {
+        "name": "1.1.1实验室安全概述",
+        "final_time": "05-17 23:47:54",
+        "begin_time": "04-28 17:59:30",
+        "progress": "1.00",
+        "view_count": "12",
+        "video_duration": "00:10:05",
+        "viewed_duration": "01:04:25"
+      },
+      {
+        "name": "1.2.2实验室安全管理体系",
+        "final_time": "05-17 23:47:56",
+        "begin_time": "04-28 17:59:31",
+        "progress": "1.00",
+        "view_count": "12",
+        "video_duration": "00:10:04",
+        "viewed_duration": "01:04:20"
+      },
+      {
+        "name": "2.3实验室消防安全",
+        "final_time": "05-17 23:48:09",
+        "begin_time": "04-28 15:02:51",
+        "progress": "1.00",
+        "view_count": "6",
+        "video_duration": "00:10:17",
+        "viewed_duration": "01:01:41"
+      },
+      {
+        "name": "4.2实验室应急处置（二）化学化工类",
+        "final_time": "05-17 23:50:28",
+        "begin_time": "04-28 15:02:51",
+        "progress": "1.00",
+        "view_count": "6",
+        "video_duration": "00:12:31",
+        "viewed_duration": "01:15:05"
+      },
+      {
+        "name": "3.4实验室安全风险辨识（四）",
+        "final_time": "05-17 23:52:01",
+        "begin_time": "04-28 15:02:52",
+        "progress": "1.00",
+        "view_count": "6",
+        "video_duration": "00:14:05",
+        "viewed_duration": "01:24:29"
+      },
+      {
+        "name": "3.1实验室安全风险辨识（一）",
+        "final_time": "05-17 23:52:40",
+        "begin_time": "04-28 17:59:37",
+        "progress": "1.00",
+        "view_count": "11",
+        "video_duration": "00:14:44",
+        "viewed_duration": "01:26:40"
+      },
+      {
+        "name": "2.2安全防护用品知识",
+        "final_time": "05-17 23:52:44",
+        "begin_time": "04-28 17:59:34",
+        "progress": "1.00",
+        "view_count": "12",
+        "video_duration": "00:14:51",
+        "viewed_duration": "01:28:15"
+      },
+      {
+        "name": "2.1实验室安全基础设施",
+        "final_time": "05-17 23:54:29",
+        "begin_time": "04-28 17:59:33",
+        "progress": "1.00",
+        "view_count": "12",
+        "video_duration": "00:16:37",
+        "viewed_duration": "01:37:05"
+      },
+      {
+        "name": "3.3实验室安全风险辨识（三）",
+        "final_time": "05-17 23:54:37",
+        "begin_time": "04-28 15:02:51",
+        "progress": "1.00",
+        "view_count": "6",
+        "video_duration": "00:16:39",
+        "viewed_duration": "01:39:53"
+      },
+      {
+        "name": "3.2实验室安全风险辨识（二）",
+        "final_time": "05-17 23:54:55",
+        "begin_time": "04-28 17:59:41",
+        "progress": "1.00",
+        "view_count": "11",
+        "video_duration": "00:16:58",
+        "viewed_duration": "01:37:50"
+      },
+      {
+        "name": "4.1实验室应急处置（一）化学化工类",
+        "final_time": "05-17 23:55:10",
+        "begin_time": "04-28 17:59:44",
+        "progress": "1.00",
+        "view_count": "11",
+        "video_duration": "00:17:11",
+        "viewed_duration": "01:38:25"
+      },
+      {
+        "name": "4.3实验室应急处置（三）机械与建筑类",
+        "final_time": "05-17 23:56:09",
+        "begin_time": "04-28 15:02:51",
+        "progress": "1.00",
+        "view_count": "6",
+        "video_duration": "00:18:06",
+        "viewed_duration": "01:48:35"
+      },
+      {
+        "name": "4.4实验室应急处置（四）电子电气类",
+        "final_time": "05-17 23:56:52",
+        "begin_time": "04-28 15:02:51",
+        "progress": "1.00",
+        "view_count": "6",
+        "video_duration": "00:18:51",
+        "viewed_duration": "01:53:05"
+      },
+      {
+        "name": "2.6实验室仪器设备安全（二）",
+        "final_time": "05-17 23:56:56",
+        "begin_time": "04-28 17:59:35",
+        "progress": "1.00",
+        "view_count": "11",
+        "video_duration": "00:18:59",
+        "viewed_duration": "01:48:25"
+      },
+      {
+        "name": "2.5实验室仪器设备安全（一)",
+        "final_time": "05-17 23:57:00",
+        "begin_time": "04-28 15:02:52",
+        "progress": "1.00",
+        "view_count": "6",
+        "video_duration": "00:19:03",
+        "viewed_duration": "01:54:17"
+      },
+      {
+        "name": "2.4实验室水电安全",
+        "final_time": "05-17 23:59:18",
+        "begin_time": "04-28 15:02:51",
+        "progress": "1.00",
+        "view_count": "6",
+        "video_duration": "00:21:26",
+        "viewed_duration": "02:08:35"
+      },
+      {
+        "name": "绪论",
+        "final_time": "05-18 03:28:08",
+        "begin_time": "04-28 15:02:50",
+        "progress": "1.00",
+        "view_count": "7",
+        "video_duration": "00:03:13",
+        "viewed_duration": "00:19:18"
+      }
+    ],
+    "parallel_pairs": [
+      {
+        "from": "1.1.1实验室安全概述",
+        "to": "1.2.2实验室安全管理体系",
+        "gap_seconds": 2.0
+      },
+      {
+        "from": "1.2.2实验室安全管理体系",
+        "to": "2.3实验室消防安全",
+        "gap_seconds": 13.0
+      },
+      {
+        "from": "3.4实验室安全风险辨识（四）",
+        "to": "3.1实验室安全风险辨识（一）",
+        "gap_seconds": 39.0
+      },
+      {
+        "from": "3.1实验室安全风险辨识（一）",
+        "to": "2.2安全防护用品知识",
+        "gap_seconds": 4.0
+      },
+      {
+        "from": "2.1实验室安全基础设施",
+        "to": "3.3实验室安全风险辨识（三）",
+        "gap_seconds": 8.0
+      },
+      {
+        "from": "3.3实验室安全风险辨识（三）",
+        "to": "3.2实验室安全风险辨识（二）",
+        "gap_seconds": 18.0
+      },
+      {
+        "from": "3.2实验室安全风险辨识（二）",
+        "to": "4.1实验室应急处置（一）化学化工类",
+        "gap_seconds": 15.0
+      },
+      {
+        "from": "4.1实验室应急处置（一）化学化工类",
+        "to": "4.3实验室应急处置（三）机械与建筑类",
+        "gap_seconds": 59.0
+      },
+      {
+        "from": "4.3实验室应急处置（三）机械与建筑类",
+        "to": "4.4实验室应急处置（四）电子电气类",
+        "gap_seconds": 43.0
+      },
+      {
+        "from": "4.4实验室应急处置（四）电子电气类",
+        "to": "2.6实验室仪器设备安全（二）",
+        "gap_seconds": 4.0
+      },
+      {
+        "from": "2.6实验室仪器设备安全（二）",
+        "to": "2.5实验室仪器设备安全（一)",
+        "gap_seconds": 4.0
+      }
+    ],
+    "parallel_count": 11
+  },
+  "251050250504": {
+    "total_videos": 19,
+    "completed": 19,
+    "videos": [
+      {
+        "name": "绪论",
+        "final_time": "05-18 23:02:46",
+        "begin_time": "05-18 22:58:43",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:03:13",
+        "viewed_duration": "00:06:26"
+      },
+      {
+        "name": "1.2.1实验室相关法律法规",
+        "final_time": "05-18 23:03:21",
+        "begin_time": "05-18 22:58:48",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:03:52",
+        "viewed_duration": "00:07:44"
+      },
+      {
+        "name": "1.1.2实验室安全形势",
+        "final_time": "05-18 23:07:20",
+        "begin_time": "05-18 22:58:47",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:07:43",
+        "viewed_duration": "00:15:26"
+      },
+      {
+        "name": "1.1.1实验室安全概述",
+        "final_time": "05-18 23:10:00",
+        "begin_time": "05-18 22:59:17",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:10:05",
+        "viewed_duration": "00:10:05"
+      },
+      {
+        "name": "1.2.2实验室安全管理体系",
+        "final_time": "05-18 23:10:04",
+        "begin_time": "05-18 22:59:20",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:10:04",
+        "viewed_duration": "00:10:04"
+      },
+      {
+        "name": "2.3实验室消防安全",
+        "final_time": "05-18 23:10:15",
+        "begin_time": "05-18 22:59:24",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:10:17",
+        "viewed_duration": "00:10:17"
+      },
+      {
+        "name": "4.2实验室应急处置（二）化学化工类",
+        "final_time": "05-18 23:12:42",
+        "begin_time": "05-18 22:59:33",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:12:31",
+        "viewed_duration": "00:12:31"
+      },
+      {
+        "name": "3.4实验室安全风险辨识（四）",
+        "final_time": "05-18 23:14:37",
+        "begin_time": "05-18 22:59:31",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:14:05",
+        "viewed_duration": "00:14:05"
+      },
+      {
+        "name": "2.2安全防护用品知识",
+        "final_time": "05-18 23:15:05",
+        "begin_time": "05-18 22:58:52",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:14:51",
+        "viewed_duration": "00:29:42"
+      },
+      {
+        "name": "3.1实验室安全风险辨识（一）",
+        "final_time": "05-18 23:15:11",
+        "begin_time": "05-18 22:59:27",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:14:44",
+        "viewed_duration": "00:14:44"
+      },
+      {
+        "name": "2.1实验室安全基础设施",
+        "final_time": "05-18 23:16:43",
+        "begin_time": "05-18 22:59:21",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:16:37",
+        "viewed_duration": "00:16:37"
+      },
+      {
+        "name": "3.3实验室安全风险辨识（三）",
+        "final_time": "05-18 23:16:58",
+        "begin_time": "05-18 22:59:30",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:16:39",
+        "viewed_duration": "00:16:39"
+      },
+      {
+        "name": "3.2实验室安全风险辨识（二）",
+        "final_time": "05-18 23:17:18",
+        "begin_time": "05-18 22:59:28",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:16:58",
+        "viewed_duration": "00:16:58"
+      },
+      {
+        "name": "4.1实验室应急处置（一）化学化工类",
+        "final_time": "05-18 23:17:31",
+        "begin_time": "05-18 22:59:32",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:17:11",
+        "viewed_duration": "00:17:11"
+      },
+      {
+        "name": "4.3实验室应急处置（三）机械与建筑类",
+        "final_time": "05-18 23:18:48",
+        "begin_time": "05-18 22:59:34",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:18:06",
+        "viewed_duration": "00:18:06"
+      },
+      {
+        "name": "2.6实验室仪器设备安全（二）",
+        "final_time": "05-18 23:19:30",
+        "begin_time": "05-18 22:59:26",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:18:59",
+        "viewed_duration": "00:18:59"
+      },
+      {
+        "name": "2.5实验室仪器设备安全（一)",
+        "final_time": "05-18 23:19:40",
+        "begin_time": "05-18 22:59:25",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:19:03",
+        "viewed_duration": "00:19:03"
+      },
+      {
+        "name": "4.4实验室应急处置（四）电子电气类",
+        "final_time": "05-18 23:19:41",
+        "begin_time": "05-18 22:59:34",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:18:51",
+        "viewed_duration": "00:18:51"
+      },
+      {
+        "name": "2.4实验室水电安全",
+        "final_time": "05-18 23:21:54",
+        "begin_time": "05-18 22:59:24",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:21:26",
+        "viewed_duration": "00:21:26"
+      }
+    ],
+    "parallel_pairs": [
+      {
+        "from": "绪论",
+        "to": "1.2.1实验室相关法律法规",
+        "gap_seconds": 35.0
+      },
+      {
+        "from": "1.1.1实验室安全概述",
+        "to": "1.2.2实验室安全管理体系",
+        "gap_seconds": 4.0
+      },
+      {
+        "from": "1.2.2实验室安全管理体系",
+        "to": "2.3实验室消防安全",
+        "gap_seconds": 11.0
+      },
+      {
+        "from": "3.4实验室安全风险辨识（四）",
+        "to": "2.2安全防护用品知识",
+        "gap_seconds": 28.0
+      },
+      {
+        "from": "2.2安全防护用品知识",
+        "to": "3.1实验室安全风险辨识（一）",
+        "gap_seconds": 6.0
+      },
+      {
+        "from": "2.1实验室安全基础设施",
+        "to": "3.3实验室安全风险辨识（三）",
+        "gap_seconds": 15.0
+      },
+      {
+        "from": "3.3实验室安全风险辨识（三）",
+        "to": "3.2实验室安全风险辨识（二）",
+        "gap_seconds": 20.0
+      },
+      {
+        "from": "3.2实验室安全风险辨识（二）",
+        "to": "4.1实验室应急处置（一）化学化工类",
+        "gap_seconds": 13.0
+      },
+      {
+        "from": "4.3实验室应急处置（三）机械与建筑类",
+        "to": "2.6实验室仪器设备安全（二）",
+        "gap_seconds": 42.0
+      },
+      {
+        "from": "2.6实验室仪器设备安全（二）",
+        "to": "2.5实验室仪器设备安全（一)",
+        "gap_seconds": 10.0
+      },
+      {
+        "from": "2.5实验室仪器设备安全（一)",
+        "to": "4.4实验室应急处置（四）电子电气类",
+        "gap_seconds": 1.0
+      }
+    ],
+    "parallel_count": 11
+  },
+  "251110150432": {
+    "total_videos": 19,
+    "completed": 19,
+    "videos": [
+      {
+        "name": "绪论",
+        "final_time": "05-19 15:12:41",
+        "begin_time": "05-18 22:43:10",
+        "progress": "1.00",
+        "view_count": "3",
+        "video_duration": "00:03:13",
+        "viewed_duration": "00:03:17"
+      },
+      {
+        "name": "1.1.1实验室安全概述",
+        "final_time": "05-19 15:12:42",
+        "begin_time": "05-19 08:22:43",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:10:05",
+        "viewed_duration": "00:10:06"
+      },
+      {
+        "name": "1.1.2实验室安全形势",
+        "final_time": "05-19 15:12:42",
+        "begin_time": "05-19 08:22:44",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:07:43",
+        "viewed_duration": "00:07:44"
+      },
+      {
+        "name": "1.2.1实验室相关法律法规",
+        "final_time": "05-19 15:12:43",
+        "begin_time": "05-19 08:22:23",
+        "progress": "1.00",
+        "view_count": "3",
+        "video_duration": "00:03:52",
+        "viewed_duration": "00:07:45"
+      },
+      {
+        "name": "1.2.2实验室安全管理体系",
+        "final_time": "05-19 15:12:45",
+        "begin_time": "05-19 08:22:46",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:10:04",
+        "viewed_duration": "00:10:05"
+      },
+      {
+        "name": "2.1实验室安全基础设施",
+        "final_time": "05-19 15:12:46",
+        "begin_time": "05-19 08:22:47",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:16:37",
+        "viewed_duration": "00:16:38"
+      },
+      {
+        "name": "2.2安全防护用品知识",
+        "final_time": "05-19 15:12:46",
+        "begin_time": "05-19 08:22:47",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:14:51",
+        "viewed_duration": "00:14:52"
+      },
+      {
+        "name": "2.3实验室消防安全",
+        "final_time": "05-19 15:12:47",
+        "begin_time": "05-19 08:22:48",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:10:17",
+        "viewed_duration": "00:10:18"
+      },
+      {
+        "name": "2.4实验室水电安全",
+        "final_time": "05-19 15:12:48",
+        "begin_time": "05-19 08:22:49",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:21:26",
+        "viewed_duration": "00:21:27"
+      },
+      {
+        "name": "2.5实验室仪器设备安全（一)",
+        "final_time": "05-19 15:12:48",
+        "begin_time": "05-19 08:22:49",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:19:03",
+        "viewed_duration": "00:19:04"
+      },
+      {
+        "name": "2.6实验室仪器设备安全（二）",
+        "final_time": "05-19 15:12:49",
+        "begin_time": "05-19 08:22:50",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:18:59",
+        "viewed_duration": "00:19:00"
+      },
+      {
+        "name": "3.1实验室安全风险辨识（一）",
+        "final_time": "05-19 15:12:50",
+        "begin_time": "05-19 08:22:51",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:14:44",
+        "viewed_duration": "00:14:45"
+      },
+      {
+        "name": "3.2实验室安全风险辨识（二）",
+        "final_time": "05-19 15:12:51",
+        "begin_time": "05-19 08:22:51",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:16:58",
+        "viewed_duration": "00:16:59"
+      },
+      {
+        "name": "3.3实验室安全风险辨识（三）",
+        "final_time": "05-19 15:12:51",
+        "begin_time": "05-19 08:22:52",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:16:39",
+        "viewed_duration": "00:16:40"
+      },
+      {
+        "name": "3.4实验室安全风险辨识（四）",
+        "final_time": "05-19 15:12:52",
+        "begin_time": "05-19 08:22:53",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:14:05",
+        "viewed_duration": "00:14:06"
+      },
+      {
+        "name": "4.1实验室应急处置（一）化学化工类",
+        "final_time": "05-19 15:12:53",
+        "begin_time": "05-19 08:22:54",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:17:11",
+        "viewed_duration": "00:17:12"
+      },
+      {
+        "name": "4.2实验室应急处置（二）化学化工类",
+        "final_time": "05-19 15:12:54",
+        "begin_time": "05-19 08:22:55",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:12:31",
+        "viewed_duration": "00:12:32"
+      },
+      {
+        "name": "4.3实验室应急处置（三）机械与建筑类",
+        "final_time": "05-19 15:12:54",
+        "begin_time": "05-19 08:22:56",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:18:06",
+        "viewed_duration": "00:18:07"
+      },
+      {
+        "name": "4.4实验室应急处置（四）电子电气类",
+        "final_time": "05-19 15:12:55",
+        "begin_time": "05-19 08:22:57",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:18:51",
+        "viewed_duration": "00:18:52"
+      }
+    ],
+    "parallel_pairs": [
+      {
+        "from": "绪论",
+        "to": "1.1.1实验室安全概述",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "1.1.1实验室安全概述",
+        "to": "1.1.2实验室安全形势",
+        "gap_seconds": 0.0
+      },
+      {
+        "from": "1.1.2实验室安全形势",
+        "to": "1.2.1实验室相关法律法规",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "1.2.1实验室相关法律法规",
+        "to": "1.2.2实验室安全管理体系",
+        "gap_seconds": 2.0
+      },
+      {
+        "from": "1.2.2实验室安全管理体系",
+        "to": "2.1实验室安全基础设施",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "2.1实验室安全基础设施",
+        "to": "2.2安全防护用品知识",
+        "gap_seconds": 0.0
+      },
+      {
+        "from": "2.2安全防护用品知识",
+        "to": "2.3实验室消防安全",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "2.3实验室消防安全",
+        "to": "2.4实验室水电安全",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "2.4实验室水电安全",
+        "to": "2.5实验室仪器设备安全（一)",
+        "gap_seconds": 0.0
+      },
+      {
+        "from": "2.5实验室仪器设备安全（一)",
+        "to": "2.6实验室仪器设备安全（二）",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "2.6实验室仪器设备安全（二）",
+        "to": "3.1实验室安全风险辨识（一）",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "3.1实验室安全风险辨识（一）",
+        "to": "3.2实验室安全风险辨识（二）",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "3.2实验室安全风险辨识（二）",
+        "to": "3.3实验室安全风险辨识（三）",
+        "gap_seconds": 0.0
+      },
+      {
+        "from": "3.3实验室安全风险辨识（三）",
+        "to": "3.4实验室安全风险辨识（四）",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "3.4实验室安全风险辨识（四）",
+        "to": "4.1实验室应急处置（一）化学化工类",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "4.1实验室应急处置（一）化学化工类",
+        "to": "4.2实验室应急处置（二）化学化工类",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "4.2实验室应急处置（二）化学化工类",
+        "to": "4.3实验室应急处置（三）机械与建筑类",
+        "gap_seconds": 0.0
+      },
+      {
+        "from": "4.3实验室应急处置（三）机械与建筑类",
+        "to": "4.4实验室应急处置（四）电子电气类",
+        "gap_seconds": 1.0
+      }
+    ],
+    "parallel_count": 18
+  },
+  "251050250502": {
+    "total_videos": 19,
+    "completed": 19,
+    "videos": [
+      {
+        "name": "绪论",
+        "final_time": "05-18 21:38:00",
+        "begin_time": "03-20 13:04:49",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:03:13",
+        "viewed_duration": "00:03:14"
+      },
+      {
+        "name": "1.1.1实验室安全概述",
+        "final_time": "05-18 21:38:02",
+        "begin_time": "03-20 13:08:17",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:10:05",
+        "viewed_duration": "00:10:07"
+      },
+      {
+        "name": "1.1.2实验室安全形势",
+        "final_time": "05-18 21:38:04",
+        "begin_time": "03-20 13:25:08",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:07:43",
+        "viewed_duration": "00:07:46"
+      },
+      {
+        "name": "1.2.1实验室相关法律法规",
+        "final_time": "05-18 21:38:05",
+        "begin_time": "03-20 13:33:21",
+        "progress": "1.00",
+        "view_count": "3",
+        "video_duration": "00:03:52",
+        "viewed_duration": "00:03:55"
+      },
+      {
+        "name": "1.2.2实验室安全管理体系",
+        "final_time": "05-18 21:38:06",
+        "begin_time": "03-20 13:33:32",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:10:04",
+        "viewed_duration": "00:10:31"
+      },
+      {
+        "name": "2.1实验室安全基础设施",
+        "final_time": "05-18 21:38:07",
+        "begin_time": "03-21 12:28:21",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:16:37",
+        "viewed_duration": "00:16:41"
+      },
+      {
+        "name": "2.2安全防护用品知识",
+        "final_time": "05-18 21:38:08",
+        "begin_time": "03-21 13:19:33",
+        "progress": "1.00",
+        "view_count": "7",
+        "video_duration": "00:14:51",
+        "viewed_duration": "00:27:19"
+      },
+      {
+        "name": "2.3实验室消防安全",
+        "final_time": "05-18 21:38:09",
+        "begin_time": "03-29 14:08:39",
+        "progress": "1.00",
+        "view_count": "3",
+        "video_duration": "00:10:17",
+        "viewed_duration": "00:13:05"
+      },
+      {
+        "name": "2.4实验室水电安全",
+        "final_time": "05-18 21:38:10",
+        "begin_time": "03-21 18:06:35",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:21:26",
+        "viewed_duration": "00:21:28"
+      },
+      {
+        "name": "2.5实验室仪器设备安全（一)",
+        "final_time": "05-18 21:38:10",
+        "begin_time": "03-21 18:30:02",
+        "progress": "0.98",
+        "view_count": "2",
+        "video_duration": "00:19:03",
+        "viewed_duration": "00:18:35"
+      },
+      {
+        "name": "2.6实验室仪器设备安全（二）",
+        "final_time": "05-18 21:38:11",
+        "begin_time": "03-21 18:56:14",
+        "progress": "0.97",
+        "view_count": "3",
+        "video_duration": "00:18:59",
+        "viewed_duration": "00:18:28"
+      },
+      {
+        "name": "3.1实验室安全风险辨识（一）",
+        "final_time": "05-18 21:38:13",
+        "begin_time": "05-18 13:30:16",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:14:44",
+        "viewed_duration": "00:14:45"
+      },
+      {
+        "name": "3.2实验室安全风险辨识（二）",
+        "final_time": "05-18 21:38:14",
+        "begin_time": "05-18 13:55:01",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:16:58",
+        "viewed_duration": "00:16:59"
+      },
+      {
+        "name": "3.3实验室安全风险辨识（三）",
+        "final_time": "05-18 21:38:15",
+        "begin_time": "05-18 14:35:44",
+        "progress": "1.00",
+        "view_count": "3",
+        "video_duration": "00:16:39",
+        "viewed_duration": "00:20:58"
+      },
+      {
+        "name": "3.4实验室安全风险辨识（四）",
+        "final_time": "05-18 21:38:16",
+        "begin_time": "05-18 14:25:54",
+        "progress": "1.00",
+        "view_count": "3",
+        "video_duration": "00:14:05",
+        "viewed_duration": "00:16:31"
+      },
+      {
+        "name": "4.1实验室应急处置（一）化学化工类",
+        "final_time": "05-18 21:38:17",
+        "begin_time": "05-18 14:25:55",
+        "progress": "1.00",
+        "view_count": "3",
+        "video_duration": "00:17:11",
+        "viewed_duration": "00:30:21"
+      },
+      {
+        "name": "4.2实验室应急处置（二）化学化工类",
+        "final_time": "05-18 21:38:18",
+        "begin_time": "05-18 14:25:57",
+        "progress": "1.00",
+        "view_count": "3",
+        "video_duration": "00:12:31",
+        "viewed_duration": "00:14:38"
+      },
+      {
+        "name": "4.3实验室应急处置（三）机械与建筑类",
+        "final_time": "05-18 21:38:19",
+        "begin_time": "05-18 14:25:58",
+        "progress": "1.00",
+        "view_count": "3",
+        "video_duration": "00:18:06",
+        "viewed_duration": "00:36:13"
+      },
+      {
+        "name": "4.4实验室应急处置（四）电子电气类",
+        "final_time": "05-18 21:38:20",
+        "begin_time": "03-21 19:21:31",
+        "progress": "1.00",
+        "view_count": "3",
+        "video_duration": "00:18:51",
+        "viewed_duration": "00:31:58"
+      }
+    ],
+    "parallel_pairs": [
+      {
+        "from": "绪论",
+        "to": "1.1.1实验室安全概述",
+        "gap_seconds": 2.0
+      },
+      {
+        "from": "1.1.1实验室安全概述",
+        "to": "1.1.2实验室安全形势",
+        "gap_seconds": 2.0
+      },
+      {
+        "from": "1.1.2实验室安全形势",
+        "to": "1.2.1实验室相关法律法规",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "1.2.1实验室相关法律法规",
+        "to": "1.2.2实验室安全管理体系",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "1.2.2实验室安全管理体系",
+        "to": "2.1实验室安全基础设施",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "2.1实验室安全基础设施",
+        "to": "2.2安全防护用品知识",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "2.2安全防护用品知识",
+        "to": "2.3实验室消防安全",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "2.3实验室消防安全",
+        "to": "2.4实验室水电安全",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "2.4实验室水电安全",
+        "to": "2.5实验室仪器设备安全（一)",
+        "gap_seconds": 0.0
+      },
+      {
+        "from": "2.5实验室仪器设备安全（一)",
+        "to": "2.6实验室仪器设备安全（二）",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "2.6实验室仪器设备安全（二）",
+        "to": "3.1实验室安全风险辨识（一）",
+        "gap_seconds": 2.0
+      },
+      {
+        "from": "3.1实验室安全风险辨识（一）",
+        "to": "3.2实验室安全风险辨识（二）",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "3.2实验室安全风险辨识（二）",
+        "to": "3.3实验室安全风险辨识（三）",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "3.3实验室安全风险辨识（三）",
+        "to": "3.4实验室安全风险辨识（四）",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "3.4实验室安全风险辨识（四）",
+        "to": "4.1实验室应急处置（一）化学化工类",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "4.1实验室应急处置（一）化学化工类",
+        "to": "4.2实验室应急处置（二）化学化工类",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "4.2实验室应急处置（二）化学化工类",
+        "to": "4.3实验室应急处置（三）机械与建筑类",
+        "gap_seconds": 1.0
+      },
+      {
+        "from": "4.3实验室应急处置（三）机械与建筑类",
+        "to": "4.4实验室应急处置（四）电子电气类",
+        "gap_seconds": 1.0
+      }
+    ],
+    "parallel_count": 18
+  },
+  "251010359902": {
+    "total_videos": 19,
+    "completed": 19,
+    "videos": [
+      {
+        "name": "绪论",
+        "final_time": "03-16 01:19:03",
+        "begin_time": "03-16 01:11:54",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:03:13",
+        "viewed_duration": "00:04:00"
+      },
+      {
+        "name": "1.1.1实验室安全概述",
+        "final_time": "03-16 01:29:25",
+        "begin_time": "03-16 01:19:12",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:10:05",
+        "viewed_duration": "00:10:06"
+      },
+      {
+        "name": "1.1.2实验室安全形势",
+        "final_time": "03-16 01:37:13",
+        "begin_time": "03-16 01:29:26",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:07:43",
+        "viewed_duration": "00:07:44"
+      },
+      {
+        "name": "1.2.1实验室相关法律法规",
+        "final_time": "03-16 01:41:46",
+        "begin_time": "03-16 01:37:14",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:03:52",
+        "viewed_duration": "00:03:53"
+      },
+      {
+        "name": "1.2.2实验室安全管理体系",
+        "final_time": "03-16 12:14:35",
+        "begin_time": "03-16 01:41:53",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:10:04",
+        "viewed_duration": "00:10:04"
+      },
+      {
+        "name": "2.1实验室安全基础设施",
+        "final_time": "03-16 12:31:26",
+        "begin_time": "03-16 12:14:42",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:16:37",
+        "viewed_duration": "00:16:38"
+      },
+      {
+        "name": "2.2安全防护用品知识",
+        "final_time": "03-16 12:46:36",
+        "begin_time": "03-16 12:31:42",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:14:51",
+        "viewed_duration": "00:14:51"
+      },
+      {
+        "name": "2.3实验室消防安全",
+        "final_time": "03-16 12:57:05",
+        "begin_time": "03-16 12:46:42",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:10:17",
+        "viewed_duration": "00:10:17"
+      },
+      {
+        "name": "2.4实验室水电安全",
+        "final_time": "03-16 13:21:24",
+        "begin_time": "03-16 12:57:21",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:21:26",
+        "viewed_duration": "00:21:27"
+      },
+      {
+        "name": "2.5实验室仪器设备安全（一)",
+        "final_time": "03-16 13:48:10",
+        "begin_time": "03-16 13:21:32",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:19:03",
+        "viewed_duration": "00:19:05"
+      },
+      {
+        "name": "2.6实验室仪器设备安全（二）",
+        "final_time": "03-16 14:14:30",
+        "begin_time": "03-16 13:48:15",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:18:59",
+        "viewed_duration": "00:19:11"
+      },
+      {
+        "name": "3.1实验室安全风险辨识（一）",
+        "final_time": "03-16 14:42:54",
+        "begin_time": "03-16 14:14:42",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:14:44",
+        "viewed_duration": "00:14:44"
+      },
+      {
+        "name": "3.2实验室安全风险辨识（二）",
+        "final_time": "03-16 15:51:32",
+        "begin_time": "03-16 14:42:59",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:16:58",
+        "viewed_duration": "00:16:59"
+      },
+      {
+        "name": "3.3实验室安全风险辨识（三）",
+        "final_time": "03-16 17:07:44",
+        "begin_time": "03-16 15:51:38",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:16:39",
+        "viewed_duration": "00:16:40"
+      },
+      {
+        "name": "3.4实验室安全风险辨识（四）",
+        "final_time": "03-16 17:22:43",
+        "begin_time": "03-16 17:07:50",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:14:05",
+        "viewed_duration": "00:14:05"
+      },
+      {
+        "name": "4.1实验室应急处置（一）化学化工类",
+        "final_time": "03-16 17:40:21",
+        "begin_time": "03-16 17:22:50",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:17:11",
+        "viewed_duration": "00:17:11"
+      },
+      {
+        "name": "4.2实验室应急处置（二）化学化工类",
+        "final_time": "03-16 17:59:53",
+        "begin_time": "03-16 17:40:26",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:12:31",
+        "viewed_duration": "00:12:32"
+      },
+      {
+        "name": "4.3实验室应急处置（三）机械与建筑类",
+        "final_time": "03-16 18:21:19",
+        "begin_time": "03-16 18:00:00",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:18:06",
+        "viewed_duration": "00:18:06"
+      },
+      {
+        "name": "4.4实验室应急处置（四）电子电气类",
+        "final_time": "03-16 18:42:27",
+        "begin_time": "03-16 18:23:33",
+        "progress": "1.00",
+        "view_count": "1",
+        "video_duration": "00:18:51",
+        "viewed_duration": "00:18:53"
+      }
+    ],
+    "parallel_pairs": [],
+    "parallel_count": 0
+  },
+  "251060150509": {
+    "total_videos": 19,
+    "completed": 19,
+    "videos": [
+      {
+        "name": "绪论",
+        "final_time": "05-22 16:36:17",
+        "begin_time": "05-22 16:24:42",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:03:13",
+        "viewed_duration": "00:06:26"
+      },
+      {
+        "name": "1.2.1实验室相关法律法规",
+        "final_time": "05-22 16:37:01",
+        "begin_time": "05-22 16:24:46",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:03:52",
+        "viewed_duration": "00:07:44"
+      },
+      {
+        "name": "1.1.2实验室安全形势",
+        "final_time": "05-22 16:40:52",
+        "begin_time": "05-22 16:24:45",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:07:43",
+        "viewed_duration": "00:15:26"
+      },
+      {
+        "name": "1.1.1实验室安全概述",
+        "final_time": "05-22 16:43:17",
+        "begin_time": "05-22 16:24:45",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:10:05",
+        "viewed_duration": "00:20:10"
+      },
+      {
+        "name": "1.2.2实验室安全管理体系",
+        "final_time": "05-22 16:43:19",
+        "begin_time": "05-22 16:24:47",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:10:04",
+        "viewed_duration": "00:20:08"
+      },
+      {
+        "name": "2.3实验室消防安全",
+        "final_time": "05-22 16:43:33",
+        "begin_time": "05-22 16:24:51",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:10:17",
+        "viewed_duration": "00:20:34"
+      },
+      {
+        "name": "4.2实验室应急处置（二）化学化工类",
+        "final_time": "05-22 16:45:58",
+        "begin_time": "05-22 16:25:01",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:12:31",
+        "viewed_duration": "00:25:02"
+      },
+      {
+        "name": "3.4实验室安全风险辨识（四）",
+        "final_time": "05-22 16:47:32",
+        "begin_time": "05-22 16:24:59",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:14:05",
+        "viewed_duration": "00:28:10"
+      },
+      {
+        "name": "3.1实验室安全风险辨识（一）",
+        "final_time": "05-22 16:48:10",
+        "begin_time": "05-22 16:24:55",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:14:44",
+        "viewed_duration": "00:29:28"
+      },
+      {
+        "name": "2.2安全防护用品知识",
+        "final_time": "05-22 16:48:12",
+        "begin_time": "05-22 16:24:49",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:14:51",
+        "viewed_duration": "00:29:42"
+      },
+      {
+        "name": "2.1实验室安全基础设施",
+        "final_time": "05-22 16:49:55",
+        "begin_time": "05-22 16:24:48",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:16:37",
+        "viewed_duration": "00:33:14"
+      },
+      {
+        "name": "3.3实验室安全风险辨识（三）",
+        "final_time": "05-22 16:50:07",
+        "begin_time": "05-22 16:24:57",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:16:39",
+        "viewed_duration": "00:33:18"
+      },
+      {
+        "name": "3.2实验室安全风险辨识（二）",
+        "final_time": "05-22 16:50:27",
+        "begin_time": "05-22 16:24:56",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:16:58",
+        "viewed_duration": "00:33:56"
+      },
+      {
+        "name": "4.1实验室应急处置（一）化学化工类",
+        "final_time": "05-22 16:50:39",
+        "begin_time": "05-22 16:25:00",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:17:11",
+        "viewed_duration": "00:34:22"
+      },
+      {
+        "name": "4.3实验室应急处置（三）机械与建筑类",
+        "final_time": "05-22 16:51:37",
+        "begin_time": "05-22 16:25:03",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:18:06",
+        "viewed_duration": "00:36:12"
+      },
+      {
+        "name": "2.6实验室仪器设备安全（二）",
+        "final_time": "05-22 16:52:23",
+        "begin_time": "05-22 16:24:54",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:18:59",
+        "viewed_duration": "00:37:58"
+      },
+      {
+        "name": "4.4实验室应急处置（四）电子电气类",
+        "final_time": "05-22 16:52:25",
+        "begin_time": "05-22 16:25:04",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:18:51",
+        "viewed_duration": "00:37:42"
+      },
+      {
+        "name": "2.5实验室仪器设备安全（一)",
+        "final_time": "05-22 16:52:29",
+        "begin_time": "05-22 16:24:53",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:19:03",
+        "viewed_duration": "00:38:06"
+      },
+      {
+        "name": "2.4实验室水电安全",
+        "final_time": "05-22 16:54:47",
+        "begin_time": "05-22 16:24:52",
+        "progress": "1.00",
+        "view_count": "2",
+        "video_duration": "00:21:26",
+        "viewed_duration": "00:42:52"
+      }
+    ],
+    "parallel_pairs": [
+      {
+        "from": "绪论",
+        "to": "1.2.1实验室相关法律法规",
+        "gap_seconds": 44.0
+      },
+      {
+        "from": "1.1.1实验室安全概述",
+        "to": "1.2.2实验室安全管理体系",
+        "gap_seconds": 2.0
+      },
+      {
+        "from": "1.2.2实验室安全管理体系",
+        "to": "2.3实验室消防安全",
+        "gap_seconds": 14.0
+      },
+      {
+        "from": "3.4实验室安全风险辨识（四）",
+        "to": "3.1实验室安全风险辨识（一）",
+        "gap_seconds": 38.0
+      },
+      {
+        "from": "3.1实验室安全风险辨识（一）",
+        "to": "2.2安全防护用品知识",
+        "gap_seconds": 2.0
+      },
+      {
+        "from": "2.1实验室安全基础设施",
+        "to": "3.3实验室安全风险辨识（三）",
+        "gap_seconds": 12.0
+      },
+      {
+        "from": "3.3实验室安全风险辨识（三）",
+        "to": "3.2实验室安全风险辨识（二）",
+        "gap_seconds": 20.0
+      },
+      {
+        "from": "3.2实验室安全风险辨识（二）",
+        "to": "4.1实验室应急处置（一）化学化工类",
+        "gap_seconds": 12.0
+      },
+      {
+        "from": "4.1实验室应急处置（一）化学化工类",
+        "to": "4.3实验室应急处置（三）机械与建筑类",
+        "gap_seconds": 58.0
+      },
+      {
+        "from": "4.3实验室应急处置（三）机械与建筑类",
+        "to": "2.6实验室仪器设备安全（二）",
+        "gap_seconds": 46.0
+      },
+      {
+        "from": "2.6实验室仪器设备安全（二）",
+        "to": "4.4实验室应急处置（四）电子电气类",
+        "gap_seconds": 2.0
+      },
+      {
+        "from": "4.4实验室应急处置（四）电子电气类",
+        "to": "2.5实验室仪器设备安全（一)",
+        "gap_seconds": 4.0
+      }
+    ],
+    "parallel_count": 12
+  }
+}

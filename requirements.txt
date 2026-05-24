@@ -1,0 +1,46 @@
+# --- 核心框架 ---
+fastapi>=0.100.0
+uvicorn>=0.23.0               # 开发模式（生产用 granian）
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+granian>=2.0.0                 # Rust ASGI 服务器（生产环境）
+uvloop>=0.19.0                 # Rust 事件循环（granian 配套）
+
+# --- HTTP 客户端 ---
+httpx[http2]>=0.25.0            # 通用 HTTP + HTTP/2
+rnet>=2.4.0                    # 反检测 TLS 指纹（学习通专用）
+
+# --- 数据库 ---
+sqlalchemy>=2.0.0
+pymysql>=1.1.0
+alembic>=1.13.0
+redis>=5.0.0                   # 可选，不装自动降级内存模式
+
+# --- 认证/安全 ---
+PyJWT>=2.8.0
+bcrypt>=4.1.0
+python-multipart>=0.0.5       # FastAPI 文件上传
+
+# --- 爬虫/解析 ---
+scrapling>=0.2.0               # 反检测爬虫 + HTML 解析
+beautifulsoup4>=4.12.0         # 简单 HTML 解析（自动拉取 lxml 后端）
+ddddocr>=1.4.0                 # 验证码 OCR
+
+# --- 日志/配置 ---
+loguru>=0.7.0
+python-dotenv>=1.0.0
+
+# --- CLI/UI ---
+rich>=13.0.0
+qrcode[pil]>=7.4.0
+pyzbar>=0.1.9                  # QR 码解码
+
+# --- 支付 ---
+python-alipay-sdk>=2.0.0
+
+# --- AI ---
+openai>=1.0.0                  # DeepSeek API（考试答题）
+
+# --- 开发/测试 ---
+pytest-cov>=5.0.0
+pip-audit>=2.7.0

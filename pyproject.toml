@@ -1,0 +1,56 @@
+[project]
+requires-python = ">=3.8"
+
+[tool.ruff]
+target-version = "py38"
+line-length = 120
+
+exclude = [
+    "__pycache__",
+    "data",
+    "static",
+    "node_modules",
+    "frontend",
+    ".git",
+    "*.db",
+    "script",                                  # 工具脚本，非生产代码
+    "infrastructure/study_record_crawler.py",  # 编码问题
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    "E501",   # 行过长 — 由 line-length 控制
+    "E741",   # 变量名 l/O 容易混淆
+    "E402",   # import 不在文件顶部 — 大量延迟导入是有意为之
+    "E701",   # 多条语句写在一行 — 部分简短赋值
+    "E702",   # 分号分隔多条语句
+    "E712",   # == True/False 比较 — 部分场景需要
+    "E722",   # bare except — 部分捕获是有意的
+    "F841",   # 局部变量未使用 — 部分是临时调试
+    "F811",   # 重定义 — 部分是兼容性重复定义
+    "F821",   # 未定义名称 — 动态导入场景
+    "B007",   # 循环变量未使用 — 部分解构
+    "B008",   # 函数参数中调用 Depends()
+    "B904",   # raise 缺 from — Python 3.8 兼容
+    "B905",   # zip() 缺 strict 参数 — Python 3.8 不支持
+    "UP007",  # X | Y 联合类型 — Python 3.8 不支持
+    "UP035",  # deprecated import — 兼容旧版
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["api", "config", "services", "infrastructure", "presentation"]
+
+[tool.coverage.run]
+source = ["api"]
+omit = [
+    "api/routers/*",
+    "api/startup.py",
+    "api/services/task_runner.py",
+    "api/services/gc_service.py",
+    "api/services/domain_monitor.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true

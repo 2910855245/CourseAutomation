@@ -1,0 +1,23 @@
+.env
+__pycache__/
+*.pyc
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.log
+.pytest_cache/
+venv/
+.venv/
+node_modules/
+uploads/
+scripts/
+fix_mysql.py
+start_mysql.py
+.vscode/
+.idea/
+.claude/
+# Sensitive credentials (NEVER commit)
+script/ssh_key
+script/.env.local

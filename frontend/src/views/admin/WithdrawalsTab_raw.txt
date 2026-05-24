@@ -1,0 +1,48 @@
+          <div v-if="activeTab === 'withdrawals'">
+            <div class="section-actions">
+              <div class="filter-group">
+                <button :class="['chip', { active: withdrawalStatusFilter === '' }]" @click="withdrawalStatusFilter = ''; loadWithdrawals()">全部</button>
+                <button :class="['chip', { active: withdrawalStatusFilter === 'pending' }]" @click="withdrawalStatusFilter = 'pending'; loadWithdrawals()">待审核</button>
+                <button :class="['chip', { active: withdrawalStatusFilter === 'completed' }]" @click="withdrawalStatusFilter = 'completed'; loadWithdrawals()">已完成</button>
+                <button :class="['chip', { active: withdrawalStatusFilter === 'rejected' }]" @click="withdrawalStatusFilter = 'rejected'; loadWithdrawals()">已拒绝</button>
+              </div>
+              <span class="total-label">共 {{ withdrawalsTotal }} 条</span>
+              <button class="btn btn-ghost" @click="loadWithdrawals" :disabled="loadingWithdrawals">刷新</button>
+              <button class="btn btn-ghost btn-sm" @click="clearWithdrawalHistory" style="color:#ef4444;">清除历史</button>
+            </div>
+
+            <div class="table-wrap" v-if="withdrawals.length > 0">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>ID</th><th>代理</th><th>金额</th><th>收款码</th><th>状态</th><th>申请时间</th><th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="w in withdrawals" :key="w.withdrawal_id">
+                    <td><code class="code-tag">{{ w.withdrawal_id.slice(0,12) }}</code></td>
+                    <td>{{ w.agent_display_name || w.agent_id?.slice(0, 8) }}</td>
+                    <td class="money-cell">{{ fmtMoney(w.amount) }}</td>
+                    <td>
+                      <img v-if="w.wechat_qr" :src="w.wechat_qr" class="qr-thumb" @click="showQrModal = w.wechat_qr" title="点击查看大图" />
+                      <span v-else style="color:#94a3b8;font-size:12px">未上传</span>
+                    </td>
+                    <td>
+                      <span :class="['status-tag', w.status === 'completed' ? 'ok' : w.status === 'rejected' ? 'bad' : w.status === 'pending' ? 'warn' : 'muted']">
+                        {{ w.status === 'completed' ? '已完成' : w.status === 'rejected' ? '已拒绝' : w.status === 'pending' ? '待审核' : w.status }}
+                      </span>
+                    </td>
+                    <td>{{ w.admin_note || '-' }}</td>
+                    <td class="date-cell">{{ fmtDate(w.created_at) }}</td>
+                    <td>
+                      <div class="action-group" v-if="w.status === 'pending'">
+                        <button class="btn btn-xs btn-success" @click="approveWithdrawal(w.withdrawal_id)">通过</button>
+                        <button class="btn btn-xs btn-danger" @click="rejectWithdrawal(w.withdrawal_id)">拒绝</button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-else-if="!loadingWithdrawals" class="empty"><p>暂无提现记录</p></div>
+          </div>

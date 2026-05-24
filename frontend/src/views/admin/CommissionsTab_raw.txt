@@ -1,0 +1,33 @@
+          <div v-if="activeTab === 'commissions'">
+            <div class="section-actions">
+              <span class="total-label">共 {{ commissionTotal }} 条记录</span>
+              <button class="btn btn-ghost" @click="loadCommissions" :disabled="loadingCommissions">
+                <span v-if="loadingCommissions" class="spinner" style="width:14px;height:14px"></span>
+                {{ loadingCommissions ? '加载中' : '刷新' }}
+              </button>
+              <button class="btn btn-ghost btn-sm" @click="clearCommissionHistory" style="margin-left:auto; color:#ef4444;">清除历史</button>
+            </div>
+
+            <div class="table-wrap" v-if="commissions.length > 0">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>佣金ID</th><th>代理ID</th><th>订单金额</th><th>佣金比例</th><th>佣金金额</th><th>层级</th><th>状态</th><th>创建时间</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="c in commissions" :key="c.commission_id">
+                    <td><code class="code-tag">{{ c.commission_id.slice(0, 8) }}...</code></td>
+                    <td><code class="code-tag">{{ c.agent_id.slice(0, 8) }}...</code></td>
+                    <td class="money-cell">{{ fmtMoney(c.order_amount) }}</td>
+                    <td>{{ (c.commission_rate * 100).toFixed(1) }}%</td>
+                    <td class="money-cell highlight">{{ fmtMoney(c.commission_amount) }}</td>
+                    <td><span :class="['level-tag', c.level === 1 ? 'l1' : 'l2']">L{{ c.level }}</span></td>
+                    <td><span class="status-tag ok">{{ c.status }}</span></td>
+                    <td class="date-cell">{{ fmtDate(c.created_at) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-else-if="!loadingCommissions" class="empty"><p>暂无佣金记录</p></div>
+          </div>

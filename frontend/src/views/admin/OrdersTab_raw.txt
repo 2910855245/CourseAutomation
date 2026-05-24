@@ -1,0 +1,54 @@
+          <div v-if="activeTab === 'orders'">
+            <div class="section-actions">
+              <div class="filter-group">
+                <button :class="['chip', { active: ordersStatusFilter === '' }]" @click="ordersStatusFilter = ''; loadOrders()">全部</button>
+                <button :class="['chip', { active: ordersStatusFilter === 'pending' }]" @click="ordersStatusFilter = 'pending'; loadOrders()">待处理</button>
+                <button :class="['chip', { active: ordersStatusFilter === 'running' }]" @click="ordersStatusFilter = 'running'; loadOrders()">执行中</button>
+                <button :class="['chip', { active: ordersStatusFilter === 'completed' }]" @click="ordersStatusFilter = 'completed'; loadOrders()">已完成</button>
+                <button :class="['chip', { active: ordersStatusFilter === 'failed' }]" @click="ordersStatusFilter = 'failed'; loadOrders()">失败</button>
+              </div>
+              <span class="total-label">共 {{ ordersTotal }} 单</span>
+              <button class="btn btn-ghost" @click="loadOrders" :disabled="loadingOrders">
+                <span v-if="loadingOrders" class="spinner" style="width:14px;height:14px"></span>
+                {{ loadingOrders ? '加载中' : '刷新' }}
+              </button>
+              <button v-if="currentRole === 'admin'" class="btn btn-ghost btn-sm" @click="clearOrderHistory" style="color:#ef4444;">清除历史</button>
+            </div>
+
+            <div class="table-wrap" v-if="orders.length > 0">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>订单编号</th><th>用户</th><th>平台</th><th>类型</th><th>金额</th><th>支付</th><th>状态</th><th>创建时间</th><th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="o in orders" :key="o.order_id">
+                    <td><code class="code-tag">{{ o.order_id.slice(0, 10) }}...</code></td>
+                    <td>
+                      <div class="user-cell">
+                        <span class="uname">{{ o.customer_name || o.username }}</span>
+                        <span class="uid">{{ o.customer_contact || o.user_id?.slice(0, 8) || '-' }}</span>
+                      </div>
+                    </td>
+                    <td>{{ getPlatformName(o.website_id) }}</td>
+                    <td>{{ taskTypeNames[o.task_type] || o.task_type }}</td>
+                    <td class="money-cell">{{ fmtMoney(o.price) }}</td>
+                    <td><span :class="['status-tag', o.paid ? 'ok' : 'warn']">{{ o.paid ? '已支付' : '未支付' }}</span></td>
+                    <td><span :class="['status-tag', orderStatusClass[o.status]]">{{ orderStatusLabel[o.status] || o.status }}</span></td>
+                    <td class="date-cell">{{ fmtDate(o.created_at) }}</td>
+                    <td>
+                      <div class="action-group">
+                        <button v-if="o.status === 'pending'" class="btn btn-xs btn-success" @click="acceptOrder(o.order_id)">接单</button>
+                        <button v-if="o.status === 'pending' && currentRole === 'admin'" class="btn btn-xs btn-primary" @click="executeOrder(o.order_id)">执行</button>
+                        <button v-if="o.status === 'pending' && currentRole === 'admin'" class="btn btn-xs btn-primary" @click="enqueueOrder(o.order_id)">入队</button>
+                        <button v-if="o.status === 'running'" class="btn btn-xs btn-success" @click="completeOrder(o.order_id)">完成</button>
+                        <button v-if="o.status !== 'completed' && o.status !== 'cancelled'" class="btn btn-xs btn-danger" @click="failOrder(o.order_id)">失败</button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-else-if="!loadingOrders" class="empty"><p>暂无订单数据</p></div>
+          </div>
