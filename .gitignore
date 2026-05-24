@@ -18,6 +18,17 @@ start_mysql.py
 .vscode/
 .idea/
 .claude/
+# Temporary/debug scripts and data
+script/
+backups/
+presentation/
+*.csv
+server.pid
+standalone_exam.py
+backup.py
+test_all_platforms.py
+fix_mysql.py
+start_mysql.py
+
 # Sensitive credentials (NEVER commit)
-script/ssh_key
-script/.env.local
+.env.local
