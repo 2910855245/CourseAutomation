@@ -112,7 +112,17 @@ class TaskRunner:
         if not status_data:
             status_data = self._read_status_file()
 
-        if status_data.get("heavy_done") or status_data.get("phase") == "study_running":
+        # daily_done 优先：worker 主动退出码 42 表示今日暂停，需保留密码明天恢复
+        if rc == 42:
+            logger.info("今日任务完成，等待明天恢复")
+            return {
+                "platform": platform_name,
+                "success": True,
+                "daily_done": True,
+                "status_file": self._status_file,
+                "message": status_data.get("message", "今日积分已满，明天继续"),
+            }
+        elif status_data.get("heavy_done") or status_data.get("phase") == "study_running":
             logger.info("重阶段完成，刷课子进程已在后台运行")
             return {
                 "platform": platform_name,
@@ -121,15 +131,6 @@ class TaskRunner:
                 "status_file": self._status_file,
                 "tmpdir": self._tmpdir,
                 "message": "重阶段完成，刷课已在后台运行",
-            }
-        elif rc == 42:
-            logger.info("今日任务完成，等待明天恢复")
-            return {
-                "platform": platform_name,
-                "success": True,
-                "daily_done": True,
-                "status_file": self._status_file,
-                "message": status_data.get("message", "今日积分已满，明天继续"),
             }
         elif rc == 0 and status_data.get("success"):
             logger.info("任务完成")
