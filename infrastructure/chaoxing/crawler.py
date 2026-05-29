@@ -381,3 +381,49 @@ def fetch_must_learn_completion(session: ChaoxingSession, course_id: str, class_
     done_count = sum(1 for v in result.values() if v["all_done"])
     logger.info(f"必学完成状态 course={course_id} total={len(must_learn_kids)} done={done_count}")
     return result
+
+
+def fetch_all_video_completion(session: ChaoxingSession, course_id: str, class_id: str,
+                                cpi: str, knowledge_ids: list, concurrency: int = 5) -> dict:
+    """批量检查所有知识点的视频完成状态（并发版）
+
+    通过 cards API 的 mArg.attachments[].isPassed 判断每个视频是否完成。
+    比积分推算精确得多。
+
+    返回: {kid: bool}  True=视频已学完, False=未学完
+    """
+    import concurrent.futures
+
+    def _check_one(kid):
+        try:
+            base_url = (f"https://mooc1-1.chaoxing.com/mooc-ans/knowledge/cards"
+                        f"?clazzid={class_id}&courseid={course_id}&knowledgeid={kid}"
+                        f"&ut=s&cpi={cpi}&mooc2=1&num=0")
+            resp = session.get(base_url, referer="https://mooc1-1.chaoxing.com/")
+            html = resp.text()
+            match = re.search(r"try{\s+mArg\s*=\s*({.*?});", html, re.DOTALL)
+            if not match:
+                return kid, False
+            marg = json.loads(match.group(1))
+            for att in marg.get("attachments", []):
+                if att.get("type") == "video":
+                    return kid, bool(att.get("isPassed"))
+            return kid, False  # 无视频附件
+        except Exception as e:
+            logger.debug(f"检查视频状态失败 kid={kid} error={str(e)}")
+            return kid, False
+
+    result = {}
+    done_count = 0
+
+    # 并发查询
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = {pool.submit(_check_one, kid): kid for kid in knowledge_ids}
+        for future in concurrent.futures.as_completed(futures):
+            kid, passed = future.result()
+            result[kid] = passed
+            if passed:
+                done_count += 1
+
+    logger.info(f"视频完成状态 course={course_id} total={len(knowledge_ids)} done={done_count}")
+    return result

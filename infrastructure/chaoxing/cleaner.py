@@ -26,24 +26,31 @@ def clean_courses(raw_courses: list) -> List[Dict]:
 
 # ── 视频清洗 ──────────────────────────────────────────────
 
-def classify_video(raw_point: dict, points_info: dict = None) -> dict:
+def classify_video(raw_point: dict, points_info: dict = None,
+                   video_completion_map: dict = None) -> dict:
     """清洗单个知识点（视频），判定完成状态
 
     输入: crawler.fetch_knowledge_list 单条记录
     输出: 标准化 dict，含 status 字段
+
+    优先用 video_completion_map（cards API 的 isPassed），
+    降级用 points_info（积分推算）。
     """
     video_minutes = raw_point.get("video_minutes", 0)
     has_video = raw_point.get("has_video", False)
+    kid = raw_point.get("knowledgeId", "")
 
-    # 学习通的积分制：总分200，视频每天上限50分
-    # 通过积分推算视频完成度
     video_score = 0
     if points_info:
         video_score = points_info.get("video", 0)
 
     if not has_video:
         status = "无视频"
+    elif video_completion_map and kid in video_completion_map:
+        # 精确判断：cards API 的 isPassed
+        status = "已学" if video_completion_map[kid] else "未学"
     elif video_score >= 200:
+        # 降级：积分推算
         status = "已学"
     elif video_score > 0:
         status = "未学完"
@@ -51,7 +58,7 @@ def classify_video(raw_point: dict, points_info: dict = None) -> dict:
         status = "未学"
 
     return {
-        "knowledge_id": raw_point.get("knowledgeId", ""),
+        "knowledge_id": kid,
         "class_id": raw_point.get("classId", ""),
         "name": raw_point.get("name", "未知"),
         "has_video": has_video,
@@ -61,26 +68,29 @@ def classify_video(raw_point: dict, points_info: dict = None) -> dict:
     }
 
 
-def classify_videos(raw_points: list, points_info: dict = None) -> List[Dict]:
+def classify_videos(raw_points: list, points_info: dict = None,
+                    video_completion_map: dict = None) -> List[Dict]:
     """批量清洗视频知识点"""
-    return [classify_video(p, points_info) for p in raw_points]
+    return [classify_video(p, points_info, video_completion_map) for p in raw_points]
 
 
 # ── 课程完整数据清洗 ──────────────────────────────────────
 
 def clean_course_full(raw_course: dict, raw_points: list, points_info: dict,
                       work_total: int = 0, work_pending: int = 0, work_completed: int = 0,
-                      must_learn_status: dict = None) -> dict:
+                      must_learn_status: dict = None,
+                      video_completion_map: dict = None) -> dict:
     """清洗单门课程的完整数据
 
     输入:
         raw_course: crawler.fetch_course_list 单条记录
         raw_points: crawler.fetch_knowledge_list 返回列表
         points_info: crawler.fetch_points 返回字典
+        video_completion_map: {kid: bool} cards API 的 isPassed 结果
 
     输出: 标准化的课程数据 dict
     """
-    cleaned_videos = classify_videos(raw_points, points_info)
+    cleaned_videos = classify_videos(raw_points, points_info, video_completion_map)
     video_points = [v for v in cleaned_videos if v["has_video"]]
     total_minutes = sum(v["video_minutes"] for v in video_points)
 

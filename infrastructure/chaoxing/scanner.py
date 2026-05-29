@@ -8,6 +8,7 @@ from infrastructure.chaoxing.crawler import (
     fetch_points,
     fetch_must_learn_kids,
     fetch_must_learn_completion,
+    fetch_all_video_completion,
 )
 from infrastructure.chaoxing.cleaner import clean_courses, clean_course_full
 from infrastructure.chaoxing.task_filter import get_actionable_tasks, get_done_courses, get_no_points_courses
@@ -96,6 +97,18 @@ def scan_chaoxing(session: ChaoxingSession) -> dict:
             except Exception as e:
                 logger.warning(f"获取必学完成状态失败 course_id={cid} error={str(e)}")
 
+        # 获取所有视频知识点的完成状态（cards API isPassed）
+        video_completion_map = {}
+        if cpi:
+            video_kids = [p["knowledgeId"] for p in raw_points if p.get("has_video")]
+            if video_kids:
+                try:
+                    logger.info(f"检查视频完成状态 course={c['course_name']} count={len(video_kids)}")
+                    video_completion_map = fetch_all_video_completion(
+                        session, cid, clid, cpi, video_kids)
+                except Exception as e:
+                    logger.warning(f"获取视频完成状态失败 course_id={cid} error={str(e)}")
+
         cleaned = clean_course_full(
             {"courseId": cid, "classId": clid, "name": c["course_name"]},
             raw_points,
@@ -104,6 +117,7 @@ def scan_chaoxing(session: ChaoxingSession) -> dict:
             work_pending=work_pending,
             work_completed=work_completed,
             must_learn_status=must_learn_status,
+            video_completion_map=video_completion_map,
         )
         # 保留教师信息
         cleaned["teacher"] = c.get("teacher", "")
