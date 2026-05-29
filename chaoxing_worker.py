@@ -743,7 +743,8 @@ def run_task(params_file, status_file):
                         phase="done", done=True, success=True,
                         message=f"全部达标！共{len(courses)}门课程，耗时{day_count}天",
                         points_total=rule.target,
-                        days=day_count)
+                        days=day_count,
+                        video_pct=100)
             return
 
         if _shutdown_requested:

@@ -293,6 +293,14 @@ class JobExecutor:
                     self._on_progress(job_id, float(video_pct), video_done, message or f"刷视频中 {video_done}/{video_total}")
 
                 if data.get("done") and data.get("success"):
+                    phase = data.get("phase", "")
+                    # 学习通 daily_done 不检查95%，只是今日暂停
+                    if phase == "daily_done":
+                        self._db_update(job_id, status=QueueJobStatus.PENDING,
+                                        progress=float(video_pct),
+                                        current_step_name=message or "今日积分已满，明天继续")
+                        self._clear_password(job_id)
+                        return
                     actual_pct = data.get("video_pct", video_pct)
                     if actual_pct < 95:
                         raise Exception(f"平台实际进度仅{actual_pct}%，未达到完成标准(95%)")
