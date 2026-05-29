@@ -294,12 +294,11 @@ class JobExecutor:
 
                 if data.get("done") and data.get("success"):
                     phase = data.get("phase", "")
-                    # 学习通 daily_done 不检查95%，只是今日暂停
+                    # 学习通 daily_done 不检查95%，只是今日暂停（保留密码供明天重试）
                     if phase == "daily_done":
                         self._db_update(job_id, status=QueueJobStatus.PENDING,
                                         progress=float(video_pct),
                                         current_step_name=message or "今日积分已满，明天继续")
-                        self._clear_password(job_id)
                         return
                     actual_pct = data.get("video_pct", video_pct)
                     if actual_pct < 95:
