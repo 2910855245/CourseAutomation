@@ -1,7 +1,12 @@
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import Boolean, Float, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+def _now_str() -> str:
+    return datetime.now().isoformat()
 
 S = String(255)
 
@@ -45,6 +50,7 @@ def _make_job_model(table_name: str):
         "created_at": mapped_column(S, nullable=False),
         "started_at": mapped_column(S, nullable=True),
         "finished_at": mapped_column(S, nullable=True),
+        "deleted_at": mapped_column(S, nullable=True, index=True),
     }
     return type(cls_name, (JobBase,), attrs)
 
@@ -68,6 +74,7 @@ class User(Base):
     referred_by: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
     created_at: Mapped[str] = mapped_column(S, nullable=False)
     last_login: Mapped[Optional[str]] = mapped_column(S, nullable=True)
+    deleted_at: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
 
 
 class Order(Base):
@@ -101,6 +108,7 @@ class Order(Base):
     accepted_at: Mapped[Optional[str]] = mapped_column(S, nullable=True)
     started_at: Mapped[Optional[str]] = mapped_column(S, nullable=True)
     finished_at: Mapped[Optional[str]] = mapped_column(S, nullable=True)
+    deleted_at: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
 
 
 class WalletTransaction(Base):
@@ -149,6 +157,7 @@ class Agent(Base):
     managed_by: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
     status: Mapped[str] = mapped_column(S, default="active", index=True)
     created_at: Mapped[str] = mapped_column(S, nullable=False)
+    deleted_at: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
 
 
 class Commission(Base):
@@ -164,6 +173,7 @@ class Commission(Base):
     level: Mapped[int] = mapped_column(Integer, default=1)
     status: Mapped[str] = mapped_column(S, default="confirmed", index=True)
     created_at: Mapped[str] = mapped_column(S, nullable=False)
+    deleted_at: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
 
 
 class Withdrawal(Base):
@@ -179,6 +189,7 @@ class Withdrawal(Base):
     admin_note: Mapped[str] = mapped_column(S, default="")
     processed_at: Mapped[Optional[str]] = mapped_column(S, nullable=True)
     created_at: Mapped[str] = mapped_column(S, nullable=False)
+    deleted_at: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
 
 
 class PlatformSetting(Base):
@@ -318,6 +329,7 @@ class YpayAccount(Base):
     alipay_public_cert: Mapped[str] = mapped_column(Text, default="")
     alipay_root_cert: Mapped[str] = mapped_column(Text, default="")
     create_time: Mapped[str] = mapped_column(S, nullable=False)
+    deleted_at: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
 
 
 class YpayOrder(Base):
@@ -339,6 +351,7 @@ class YpayOrder(Base):
     create_time: Mapped[str] = mapped_column(S, nullable=False)
     out_time: Mapped[str] = mapped_column(S, nullable=False)
     end_time: Mapped[Optional[str]] = mapped_column(S, nullable=True)
+    deleted_at: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
 
 
 class YpayTmpPrice(Base):
@@ -357,3 +370,4 @@ class Ad(Base):
     html_content: Mapped[str] = mapped_column(Text, default="")
     is_active: Mapped[int] = mapped_column(Integer, default=1)
     create_time: Mapped[str] = mapped_column(S, nullable=False)
+    deleted_at: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)

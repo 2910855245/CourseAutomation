@@ -11,11 +11,6 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 
-import os
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
 recovered_order_mappings: Dict[str, str] = {}
 
 

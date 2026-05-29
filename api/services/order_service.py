@@ -31,12 +31,12 @@ def validate_new_order(uid: str, client_ip: str, course_ids: list, price: float,
     if not param_check["valid"]:
         raise HTTPException(status_code=400, detail="; ".join(param_check["errors"]))
 
-    # 价格校验
+    # 价格校验：以后端计算为准，不拒绝订单
     if price > 0:
         from api.routers.pricing import _calculate_package_price_backend
         expected = _calculate_package_price_backend(video_count, 0)
         if abs(price - expected) > 0.01:
-            raise HTTPException(status_code=400, detail="订单金额异常，请刷新页面重试")
+            logger.bind(front_price=price, expected=expected).info("单订单价格校正")
 
     # 课程去重
     if uid:
@@ -83,15 +83,7 @@ def retry_order(original: dict, uid: str) -> dict:
 
 
 def compute_batch_price(orders: list, website_prices: Dict[str, float] = None) -> Tuple[float, List[str]]:
-    """计算批量订单的后端校验总价。
-
-    Args:
-        orders: 订单列表，每项需有 website_id, video_count, course_details, price 属性
-        website_prices: 可选的价格配置覆盖，默认从 db 读取
-
-    Returns:
-        (computed_total, detail_lines) — 校验总价和调试信息
-    """
+    """计算批量订单的后端校验总价（与 /api/pricing/calculate 逻辑一致）。"""
     from api.routers.pricing import _calculate_package_price_backend
     from api.routers.pricing import _get_or_default as _pricing_get
 
@@ -108,12 +100,9 @@ def compute_batch_price(orders: list, website_prices: Dict[str, float] = None) -
         elif item.course_details:
             item_computed = 0.0
             for cd in item.course_details:
-                if cd.video_total > 0:
-                    item_computed += _calculate_package_price_backend(cd.video_total, cd.video_completed)
-                elif hasattr(cd, 'exam_total') and cd.exam_total > 0 and not hasattr(cd, 'homework_total'):
-                    item_computed += price_exam_only
-                elif hasattr(cd, 'homework_total') and cd.homework_total > 0:
-                    item_computed += price_homework_only
+                cd_price = _price_single_course(
+                    cd, _calculate_package_price_backend, price_exam_only, price_homework_only)
+                item_computed += cd_price
         else:
             item_computed = _calculate_package_price_backend(item.video_count, 0)
 
@@ -122,6 +111,37 @@ def compute_batch_price(orders: list, website_prices: Dict[str, float] = None) -
         detail_lines.append(f"平台{item.website_id}: 打包定价={item_computed:.2f},前端传={item.price}")
 
     return round(computed_total, 2), detail_lines
+
+
+def _price_single_course(cd, calc_video_fn, price_exam: float, price_homework: float) -> float:
+    """单门课定价（与 /api/pricing/calculate 的 _detect_course_type 逻辑一致）"""
+    has_video = cd.video_total > 0
+    video_all_done = has_video and cd.video_completed >= cd.video_total
+    has_exam = cd.exam_total > 0 and cd.exam_done < cd.exam_total
+    has_homework = cd.homework_total > 0 and cd.homework_done < cd.homework_total
+
+    # 视频全部完成 → 只剩考试/作业时按考试/作业计价；否则仍按视频打包价
+    if video_all_done:
+        if has_exam and not has_homework:
+            return price_exam
+        if has_homework and not has_exam:
+            return price_homework
+        if has_exam and has_homework:
+            return max(price_exam, price_homework)
+        return calc_video_fn(cd.video_total, cd.video_completed)  # 与前端一致：全部完成仍收视频价
+
+    # 有视频未完成 → 按视频打包价
+    if has_video:
+        return calc_video_fn(cd.video_total, cd.video_completed)
+
+    # 无视频 → 按考试/作业收费
+    if has_exam and not has_homework:
+        return price_exam
+    if has_homework and not has_exam:
+        return price_homework
+    if has_exam and has_homework:
+        return max(price_exam, price_homework)
+    return 0.0
 
 
 def validate_order_amount(front_total: float, back_total: float, detail_lines: List[str], is_privileged: bool) -> None:

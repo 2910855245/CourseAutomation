@@ -326,12 +326,29 @@ class PaymentDBMixin:
         session = self._get_session()
         try:
             now = datetime.now().isoformat()
-            orders = session.scalar(select(YpayOrder.truemoney).filter(
+            orders = session.scalars(select(YpayOrder.truemoney).filter(
                 YpayOrder.account_id == account_id,
                 YpayOrder.status == 0,
                 YpayOrder.out_time > now,
             )).all()
-            return [o.truemoney for o in orders]
+            return list(orders)
+        finally:
+            session.close()
+
+    def ypay_find_pending_by_price(self, price: float, pay_type: int) -> Optional[Dict[str, Any]]:
+        from sqlalchemy import func as sqlfunc
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        type_str = {1: "wxpay", 2: "alipay", 3: "lkl"}.get(pay_type, "wxpay")
+        session = self._get_session()
+        try:
+            o = session.scalars(select(YpayOrder).filter(
+                sqlfunc.abs(YpayOrder.truemoney - price) < 0.01,
+                YpayOrder.type == type_str,
+                YpayOrder.status == 0,
+            )).first()
+            if not o:
+                return None
+            return self._ypay_order_to_dict(o)
         finally:
             session.close()
 
@@ -342,11 +359,11 @@ class PaymentDBMixin:
         try:
             type_str = {1: "wxpay", 2: "alipay", 3: "lkl"}.get(pay_type, "wxpay")
             from sqlalchemy import delete, select, update, func as sqlfunc
-            account = select(YpayAccount).filter(
+            account = session.scalars(select(YpayAccount).filter(
                 YpayAccount.type == type_str,
                 YpayAccount.status == 1,
                 YpayAccount.is_status == 1,
-            ).order_by(sqlfunc.rand() if USE_MYSQL else sqlfunc.random()).first()
+            ).order_by(sqlfunc.rand() if USE_MYSQL else sqlfunc.random())).first()
             if not account:
                 return None
             return {
@@ -525,9 +542,11 @@ class PaymentDBMixin:
         VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
         session = self._get_session()
         try:
-            count = select(YpayOrder).filter(
-                YpayOrder.status != 0
-            ).delete(synchronize_session=False)
+            from datetime import datetime
+            count = session.execute(update(YpayOrder).filter(
+                YpayOrder.status != 0,
+                YpayOrder.deleted_at.is_(None),
+            ).values(deleted_at=datetime.now().isoformat())).rowcount
             session.commit()
             return count
         except Exception as e:
@@ -619,7 +638,11 @@ class PaymentDBMixin:
         VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
         session = self._get_session()
         try:
-            count = session.execute(delete(YpayAccount).filter(YpayAccount.id == account_id)).rowcount
+            from datetime import datetime
+            count = session.execute(update(YpayAccount).filter(
+                YpayAccount.id == account_id,
+                YpayAccount.deleted_at.is_(None),
+            ).values(deleted_at=datetime.now().isoformat())).rowcount
             session.commit()
             return count > 0
         except Exception as e:
@@ -725,7 +748,11 @@ class PaymentDBMixin:
         VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
         session = self._get_session()
         try:
-            cnt = session.execute(delete(Ad).filter(Ad.id == ad_id)).rowcount
+            from datetime import datetime
+            cnt = session.execute(update(Ad).filter(
+                Ad.id == ad_id,
+                Ad.deleted_at.is_(None),
+            ).values(deleted_at=datetime.now().isoformat())).rowcount
             session.commit()
             return cnt > 0
         except Exception as e:

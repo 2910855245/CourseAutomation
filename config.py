@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     vmqpay_key: str = Field(default="", alias="VMQPAY_KEY")
     password_encryption_key: str = Field(default="", alias="PASSWORD_ENCRYPTION_KEY")
     cors_origins: str = Field(default="http://localhost:5173", alias="CORS_ORIGINS")
+    captcha_ak: str = Field(default="", alias="CAPTCHA_AK")
+    captcha_url: str = Field(default="", alias="CAPTCHA_URL")
 
     model_config = {"env_file": os.path.join(BASE_DIR, ".env"), "extra": "ignore"}
 

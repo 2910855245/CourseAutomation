@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from api.auth import blacklist_token, create_token, get_current_user, hash_password, verify_password
+from api.auth import blacklist_token, create_token, get_current_user, hash_password, verify_captcha, verify_password
 from api.database import db
 from api.models import ApiResponse, RegisterRequest, UserLoginRequest
 from api.utils import generate_referral_code as _generate_referral_code
@@ -115,7 +115,7 @@ def login(req: UserLoginRequest, request: Request = None):
 
     verify_captcha(req.captcha_token, req.captcha_answer)
 
-    user = db.get_user_by_username(req.username)
+    user = db.get_user_by_login(req.username)
     if not user:
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     if not verify_password(req.password, user["password_hash"]):

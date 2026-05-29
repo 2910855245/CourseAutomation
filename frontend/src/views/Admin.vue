@@ -25,6 +25,7 @@ import RiskTab from '@/views/admin/RiskTab.vue'
 import PricingTab from '@/views/admin/PricingTab.vue'
 import YpayTab from '@/views/admin/YpayTab.vue'
 import AdsTab from '@/views/admin/AdsTab.vue'
+import AnnouncementTab from '@/views/admin/AnnouncementTab.vue'
 
 const store = useAppStore()
 
@@ -42,7 +43,7 @@ const ypayAdmin = useYpayAdmin()
 const { load: loadPlatformNames, getName: getPlatformName, platformNames } = usePlatformNames()
 
 // ── Tab switching (orchestrates across composables) ──
-type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'users' | 'agents' | 'commissions' | 'withdrawals' | 'pricing' | 'ypay' | 'ads' | 'proxy' | 'risk' | 'security'
+type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'users' | 'agents' | 'commissions' | 'withdrawals' | 'pricing' | 'ypay' | 'ads' | 'proxy' | 'announcement' | 'risk' | 'security'
 const activeTab = ref<SidebarKey>('overview')
 const expandedSidebarItems = ref<string[]>(['queue'])
 
@@ -65,7 +66,7 @@ function switchTab(tab: SidebarKey) {
     else { users.agentSubTab.value = 'agentMgmt'; users.loadAgents() }
   }
   if (tab === 'withdrawals') payments.loadWithdrawals()
-  if (tab === 'queue' || tab === 'queue_school' || tab === 'queue_chaoxing') payments.loadQueueData()
+  // queue 数据由 watch(activeTab) → setQueueFilter 统一加载，此处不重复调用
   if (tab === 'security') { pwForm.old_password = ''; pwForm.new_password = ''; pwForm.confirm_password = ''; if (currentRole.value === 'admin') { sysConfig.loadDeepseekKey(); sysConfig.loadRiskData() } }
   if (tab === 'pricing') sysConfig.loadPricing()
   if (tab === 'ypay') ypayAdmin.loadYpay()
@@ -108,19 +109,31 @@ watch(activeTab, (tab) => {
   else if (tab === 'queue_chaoxing') payments.setQueueFilter('chaoxing')
 })
 
-let autoPollTimer: ReturnType<typeof setInterval> | null = null
+let ws: WebSocket | null = null
+
+function connectAdminWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  try {
+    ws = new WebSocket(`${proto}//${location.host}/api/progress/ws/live`)
+    ws.onmessage = (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        if (d.type === 'progress' || d.type === 'job_update' || d.type === 'order_update') {
+          if (activeTab.value === 'orders') orders.loadOrders()
+          if (activeTab.value === 'queue' || activeTab.value === 'queue_school' || activeTab.value === 'queue_chaoxing') payments.loadQueueData()
+        }
+      } catch {}
+    }
+    ws.onclose = () => { setTimeout(connectAdminWS, 5000) }
+  } catch {}
+}
 
 onMounted(() => {
-  autoPollTimer = setInterval(() => {
-    if (!isLoggedIn.value) return
-    if (activeTab.value === 'orders') orders.loadOrders()
-    if (activeTab.value === 'ypay') ypayAdmin.loadYpay()
-    if (activeTab.value === 'queue' || activeTab.value === 'queue_school' || activeTab.value === 'queue_chaoxing') payments.loadQueueData()
-  }, 10000)
+  connectAdminWS()
 })
 
 onUnmounted(() => {
-  if (autoPollTimer) { clearInterval(autoPollTimer); autoPollTimer = null }
+  if (ws) { ws.close(); ws = null }
   if (payments._payTestTimer) { clearInterval(payments._payTestTimer); payments._payTestTimer = null }
 })
 
@@ -338,6 +351,9 @@ const adminState = initAdminState({
           <!-- Security Tab -->
           <SecurityTab v-if="activeTab === 'security'" />
 
+          <!-- Announcement Tab -->
+          <AnnouncementTab v-if="activeTab === 'announcement'" />
+
 
           <!-- Risk Monitor Tab -->
           <RiskTab v-if="activeTab === 'risk'" />
@@ -433,33 +449,6 @@ const adminState = initAdminState({
       </div>
     </div>
 
-    <!-- Create SubAdmin Modal -->
-    <div v-if="showCreateSubAdmin" class="modal-overlay" @click.self="showCreateSubAdmin = false">
-      <div class="modal">
-        <h3>添加合伙人</h3>
-        <p class="modal-sub">
-合伙人可以审批代理、管理订单、查看佣金数据
-</p>
-        <div class="field">
-<label>用户ID</label><input v-model="newSubAdmin.user_id" placeholder="如: subadmin001" />
-</div>
-        <div class="field">
-<label>用户名</label><input v-model="newSubAdmin.username" placeholder="如: 张三" />
-</div>
-        <div class="field">
-<label>密码</label><input v-model="newSubAdmin.password" type="password" placeholder="至少6位" />
-</div>
-        <div class="modal-actions">
-          <button class="btn btn-ghost" @click="showCreateSubAdmin = false; newSubAdmin.user_id=''; newSubAdmin.username=''; newSubAdmin.password=''">
-取消
-</button>
-          <button class="btn btn-primary" :disabled="creatingSubAdmin" @click="doCreateSubAdmin">
-{{ creatingSubAdmin ? '创建中...' : '确认创建' }}
-</button>
-        </div>
-      </div>
-    </div>
-
     <!-- QR 大图弹窗 -->
     <div v-if="showQrModal" class="modal-overlay" @click.self="showQrModal = ''">
       <div class="qr-modal">
@@ -503,8 +492,8 @@ const adminState = initAdminState({
   font-size: 14px; outline: none; transition: all .15s;
 }
 .field input:focus { border-color: #4f6ef7; box-shadow: 0 0 0 3px rgba(79,110,247,.1); background: #fff; }
-.captcha-row { display: flex; gap: 8px; align-items: center; }
-.captcha-row input { flex: 1; min-width: 0; }
+.captcha-row { display: flex; gap: 8px; align-items: stretch; }
+.captcha-row input { flex: 1; min-width: 0; height: 44px; padding: 0 14px; border: 1.5px solid #e2e8f0; border-radius: 8px; font-size: 14px; outline: none; }
 .captcha-img { height: 44px; cursor: pointer; border-radius: 8px; border: 1px solid #e2e8f0; flex-shrink: 0; }
 .captcha-placeholder {
   height: 44px; padding: 0 16px; display: flex; align-items: center; justify-content: center;
@@ -825,6 +814,7 @@ const adminState = initAdminState({
   font-size: 11.5px; font-weight: 600;
 }
 .status-tag.ok { background: #f0fdf4; color: #22c55e; }
+.status-tag.ok.verified { background: #f0fdf4; color: #22c55e; border: 1.5px solid #22c55e; }
 .status-tag.warn { background: #fffbeb; color: #f59e0b; }
 .status-tag.bad { background: #fef2f2; color: #ef4444; }
 .status-tag.primary { background: #eef1fe; color: #4f6ef7; }
@@ -934,14 +924,18 @@ const adminState = initAdminState({
 .btn-link:disabled { color: #94a3b8; cursor: not-allowed; }
 .ai-status-ok { font-size: 12px; color: #16a34a; font-weight: 600; }
 .ai-status-fail { font-size: 12px; color: #dc2626; font-weight: 600; }
-.ai-model-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+.ai-model-grid { display: flex; flex-direction: column; gap: 10px; }
 .ai-model-card {
-  padding: 14px; background: #f8fafc; border: 1.5px solid #e2e8f0; border-radius: 10px;
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 16px; background: #f8fafc; border: 1.5px solid #e2e8f0; border-radius: 10px;
 }
 .ai-model-head {
   display: flex; align-items: center; gap: 6px;
-  font-size: 13px; font-weight: 700; color: #1e293b; margin-bottom: 10px;
+  font-size: 13px; font-weight: 700; color: #1e293b; min-width: 90px; margin-bottom: 0;
 }
+.ai-model-select { flex: 1; max-width: 260px; }
+.ai-model-foot { display: flex; align-items: center; gap: 10px; }
+.ai-model-desc { font-size: 11px; color: #64748b; }
 .ai-model-head svg { color: #4f6ef7; }
 .ai-model-select {
   width: 100%; padding: 8px 10px; border: 1.5px solid #e2e8f0; border-radius: 8px;
@@ -949,8 +943,6 @@ const adminState = initAdminState({
   transition: border-color .15s;
 }
 .ai-model-select:focus { border-color: #4f6ef7; box-shadow: 0 0 0 3px rgba(79,110,247,.1); }
-.ai-model-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
-.ai-model-desc { font-size: 11px; color: #64748b; }
 
 /* QR Code Manager */
 .qrcode-quick-area { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }

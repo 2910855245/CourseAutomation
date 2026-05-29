@@ -3,11 +3,9 @@ import threading
 import time
 from typing import Optional
 
-import httpx
-
 from config import get_random_user_agent
 from infrastructure.dashboard import DashboardDisplay
-from infrastructure.http_session import safe_json_parse
+from infrastructure.http_session import create_sync_client, safe_json_parse
 
 
 class HeartbeatKeeper:
@@ -17,7 +15,7 @@ class HeartbeatKeeper:
         self.base_interval = interval
         self.max_errors = max_errors
         self.error_count = 0
-        self.session = httpx.Client(timeout=httpx.Timeout(30.0), verify=False)
+        self.session = create_sync_client(base_url)
         self.session.headers.update({
             'User-Agent': get_random_user_agent(),
             'X-Requested-With': 'XMLHttpRequest'

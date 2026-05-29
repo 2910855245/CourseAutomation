@@ -86,6 +86,17 @@ def cancel_job(job_id: str, admin: dict = Depends(_require_admin)):
     return ApiResponse(message=f"任务 {job_id} 已取消")
 
 
+@router.delete("/jobs/{job_id}", response_model=ApiResponse)
+def delete_job(job_id: str, admin: dict = Depends(_require_admin)):
+    q = get_queue_by_job_id(job_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    ok = q.delete_job(job_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail="无法删除该任务（执行中的任务不能删除）")
+    return ApiResponse(message=f"任务 {job_id} 已删除")
+
+
 @router.post("/jobs/{job_id}/retry", response_model=ApiResponse)
 def retry_job(job_id: str, admin: dict = Depends(_require_admin)):
     q = get_queue_by_job_id(job_id)

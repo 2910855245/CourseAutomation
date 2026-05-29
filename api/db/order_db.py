@@ -306,7 +306,7 @@ class OrderDBMixin:
             ).values(
                 status="cancelled",
                 finished_at=datetime.now().isoformat(),
-            ), synchronize_session=False).rowcount
+            )).rowcount
             session.commit()
             return count
         except Exception as e:
@@ -320,15 +320,19 @@ class OrderDBMixin:
         Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
         session = self._get_session()
         try:
+            now = datetime.now().isoformat()
             if user_id:
-                count = session.execute(delete(Order).filter(
+                count = session.execute(update(Order).filter(
                     Order.status.in_(["completed", "failed", "cancelled"]),
                     Order.user_id == user_id,
-                ), synchronize_session=False).rowcount
+                    Order.deleted_at.is_(None),
+                ).values(deleted_at=now)).rowcount
             else:
-                count = session.execute(delete(Order).filter(
-                    Order.status.in_(["completed", "failed", "cancelled"])
-                )).rowcount
+                count = session.execute(update(Order).filter(
+                    Order.status.in_(["completed", "failed", "cancelled"]),
+                    or_(Order.user_id.is_(None), Order.user_id == ""),
+                    Order.deleted_at.is_(None),
+                ).values(deleted_at=now)).rowcount
             session.commit()
             return count
         except Exception as e:
@@ -548,6 +552,12 @@ class OrderDBMixin:
                 .order_by(func.count(Order.order_id).desc())
                 .limit(6)
             ).all()
+            # 补充未出现但有配置的平台（如学习通），显示为 0
+            from config import WEBSITES
+            existing_wids = {wid for wid, _, _ in platform_dist}
+            for wid in WEBSITES:
+                if wid not in existing_wids:
+                    platform_dist.append((wid, 0, 0.0))
 
             task_type_dist = session.execute(
                 select(Order.task_type, func.count(Order.order_id), func.coalesce(func.sum(Order.price), 0))

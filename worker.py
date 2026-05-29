@@ -46,8 +46,40 @@ def _apply_proxy(session):
         pass
 
 
+def _is_project_work(session, base_url, exam) -> bool:
+    """检测作业是否为项目提交题（简答+文件上传）"""
+    # 快速检查：名称包含项目相关关键词
+    name = exam.get("name", "")
+    topic_number = exam.get("topic_number", "")
+    if topic_number == "1" and any(kw in name for kw in ("项目", "提交", "设计", "系统")):
+        return True
+
+    # 检查 topic_number
+    try:
+        if int(topic_number) > 1:
+            return False
+    except (ValueError, TypeError):
+        pass
+
+    # 访问 work 页面检测是否有文件上传按钮
+    try:
+        work_id = exam.get("work_id", "")
+        node_id = exam.get("node_id", "")
+        if not work_id or not node_id:
+            return False
+        resp = session.get(
+            f"{base_url}/user/work",
+            params={"workId": work_id, "nodeId": node_id},
+            timeout=10,
+            follow_redirects=True,
+        )
+        return 'uploader-btn' in resp.text
+    except Exception:
+        return False
+
+
 def load_session(username, password, website_id):
-    import httpx
+    from infrastructure.http_session import create_sync_client
 
     from config import WEBSITES, get_account_cookies_path, set_current_website, update_url_config
     from services.multi_platform_auth import (
@@ -61,10 +93,10 @@ def load_session(username, password, website_id):
 
     base_url = WEBSITES.get(website_id, {}).get("base_url", "")
 
-    # w=2 劳动教育平台session过期快，跳过缓存直接重新登录
+    # 所有平台统一逻辑：先尝试缓存 Cookie，失效再重新登录
     cookie_file = get_account_cookies_path(username, WEBSITES.get(website_id, {}).get("name"))
-    if website_id != 2 and os.path.exists(cookie_file):
-        session = httpx.Client(timeout=httpx.Timeout(30.0), verify=False)
+    if os.path.exists(cookie_file):
+        session = create_sync_client(base_url)
         _apply_proxy(session)
         with open(cookie_file, encoding="utf-8") as f:
             cookies = json.load(f)
@@ -95,6 +127,14 @@ def run_task(params_file, status_file):
     username = params["username"]
     password = params["password"]
     website_id = params["website_id"]
+
+    # 解密密码（如果是加密格式）
+    if password and (password.startswith("ENC:") or password.startswith("ENC2:")):
+        try:
+            from api.crypto import decrypt_password
+            password = decrypt_password(password)
+        except Exception:
+            pass
     job_type = params.get("job_type", "full")
     course_ids = params.get("course_ids", [])
     concurrency = params.get("concurrency", 8)
@@ -109,13 +149,48 @@ def run_task(params_file, status_file):
 
     send_status(status_file, phase="crawl", message="正在获取课程...")
 
-    from infrastructure.course_crawler import get_courses
+    from infrastructure.course_crawler import get_courses_with_diag
     from services.scan_service import load_course_cache, scan_course
 
-    courses = get_courses(session)
-    logger.info("获取到 {} 门课程", len(courses) if courses else 0)
+    diag = get_courses_with_diag(session)
+    courses = diag["courses"]
+    logger.info("获取到 {} 门课程 (http={}, err={})", len(courses), diag.get("http_code"), diag.get("error"))
+
+    # Cookie 过期 → 删除缓存，重新登录，验证 session 有效才继续
+    if not courses and diag.get("error") and ("失效" in diag["error"] or "登录" in diag["error"]):
+        logger.info("Cookie 过期，尝试重新登录...")
+        send_status(status_file, phase="crawl", message="Cookie过期，重新登录中...")
+        try:
+            from config import get_account_cookies_path, WEBSITES
+            from services.multi_platform_auth import login_single_platform, save_platform_cookie
+            cookie_file = get_account_cookies_path(username, WEBSITES.get(website_id, {}).get("name"))
+            if os.path.exists(cookie_file):
+                os.remove(cookie_file)
+
+            # 直接调用登录，不用 load_session（避免用了坏缓存）
+            wid, ok, new_session, msg = login_single_platform(website_id, username, password)
+            if not ok:
+                logger.error("重新登录失败: {}", msg)
+                diag["error"] = f"重新登录失败: {msg}"
+            else:
+                # 立即验证新 session 能否获取课程
+                diag2 = get_courses_with_diag(new_session)
+                if diag2["courses"]:
+                    # 新 session 有效，保存 cookie 并继续
+                    session = new_session
+                    courses = diag2["courses"]
+                    save_platform_cookie(username, website_id, session)
+                    logger.info("重新登录成功，获取到 {} 门课程", len(courses))
+                else:
+                    # 新 session 也不能用，报告具体原因
+                    logger.error("重新登录后仍无法获取课程: {}", diag2.get("error"))
+                    diag["error"] = diag2.get("error") or "重新登录后仍无法获取课程"
+        except Exception as e:
+            logger.error("重新登录异常: {}", e)
+
     if not courses:
-        send_status(status_file, phase="error", message="获取课程列表失败", done=True, success=False)
+        err_msg = diag.get("error") or "未知原因"
+        send_status(status_file, phase="error", message=err_msg, done=True, success=False)
         return
 
     all_videos = []
@@ -218,6 +293,26 @@ def run_task(params_file, status_file):
             log_fh.close()
 
     # ── 第二阶段：考试/作业（视频完成后再执行） ──
+    # 重新扫描考试列表（平台可能在刷视频期间更换了考试）
+    if job_type in ("exam", "full", "all"):
+        fresh_exams = []
+        for course in courses:
+            cid = course.get("course_id", "")
+            if course_ids and cid not in course_ids:
+                continue
+            cname = course.get("name", "")
+            try:
+                result = scan_course(session, cid, cname)
+                exams_works = result.get("exams", []) + result.get("works", [])
+                non_done = [e for e in exams_works if not e.get("is_done") and not e.get("is_deleted") and e.get("time_status", "进行中") == "进行中"]
+                fresh_exams.extend(non_done)
+                logger.info("重新扫描 {}: 可做考试/作业={} 个", cname, len(non_done))
+            except Exception as e:
+                logger.warning("重新扫描 {} 失败: {}", cname, e)
+        if fresh_exams:
+            all_exams = fresh_exams
+            logger.info("考试列表已更新: {} 个可做", len(all_exams))
+
     exam_success = True
     exam_errors = []
     if job_type in ("exam", "full", "all") and all_exams:
@@ -234,11 +329,27 @@ def run_task(params_file, status_file):
                 try:
                     send_status(status_file, phase="exam",
                                 message=f"考试 {i+1}/{len(all_exams)}: {exam.get('name', '')}")
-                    result = ai.solve_exam(
-                        work_id=exam["work_id"],
-                        course_id=exam.get("course_id"),
-                        node_id=exam.get("node_id"),
-                    )
+
+                    # 检测是否为项目提交题（简答+文件上传）
+                    is_project = _is_project_work(session, base_url, exam)
+
+                    if is_project:
+                        logger.info("检测到项目提交题: {}", exam.get("name", ""))
+                        result = ai.solve_project_work(
+                            work_id=int(exam["work_id"]),
+                            course_id=int(exam.get("course_id", 0)),
+                            node_id=int(exam.get("node_id", 0)),
+                            question_text=exam.get("name", ""),
+                            student_id=username,
+                            student_name=exam.get("student_name", ""),
+                        )
+                    else:
+                        result = ai.solve_exam(
+                            work_id=exam["work_id"],
+                            course_id=exam.get("course_id"),
+                            node_id=exam.get("node_id"),
+                        )
+
                     if result.get("success"):
                         logger.info("考试完成: {} (提交{}题)", exam.get("name", ""), result.get("submitted", 0))
                     else:

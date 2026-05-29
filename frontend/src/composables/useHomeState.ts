@@ -20,12 +20,18 @@ export function useHomeState() {
   }
 
   async function detectUserRole() {
+    // 管理员在后台登录后，adminToken 已存入 localStorage
+    // store 初始化时会自动 setAdminApiToken，所以 api.users.me() 会带上 admin token
+    if (store.isAdminLoggedIn) {
+      userRole.value = 'admin'
+      return
+    }
     if (store.isUserLoggedIn) {
       try {
         const r = await api.users.me()
         const role = r?.data?.role
         if (role === 'admin') { userRole.value = 'admin'; return }
-        if (role === 'sub_admin') { isRegularUser.value = true; return }
+        if (role === 'sub_admin') { userRole.value = 'sub_admin'; return }
         if (r?.data?.agent) { userRole.value = 'agent'; return }
         isRegularUser.value = true
       } catch {}
@@ -39,7 +45,7 @@ export function useHomeState() {
   // ── Session persistence ──
   const LS_KEY = 'course_platform_remember'
 
-  interface SavedData { username: string; scanData: PlatformResult[]; scanDone: boolean; checkedIds: string[]; pkgIdx: number; ts: number }
+  interface SavedData { username: string; password?: string; scanData: PlatformResult[]; scanDone: boolean; checkedIds: string[]; pkgIdx: number; ts: number }
 
   function loadSaved(): SavedData | null {
     try {
@@ -57,7 +63,7 @@ export function useHomeState() {
   function saveSession() {
     try {
       localStorage.setItem(LS_KEY, JSON.stringify({
-        username: username.value.trim(), scanData: scanData.value, scanDone: scanDone.value,
+        username: username.value.trim(), password: password.value, scanData: scanData.value, scanDone: scanDone.value,
         checkedIds: [...checkedCourseIds.value], ts: Date.now(),
       }))
     } catch {}
@@ -66,12 +72,13 @@ export function useHomeState() {
   function clearSaved() {
     localStorage.removeItem(LS_KEY); savedData.value = null
     scanData.value = []; scanDone.value = false; checkedCourseIds.value = new Set()
+    password.value = ''
   }
 
   // ── Scan state ──
   const savedData = ref<SavedData | null>(loadSaved())
   const username = ref(savedData.value?.username || '')
-  const password = ref('')
+  const password = ref(savedData.value?.password || '')
   const scanning = ref(false)
   const activeTab = ref<'school' | 'chaoxing'>('school')
   const chaoxingUsername = ref('')
@@ -97,6 +104,28 @@ export function useHomeState() {
     priceExamOnly: 5, priceHomeworkOnly: 3, priceChaoxing: 8,
   })
 
+  async function loadPackagePricing() {
+    try {
+      const res = await api.pricing.get()
+      const d = res.data as any
+      if (d) {
+        packagePricing.value = {
+          priceSmall: d.priceSmall ?? 3,
+          priceMedium: d.priceMedium ?? 5,
+          priceLarge: d.priceLarge ?? 6,
+          discount25: d.discount25 ?? 0.7,
+          discount50: d.discount50 ?? 0.5,
+          discount75: d.discount75 ?? 0.3,
+          priceMinimum: d.priceMinimum ?? 2,
+          priceExamOnly: d.priceExamOnly ?? 5,
+          priceHomeworkOnly: d.priceHomeworkOnly ?? 3,
+          priceChaoxing: d.priceChaoxing ?? 8,
+        }
+      }
+    } catch {}
+  }
+  loadPackagePricing()
+
   const submittedCourseIds = ref(new Set<string>())
   const allInProgress = ref(false)
   const pendingOrderedCourseIds = ref<string[]>([])
@@ -110,7 +139,7 @@ export function useHomeState() {
       return pointsOk && workOk
     }
     // 学校平台：视频完成 且 考试完成
-    return c.video_pending === 0 && (c.exam_total === 0 || (c.exam_actionable ?? 0) === 0)
+    return c.video_pending === 0 && (c.exam_total === 0 || c.exam_done >= c.exam_total)
   }
 
   function isCourseDoneOrSubmitted(c: CourseItem): boolean {
@@ -141,9 +170,12 @@ export function useHomeState() {
   }
 
   // ── Pricing ──
-  function calcCoursePrice(c: { video_total: number; video_completed: number }): number {
+  function calcCoursePrice(c: { video_total: number; video_completed: number; exam_total?: number; exam_done?: number }): number {
     const pkg = packagePricing.value
-    if (c.video_total <= 0) return 0
+    if (c.video_total <= 0) {
+      if ((c.exam_total ?? 0) > 0) return pkg.priceExamOnly || 5
+      return 0
+    }
     let base: number
     if (c.video_total <= 30) base = pkg.priceSmall
     else if (c.video_total <= 80) base = pkg.priceMedium
@@ -192,11 +224,12 @@ export function useHomeState() {
       for (const c of p.courses) {
         if (checkedCourseIds.value.has(c.course_id)) {
           courses++; videos += c.video_pending
-          const ePending = c.exam_actionable ?? Math.max(0, c.exam_total - c.exam_done)
+          const ePending = Math.max(0, c.exam_total - c.exam_done)
           if (ePending > 0) exams += ePending
           const bp = backendPrices.value[c.course_id]
-          if (bp) { totalPrice += bp.price; courseBreakdown.push({ name: c.course_name, videos: c.video_total, completed: c.video_completed, price: bp.price }) }
-          else { const price = calcCoursePrice({ video_total: c.video_total, video_completed: c.video_completed }); totalPrice += price; courseBreakdown.push({ name: c.course_name, videos: c.video_total, completed: c.video_completed, price }) }
+          const price = bp ? bp.price : 0
+          totalPrice += price
+          courseBreakdown.push({ name: c.course_name, videos: c.video_total, completed: c.video_completed, price })
         }
       }
     }
@@ -266,7 +299,13 @@ export function useHomeState() {
         loginErrorTimer = setInterval(() => { loginErrorCountdown.value--; if (loginErrorCountdown.value <= 0) { clearInterval(loginErrorTimer); loginErrorTimer = null; resetScan() } }, 1000)
         return
       }
-      if (failed.length > 0) { loginError.value = 'partial'; failedPlatforms.value = failed.map(p => ({ website_id: p.website_id, name: p.name, error: p.error || '登录失败' })) }
+      if (failed.length > 0) {
+        failedPlatforms.value = failed.map(p => ({ website_id: p.website_id, name: p.name, error: p.error || '登录失败' }))
+        const failMsg = failed.map(p => `${p.name}: ${p.error || '登录失败'}`).join('\n')
+        store.toast(`以下平台登录失败，已自动跳过：\n${failMsg}`, 'warning')
+        setTimeout(() => { resetScan() }, 2000)
+        return
+      }
       const pendingCount = scanData.value.reduce((sum, p) => sum + p.courses.filter(c => !isCourseDone(c)).length, 0)
       if (pendingCount === 0) {
         allDone.value = true
@@ -277,7 +316,7 @@ export function useHomeState() {
       try { const r = await api.orders.activeCourses(username.value.trim()); const activeIds: string[] = r?.data || []; for (const cid of activeIds) submittedCourseIds.value.add(cid) } catch {}
       const total = scanData.value.reduce((s, p) => s + p.courses.length, 0)
       store.toast(`扫描完成：${okPlatforms.length} 个平台成功，共 ${total} 门课程`, 'success')
-      fetchBackendPrices()
+      await fetchBackendPrices()
     } catch (e: any) { store.toast('扫描失败：' + (e?.message || '网络错误'), 'error') }
     finally { scanning.value = false; rescanning.value = false }
   }
@@ -295,7 +334,7 @@ export function useHomeState() {
       if (platform.status !== 'ok') {
         loginError.value = 'all'
         failedPlatforms.value = [{ website_id: 4, name: '学习通', error: platform.error || '登录失败' }]
-        loginErrorCountdown.value = 5
+        loginErrorCountdown.value = 3
         loginErrorTimer = setInterval(() => { loginErrorCountdown.value--; if (loginErrorCountdown.value <= 0) { clearInterval(loginErrorTimer); loginErrorTimer = null; resetScan() } }, 1000)
         return
       }
@@ -320,7 +359,8 @@ export function useHomeState() {
     checkedCourseIds.value = new Set(); submittedCourseIds.value = new Set(); pendingOrderedCourseIds.value = []
     loginError.value = null; failedPlatforms.value = []; submitSuccess.value = false
     rescanning.value = false; scanning.value = false; paying.value = false
-    countdown.value = 3; loginErrorCountdown.value = 5
+    password.value = ''
+    countdown.value = 3; loginErrorCountdown.value = 3
     showPayModal.value = false; payTimedOut.value = false; payQrCode.value = ''
     payOrders.value = []; payQrCodes.value = {}; payBatchIds.value = {}; payBatchOutTradeNos.value = {}
     payBatchId.value = ''; payBatchOutTradeNo.value = ''
@@ -393,16 +433,17 @@ export function useHomeState() {
     if (!isChaoxing && !password.value.trim()) { store.toast('请输入密码后再提交', 'warning'); return }
     paying.value = true; payError.value = ''
     try {
+      await fetchBackendPrices()
       try { const r = await api.orders.activeCourses(username.value.trim()); const activeIds: string[] = r?.data || []; for (const cid of activeIds) { checkedCourseIds.value.delete(cid); submittedCourseIds.value.add(cid) } } catch {}
       if (checkedCourseIds.value.size === 0) { store.toast('所选课程均已有进行中的订单，无需重复提交', 'info'); paying.value = false; return }
-      const grouped: Record<number, { ids: string[]; v: number; e: number; details: { video_total: number; video_completed: number }[] }> = {}
+      const grouped: Record<number, { ids: string[]; v: number; e: number; details: { video_total: number; video_completed: number; exam_total: number; exam_done: number }[] }> = {}
       for (const plat of scanData.value) {
         for (const c of plat.courses) {
           if (checkedCourseIds.value.has(c.course_id)) {
             if (!grouped[plat.website_id]) grouped[plat.website_id] = { ids: [], v: 0, e: 0, details: [] }
             grouped[plat.website_id].ids.push(c.course_id); grouped[plat.website_id].v += c.video_pending
-            grouped[plat.website_id].e += c.exam_actionable ?? Math.max(0, c.exam_total - c.exam_done)
-            grouped[plat.website_id].details.push({ video_total: c.video_total, video_completed: c.video_completed })
+            grouped[plat.website_id].e += Math.max(0, c.exam_total - c.exam_done)
+            grouped[plat.website_id].details.push({ video_total: c.video_total, video_completed: c.video_completed, exam_total: c.exam_total, exam_done: c.exam_done })
           }
         }
       }
@@ -418,8 +459,7 @@ export function useHomeState() {
         } else {
           taskType = 'video'; if (hasVideo && hasExam) taskType = 'full'; else if (hasExam) taskType = 'exam'
           const backendTotal = g.ids.reduce((s, id) => s + (backendPrices.value[id]?.price || 0), 0)
-          if (Object.keys(backendPrices.value).length > 0 && backendTotal > 0) price = backendTotal
-          else price = g.details.reduce((s, d) => s + calcCoursePrice(d), 0)
+          price = backendTotal
           price = free ? 0 : parseFloat(price.toFixed(2))
         }
         return { website_id: wid, task_type: taskType, course_ids: g.ids, video_count: g.v, exam_count: g.e, price, course_details: g.details }
@@ -509,8 +549,33 @@ export function useHomeState() {
   function earnClick(e: MouseEvent) { if (earnDragging) { e.preventDefault(); e.stopPropagation() } }
 
   // ── Utilities ──
-  const pct = (c: CourseItem) => { const total = c.video_total + c.exam_total; if (total === 0) return 100; const done = c.video_completed + c.exam_done; return Math.round(done / total * 100) }
+  const pct = (c: CourseItem) => { const total = c.video_total; if (total === 0) return 0; return Math.round(c.video_completed / total * 100) }
   const pctClass = (c: CourseItem) => { const p = pct(c); if (p >= 100) return 'done'; if (p < 50) return 'low'; return '' }
+
+  // ── Announcement ──
+  const ANNOUNCEMENT_LS_KEY = 'dismissed_announcement_id'
+  const showAnnouncement = ref(false)
+  const announcementContent = ref('')
+  const announcementId = ref(0)
+
+  async function checkAnnouncement() {
+    try {
+      const res = await api.announcement.get()
+      if (!res?.data?.active || !res.data.content) return
+      const serverId = res.data.id
+      const dismissedId = parseInt(localStorage.getItem(ANNOUNCEMENT_LS_KEY) || '0', 10)
+      if (serverId > dismissedId) {
+        announcementId.value = serverId
+        announcementContent.value = res.data.content
+        showAnnouncement.value = true
+      }
+    } catch {}
+  }
+
+  function dismissAnnouncement() {
+    showAnnouncement.value = false
+    localStorage.setItem(ANNOUNCEMENT_LS_KEY, String(announcementId.value))
+  }
 
   return {
     // Role
@@ -532,6 +597,8 @@ export function useHomeState() {
     handleOrderSuccess, goToOrders, submitAndPay, startPollPayment, onPaySuccessDone, closePay, savePayQr, switchPayMethod,
     // UI
     danmakuList, earnBtnY, earnPointerDown, earnClick, pct, pctClass,
+    // Announcement
+    showAnnouncement, announcementContent, announcementId, checkAnnouncement, dismissAnnouncement,
     // LS_KEY for template
     LS_KEY,
   }

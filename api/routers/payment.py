@@ -4,6 +4,7 @@ from typing import List
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from api.auth import get_optional_user
@@ -136,33 +137,93 @@ def _payment_notify_sync(params: dict) -> str:
     if ypay_order["status"] != 1:
         db.ypay_mark_paid(trade_no)
 
-    order_id = ypay_order.get("out_trade_no", trade_no)
-    order = db.get_order(order_id)
-    if not order:
-        # 签名已验证，返回 success 防止无限重试
-        return "success"
-    if order.get("commission_status") == "processed":
-        return "success"
-
-    if not db.claim_commission(order_id):
-        return "success"
-
+    out_trade_no = ypay_order.get("out_trade_no", trade_no)
     channel_name = {"1": "wechat", "2": "alipay", "3": "lkl"}.get(pay_type, "unknown")
-    db.confirm_payment(order_id, payment_trade_no=trade_no, payment_channel=channel_name)
 
-    fresh_order = db.get_order(order_id)
-    agent = None
-    if fresh_order and fresh_order.get("user_id"):
-        user = db.get_user(fresh_order["user_id"])
-        if user and user.get("referred_by"):
-            agent = db.get_agent(user["referred_by"])
-    if not agent and fresh_order and fresh_order.get("inviter_code"):
-        agent = db.get_agent_by_referral_code(fresh_order["inviter_code"])
-    _process_order_commissions(fresh_order, agent=agent)
-    db.mark_commission_done(order_id)
+    if out_trade_no.startswith("BATCH-"):
+        # 批量支付：查找所有关联订单
+        from sqlalchemy import select as sa_select
+        from api.database import Order as OrderModel
+        session = db._get_session()
+        try:
+            batch_orders = session.scalars(
+                sa_select(OrderModel).filter(OrderModel.out_trade_no == out_trade_no)
+            ).all()
+            order_ids = [o.order_id for o in batch_orders]
 
-    db.audit_log("payment_confirm", order_id=order_id,
-                 detail=f"YPay支付成功 ¥{price} 实付¥{really_price}")
+            # 回退：如果按 out_trade_no 找不到（被重试覆盖），按金额匹配未支付订单
+            if not order_ids:
+                try:
+                    price_val = float(price)
+                except (ValueError, TypeError):
+                    price_val = 0
+                if price_val > 0:
+                    fallback = session.scalars(
+                        sa_select(OrderModel).filter(
+                            OrderModel.out_trade_no.like("BATCH-%"),
+                            OrderModel.paid == False,
+                            OrderModel.status.in_(["pending", "awaiting_payment"]),
+                        )
+                    ).all()
+                    total = sum(o.price for o in fallback)
+                    if fallback and abs(total - price_val) < 0.02:
+                        order_ids = [o.order_id for o in fallback]
+                        logger.warning("payment_callback_fallback batch={} found={} orders by price match ¥{}",
+                                       out_trade_no, len(order_ids), price_val)
+        finally:
+            session.close()
+
+        for order_id in order_ids:
+            if not db.claim_commission(order_id):
+                continue
+            db.confirm_payment(order_id, payment_trade_no=trade_no, payment_channel=channel_name)
+            fresh_order = db.get_order(order_id)
+            agent = None
+            if fresh_order and fresh_order.get("user_id"):
+                user = db.get_user(fresh_order["user_id"])
+                if user and user.get("referred_by"):
+                    agent = db.get_agent(user["referred_by"])
+            if not agent and fresh_order and fresh_order.get("inviter_code"):
+                agent = db.get_agent_by_referral_code(fresh_order["inviter_code"])
+            _process_order_commissions(fresh_order, agent=agent)
+            db.mark_commission_done(order_id)
+            db.audit_log("payment_confirm", order_id=order_id,
+                         detail=f"YPay批量支付成功 batch={out_trade_no} ¥{price} 实付¥{really_price}")
+
+        # 批量支付成功后自动入队
+        from api.services.order_service import enqueue_paid_orders
+        enqueue_paid_orders(order_ids)
+    else:
+        # 单笔支付
+        order_id = out_trade_no
+        order = db.get_order(order_id)
+        if not order:
+            return "success"
+        if order.get("commission_status") == "processed":
+            return "success"
+
+        if not db.claim_commission(order_id):
+            return "success"
+
+        db.confirm_payment(order_id, payment_trade_no=trade_no, payment_channel=channel_name)
+
+        fresh_order = db.get_order(order_id)
+        agent = None
+        if fresh_order and fresh_order.get("user_id"):
+            user = db.get_user(fresh_order["user_id"])
+            if user and user.get("referred_by"):
+                agent = db.get_agent(user["referred_by"])
+        if not agent and fresh_order and fresh_order.get("inviter_code"):
+            agent = db.get_agent_by_referral_code(fresh_order["inviter_code"])
+        _process_order_commissions(fresh_order, agent=agent)
+        db.mark_commission_done(order_id)
+
+        db.audit_log("payment_confirm", order_id=order_id,
+                     detail=f"YPay支付成功 ¥{price} 实付¥{really_price}")
+
+        # 支付成功后自动入队
+        from api.services.order_service import enqueue_paid_orders
+        enqueue_paid_orders([order_id])
 
     return "success"
 
@@ -249,6 +310,11 @@ def check_payment(out_trade_no: str, order_id: str = Query("")):
 
         db.audit_log("payment_confirm", order_id=actual_order_id,
                      detail=f"YPay支付成功(轮询) 金额:{ypay_order.get('money', '')}")
+
+        # 支付成功后自动入队
+        from api.services.order_service import enqueue_paid_orders
+        enqueue_paid_orders([actual_order_id])
+
         return _paid_response(actual_order_id)
 
     # AGENTUP fallback: even if ypay status not updated, check if agent already upgraded
@@ -284,6 +350,8 @@ def batch_payment_create(payload: BatchPaymentCreateRequest, current_user: dict 
         if not o:
             return {"code": 404, "message": f"订单 {oid} 不存在"}
         if o.get("paid"):
+            continue
+        if o.get("status") not in ("pending", "awaiting_payment"):
             continue
         orders.append(o)
 
@@ -398,6 +466,10 @@ def batch_check_payment(batch_id: str, out_trade_no: str = Query(""), token: str
 
         db.audit_log("batch_payment_confirm", order_id=oid,
                      detail=f"批量支付确认 batch={batch_id}")
+
+    # 批量支付确认后自动入队
+    from api.services.order_service import enqueue_paid_orders
+    enqueue_paid_orders(order_ids)
 
     if paid_count >= len(order_ids):
         return JSONResponse(

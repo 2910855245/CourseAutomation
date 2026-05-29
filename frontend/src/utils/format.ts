@@ -20,17 +20,17 @@ export function fmtTime(s?: string): string {
 export const orderStatusLabel: Record<string, string> = {
   pending: '待处理', accepted: '已接单', queued: '排队中', running: '执行中',
   completed: '已完成', failed: '失败', cancelled: '已取消', paid: '已支付',
-  retrying: '重试中', amount_mismatch: '金额异常',
+  retrying: '重试中', amount_mismatch: '金额异常', waiting: '等待明天',
 }
 
 export const orderStatusClass: Record<string, string> = {
   pending: 'warn', accepted: 'primary', queued: 'primary', running: 'primary',
   completed: 'ok', failed: 'bad', cancelled: 'muted', paid: 'ok',
-  retrying: 'warn', amount_mismatch: 'bad',
+  retrying: 'warn', amount_mismatch: 'bad', waiting: 'primary',
 }
 
 export const taskTypeNames: Record<string, string> = {
-  video: '视频', exam: '考试', both: '视频+考试',
+  video: '视频', exam: '考试', both: '视频+考试', full: '全包', chaoxing_points: '学习通积分',
 }
 
 export const agentStatusLabel: Record<string, string> = {

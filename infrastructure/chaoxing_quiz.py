@@ -64,10 +64,17 @@ def decode_font_from_html(html: str, ref_hashes: dict) -> dict:
     cmap_inv = {v: k for k, v in cmap.items()}
 
     mapping = {}
+    glyf_table = ttfont['glyf']
     for glyph_name, glyph in glyphs.items():
-        if glyph_name == '.notdef' or not glyph.data:
+        if glyph_name == '.notdef':
             continue
-        h = (sha1(glyph.data).digest(), md5(glyph.data).digest())
+        try:
+            data = glyph.data if hasattr(glyph, 'data') and glyph.data else glyph.compile(glyf_table)
+        except Exception:
+            continue
+        if not data:
+            continue
+        h = (sha1(data).digest(), md5(data).digest())
         if h in ref_hashes:
             ref_name = ref_hashes[h]
             if ref_name.startswith('uni'):
@@ -102,6 +109,10 @@ def decode_text(text: str, mapping: dict) -> str:
 def parse_quiz(html: str, mapping: dict) -> tuple:
     """解析作业页面HTML为结构化题目
 
+    支持两种格式：
+    1. 标准学习通：cxsecret字体加密 + qid属性
+    2. tsjy平台（形势与政策）：普通文本 + 无qid属性
+
     返回: (questions: list, form_params: dict)
     """
     from bs4 import BeautifulSoup
@@ -111,17 +122,21 @@ def parse_quiz(html: str, mapping: dict) -> tuple:
 
     title_divs = soup.find_all(class_='Zy_TItle')
     for i, title_div in enumerate(title_divs):
+        # 优先找 cxsecret 字体加密标签，回退到 fontLabel 标签
         label_div = title_div.find(class_=lambda x: x and 'cxsecret' in x and 'fontLabel' in x)
         if not label_div:
-            continue
+            label_div = title_div.find(class_=lambda x: x and 'fontLabel' in x)
+        if not label_div:
+            # 回退：取整个标题div的文本
+            label_div = title_div
 
         text = decode_text(label_div.get_text(strip=True), mapping)
 
-        if '判断题' in text:
+        if '判断题' in text or 'True or False' in text:
             qtype = 'judgment'
-        elif '单选题' in text:
+        elif '单选题' in text or 'Single Choice' in text:
             qtype = 'single'
-        elif '多选题' in text:
+        elif '多选题' in text or 'Multiple Choice' in text:
             qtype = 'multiple'
         else:
             qtype = 'unknown'
@@ -130,10 +145,22 @@ def parse_quiz(html: str, mapping: dict) -> tuple:
         next_sib = title_div.find_next_sibling()
         qid = ''
         if next_sib:
-            for li in next_sib.find_all('li', attrs={'qid': True}):
-                qid = li.get('qid', '')
-                opt_text = decode_text(li.get_text(strip=True), mapping)
-                options.append(opt_text)
+            # 优先找带 qid 属性的 li
+            li_with_qid = next_sib.find_all('li', attrs={'qid': True})
+            if li_with_qid:
+                for li in li_with_qid:
+                    qid = li.get('qid', '')
+                    opt_text = decode_text(li.get_text(strip=True), mapping)
+                    options.append(opt_text)
+            else:
+                # tsjy 格式：普通 li 无 qid
+                for li in next_sib.find_all('li'):
+                    opt_text = decode_text(li.get_text(strip=True), mapping)
+                    options.append(opt_text)
+
+        # tsjy 格式无 qid，用题目序号生成
+        if not qid:
+            qid = str(i + 1)
 
         ans_type_input = soup.find('input', {'name': f'answertype{qid}'})
         ans_type = ans_type_input.get('value', '') if ans_type_input else ''
@@ -361,59 +388,133 @@ class AnswerCache:
 # ============ 作业列表获取 ============
 
 
-def get_work_list(session: ChaoxingSession, course_id: str, class_id: str) -> list:
-    """获取课程的作业列表"""
-    from bs4 import BeautifulSoup
+def get_work_list(session: ChaoxingSession, course_id: str, class_id: str, cpi: str = '') -> list:
+    """获取课程的作业/考试列表
 
-    url = (f'{BASE_URL}/mooc-ans/work/{class_id}/list'
-           f'?courseId={course_id}&classId={class_id}&cpi=0&ut=s')
+    返回: [{'workId': str, 'title': str, 'status': str, 'type': 'exam'|'work',
+            'examId': str, 'paperId': str, 'enc': str, 'endTime': str}, ...]
+    """
+    if not cpi:
+        try:
+            resp = session.get('https://mooc1-api.chaoxing.com/mycourse/backclazzdata?view=json&rss=1')
+            for ch in resp.json().get('channelList', []):
+                content = ch.get('content', {})
+                if isinstance(content, dict):
+                    for c in content.get('course', {}).get('data', []):
+                        if str(c.get('id', '')) == course_id:
+                            cpi = str(ch.get('cpi', ''))
+                            break
+        except Exception:
+            pass
+
+    items = []
+
+    # 1. 获取考试列表 (exam-ans 域名)
     try:
-        resp = session.get(url, referer=BASE_URL + '/')
+        exam_url = (f'{BASE_URL}/mooc2/exam/exam-list'
+                    f'?clazzid={class_id}&courseid={course_id}&cpi={cpi}')
+        resp = session.get(exam_url, referer=BASE_URL + '/')
+        if resp.status_code == 302:
+            try:
+                loc = resp.headers['location']
+                if isinstance(loc, bytes):
+                    loc = loc.decode()
+                resp = session.get(loc, referer=exam_url)
+            except Exception:
+                pass
         html = resp.text()
+
+        # 解析 goTest(courseId, examId, relationId, endTime, paperId, isRetest, enc)
+        for m in re.finditer(
+                r"goTest\('([^']*)',\s*(\d+),\s*(\d+),\s*'([^']*)',\s*(\d+),\s*(true|false),\s*'([^']*)'\)",
+                html):
+            cid_g, exam_id, rel_id, end_time, paper_id, is_retest, enc = m.groups()
+            # 提取标题（goTest后面的文本）
+            end = min(len(html), m.end() + 1000)
+            after = html[m.end():end]
+            title_match = re.search(r'class="overHidden2[^"]*"[^>]*>(.*?)</p>', after, re.DOTALL)
+            title = title_match.group(1).strip() if title_match else f'考试{exam_id}'
+            title = re.sub(r'<[^>]+>', '', title).strip()
+            # 提取状态
+            status_match = re.search(r'class="status[^"]*"[^>]*>(.*?)</(?:p|div|span)>', after, re.DOTALL)
+            status = status_match.group(1).strip() if status_match else ''
+
+            items.append({
+                'workId': exam_id,
+                'examId': exam_id,
+                'title': title,
+                'status': status,
+                'type': 'exam',
+                'paperId': paper_id,
+                'enc': enc,
+                'endTime': end_time,
+                'relationId': rel_id,
+                'courseId': course_id,
+                'classId': class_id,
+                'cpi': cpi,
+            })
+
+        if items:
+            logger.info(f"获取考试列表 count={len(items)} course_id={course_id}")
+    except Exception as e:
+        logger.warning(f"获取考试列表失败 error={str(e)}")
+
+    # 2. 获取作业列表 (mooc-ans 域名)
+    try:
+        work_url = (f'{BASE_URL}/mooc2/work/work-list'
+                    f'?clazzid={class_id}&courseid={course_id}&cpi={cpi}')
+        resp = session.get(work_url, referer=BASE_URL + '/')
+        if resp.status_code == 302:
+            try:
+                loc = resp.headers['location']
+                if isinstance(loc, bytes):
+                    loc = loc.decode()
+                resp = session.get(loc, referer=work_url)
+            except Exception:
+                pass
+        html = resp.text()
+
+        if '无权限' not in html and '暂时没有数据' not in html and len(html) > 500:
+            # 解析作业列表（格式可能与考试类似）
+            for m in re.finditer(r'workId["\s:=]+["\']?(\d+)', html):
+                wid = m.group(1)
+                if not any(it['workId'] == wid for it in items):
+                    items.append({
+                        'workId': wid,
+                        'title': f'作业{wid}',
+                        'status': '',
+                        'type': 'work',
+                        'courseId': course_id,
+                        'classId': class_id,
+                        'cpi': cpi,
+                    })
     except Exception as e:
         logger.warning(f"获取作业列表失败 error={str(e)}")
-        return []
 
-    works = []
-    soup = BeautifulSoup(html, 'html.parser')
-
-    # 尝试HTML结构提取
-    items = soup.select('.workItem, .work-item, .clearfix.li_1, .jobList .clearfix')
+    # 3. 备用：旧的 mooc-ans 端点（兼容旧版）
     if not items:
-        # 备用: 从script中提取
-        for script in soup.find_all('script'):
-            text = script.string or ''
-            for m in re.finditer(r'workId["\s:=]+["\']?(\d+)', text):
-                works.append({'workId': m.group(1), 'status': 'unknown'})
-        for a in soup.find_all('a', href=True):
-            href = a.get('href', '')
-            if '/work/' in href and 'workId' not in href:
-                m = re.search(r'/work/(\d+)', href)
-                if m:
-                    works.append({'workId': m.group(1), 'title': a.get_text(strip=True), 'status': 'unknown'})
-    else:
-        for item in items:
-            title_el = item.select_one('.workName, .tit, h3, a')
-            title = title_el.get_text(strip=True) if title_el else ''
-            link = item.select_one('a[href*="work"]')
-            href = link.get('href', '') if link else ''
-            work_id = ''
-            m = re.search(r'workId=(\d+)', href)
-            if m:
-                work_id = m.group(1)
-            if not work_id:
-                m = re.search(r'/work/(\d+)', href)
-                if m:
-                    work_id = m.group(1)
-            status_el = item.select_one('.status, .state, .notComplete')
-            status = status_el.get_text(strip=True) if status_el else ''
-            if work_id:
-                works.append({'workId': work_id, 'title': title, 'status': status, 'href': href})
+        try:
+            old_url = (f'{BASE_URL}/mooc-ans/work/{class_id}/list'
+                       f'?courseId={course_id}&classId={class_id}&cpi={cpi}&ut=s')
+            resp = session.get(old_url, referer=BASE_URL + '/')
+            html = resp.text()
+            if resp.status_code == 200 and len(html) > 500:
+                for m in re.finditer(r'workId["\s:=]+["\']?(\d+)', html):
+                    wid = m.group(1)
+                    if not any(it['workId'] == wid for it in items):
+                        items.append({
+                            'workId': wid,
+                            'title': f'作业{wid}',
+                            'status': '',
+                            'type': 'work',
+                        })
+        except Exception:
+            pass
 
     # 去重
     seen = set()
     unique = []
-    for w in works:
+    for w in items:
         wid = w.get('workId', '')
         if wid and wid not in seen:
             seen.add(wid)
@@ -422,6 +523,166 @@ def get_work_list(session: ChaoxingSession, course_id: str, class_id: str) -> li
 
 
 # ============ 一站式答题 ============
+
+
+def _is_hash_workid(workid: str) -> bool:
+    """判断是否为哈希格式的workId（tsjy平台）"""
+    return bool(workid) and not workid.isdigit()
+
+
+def _fetch_clean_questions(session: ChaoxingSession, work_url: str) -> str:
+    """通过api=1端点获取无字体加密的题目页面（tsjy平台专用）
+
+    api=1 端点会重定向到 selectWorkQuestion 页面，返回干净文本。
+    """
+    import urllib.parse
+
+    # 从 workHandle URL 提取参数，构造 api/work URL
+    parsed = urllib.parse.urlparse(work_url)
+    params = urllib.parse.parse_qs(parsed.query)
+
+    workid = params.get('workId', [''])[0]
+    jobid = params.get('jobid', [''])[0]
+    kid = params.get('knowledgeid', [''])[0]
+    ktoken = params.get('ktoken', [''])[0]
+    cpi = params.get('cpi', [''])[0]
+    enc = params.get('enc', [''])[0]
+    clid = params.get('classId', [''])[0]
+    cid = params.get('courseid', params.get('courseId', ['']))[0]
+
+    if not workid:
+        return ''
+
+    # 构造 api/work URL（与 work module index.html 一致）
+    api_url = (f'{BASE_URL}/mooc-ans/api/work?api=1&workId={workid}'
+               f'&jobid={jobid}&originJobId={jobid}'
+               f'&needRedirect=true&skipHeader=true'
+               f'&knowledgeid={kid}&ktoken={ktoken}&cpi={cpi}'
+               f'&enc={enc}&clazzId={clid}&courseId={cid}')
+
+    try:
+        resp = session.get(api_url, referer=BASE_URL + '/')
+        # 跟随重定向链（最多3步）
+        for _ in range(3):
+            if resp.status_code in (301, 302, 303, 307, 308):
+                loc = resp.headers.get('location')
+                if isinstance(loc, bytes):
+                    loc = loc.decode('utf-8')
+                if loc.startswith('/'):
+                    loc = BASE_URL + loc
+                resp = session.get(loc, referer=api_url)
+            else:
+                break
+        html = resp.text()
+        # 验证是否为干净文本（无font-cxsecret）
+        if 'font-cxsecret' not in html and len(html) > 500:
+            return html
+    except Exception as e:
+        logger.warning(f"获取clean questions失败: {e}")
+    return ''
+
+
+def _merge_clean_questions(clean_html: str, encrypted_html: str,
+                           mapping: dict) -> tuple:
+    """合并干净文本题目和加密页面的表单参数
+
+    从clean_html提取题目文本，从encrypted_html提取qid和form参数。
+    返回: (questions: list, form_params: dict)
+    """
+    from bs4 import BeautifulSoup
+
+    # 从加密页面获取 form_params 和 qid 列表
+    enc_soup = BeautifulSoup(encrypted_html, 'html.parser')
+    form_params = {}
+    form = enc_soup.find('form')
+    if form:
+        action = form.get('action', '')
+        if '?' in action:
+            for pair in action.split('?', 1)[1].split('&'):
+                if '=' in pair:
+                    k, v = pair.split('=', 1)
+                    form_params[k] = v
+        for inp in form.find_all('input', {'type': 'hidden'}):
+            name = inp.get('name', '')
+            value = inp.get('value', '')
+            if name and not name.startswith('answer') and not name.startswith('answertype'):
+                form_params[name] = value
+
+    # 从加密页面获取 qid 和 answertype
+    # qid 在 singleQuesId div 的 data 属性中，或在 li 的 qid 属性中
+    enc_title_divs = enc_soup.find_all(class_='Zy_TItle')
+    qid_list = []
+    ans_type_list = []
+    for td in enc_title_divs:
+        qid = ''
+        ans_type = ''
+
+        # 方法1：从父级 singleQuesId div 的 data 属性获取
+        parent_div = td.find_parent(class_='singleQuesId')
+        if parent_div:
+            qid = parent_div.get('data', '')
+
+        # 方法2：从 li 的 qid 属性获取
+        if not qid:
+            next_sib = td.find_next_sibling()
+            if next_sib:
+                li_with_qid = next_sib.find_all('li', attrs={'qid': True})
+                if li_with_qid:
+                    qid = li_with_qid[0].get('qid', '')
+
+        # 方法3：从 hidden input 获取
+        if not qid:
+            for inp in enc_soup.find_all('input', {'name': re.compile(r'^answer\d+')}):
+                name = inp.get('name', '')
+                candidate = name[6:]  # 去掉 'answer' 前缀
+                if candidate not in [q for q in qid_list if q]:
+                    qid = candidate
+                    break
+
+        if qid:
+            ans_type_input = enc_soup.find('input', {'name': f'answertype{qid}'})
+            ans_type = ans_type_input.get('value', '') if ans_type_input else ''
+        qid_list.append(qid)
+        ans_type_list.append(ans_type)
+
+    # 从干净页面提取题目
+    clean_soup = BeautifulSoup(clean_html, 'html.parser')
+    clean_title_divs = clean_soup.find_all(class_='Zy_TItle')
+
+    questions = []
+    for i, td in enumerate(clean_title_divs):
+        label = td.find(class_='fontLabel') or td
+        text = label.get_text(strip=True)
+
+        if '判断题' in text or 'True or False' in text:
+            qtype = 'judgment'
+        elif '单选题' in text or 'Single Choice' in text:
+            qtype = 'single'
+        elif '多选题' in text or 'Multiple Choice' in text:
+            qtype = 'multiple'
+        else:
+            qtype = 'unknown'
+
+        options = []
+        next_sib = td.find_next_sibling()
+        if next_sib:
+            for li in next_sib.find_all('li'):
+                opt_text = li.get_text(strip=True)
+                options.append(opt_text)
+
+        qid = qid_list[i] if i < len(qid_list) and qid_list[i] else str(i + 1)
+        ans_type = ans_type_list[i] if i < len(ans_type_list) else ''
+
+        questions.append({
+            'index': i,
+            'qid': qid,
+            'type': qtype,
+            'ans_type': ans_type,
+            'text': text,
+            'options': options,
+        })
+
+    return questions, form_params
 
 
 def solve_quiz(session: ChaoxingSession, work_url: str,
@@ -445,20 +706,36 @@ def solve_quiz(session: ChaoxingSession, work_url: str,
     except Exception as e:
         return {'success': False, 'total': 0, 'error': f'获取页面失败: {e}'}
 
+    # 检测是否为tsjy哈希workId（字体加密页面）
+    # 尝试获取干净文本用于AI答题
+    clean_html = ''
+    workid_match = re.search(r'workId=([a-f0-9]{20,})', work_url)
+    if workid_match:
+        logger.info(f"检测到哈希workId，尝试获取干净文本")
+        clean_html = _fetch_clean_questions(session, work_url)
+        if clean_html:
+            logger.info(f"获取干净文本成功 len={len(clean_html)}")
+
     # 加载字体参考
     if ref_hashes is None:
         try:
             ref_hashes = load_ref_hashes()
         except Exception as e:
-            return {'success': False, 'total': 0, 'error': f'加载字体参考失败: {e}'}
+            ref_hashes = {}
+            logger.warning(f"字体参考未加载，使用空映射: {e}")
 
     # 解码字体
     mapping = decode_font_from_html(html, ref_hashes)
     logger.info(f"字体解码 mappings={len(mapping)}")
 
     # 解析题目
-    questions, form_params = parse_quiz(html, mapping)
-    logger.info(f"解析题目 count={len(questions)}")
+    if clean_html:
+        # 合并干净文本和加密页面的表单参数
+        questions, form_params = _merge_clean_questions(clean_html, html, mapping)
+        logger.info(f"合并解析题目 count={len(questions)}")
+    else:
+        questions, form_params = parse_quiz(html, mapping)
+        logger.info(f"解析题目 count={len(questions)}")
     if not questions:
         return {'success': False, 'total': 0, 'error': '未找到题目'}
 

@@ -14,7 +14,23 @@ const { showConfirm } = useConfirmSingleton()
 
 const orders = ref<OrderItem[]>([])
 let changedIds = new Set<string>()
-let interval: number
+let ws: WebSocket | null = null
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  try {
+    ws = new WebSocket(`${proto}//${location.host}/api/progress/ws/live`)
+    ws.onmessage = (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        if (d.type === 'progress' || d.type === 'job_update' || d.type === 'order_update') {
+          load()
+        }
+      } catch {}
+    }
+    ws.onclose = () => { setTimeout(connectWS, 5000) }
+  } catch {}
+}
 const statusFilter = ref('')
 const searchQuery = ref('')
 const currentPage = ref(1)
@@ -23,8 +39,7 @@ const totalOrders = ref(0)
 const pageSize = 50
 const detailOrder = ref<OrderItem | null>(null)
 const auditLogs = ref<{ event: string; detail: string; created_at: string }[]>([])
-const taskTypeNames: Record<string, string> = { video: '视频', exam: '考试', full: '全包' }
-const countdown = ref(15)
+const taskTypeNames: Record<string, string> = { video: '视频', exam: '考试', full: '全包', chaoxing_points: '学习通积分' }
 const isGuest = ref(false)
 const guestOrderIds = ref<string[]>([])
 
@@ -116,15 +131,9 @@ async function load() {
   }
 }
 
-function startAutoRefresh() {
-  interval = window.setInterval(() => {
-    countdown.value--
-    if (countdown.value <= 0) { load(); countdown.value = 15 }
-  }, 1000)
-}
-
 onMounted(async () => {
   try {
+    connectWS()
     loadPlatformNames()
     const hasToken = !!localStorage.getItem('user_token')
     const routeId = route.params.id as string || ''
@@ -155,11 +164,9 @@ onMounted(async () => {
     console.error('Orders init error:', e)
   }
 
-  startAutoRefresh()
+  connectWS()
 })
-onUnmounted(() => { if (interval) clearInterval(interval) })
-
-function refresh() { load(); countdown.value = 15 }
+onUnmounted(() => { if (ws) { ws.close(); ws = null } })
 
 async function cancel(id: string) {
   const ok = await showConfirm({ title: '取消订单', message: '确认取消该订单吗？取消后不可恢复。', type: 'warning' })
@@ -176,8 +183,12 @@ async function clearHistory() {
   if (!ok) return
   try {
     await api.orders.clearHistory()
+    guestOrderIds.value = []
+    sessionStorage.removeItem('last_order_ids')
+    localStorage.removeItem('last_order_ids')
+    orders.value = []
+    totalOrders.value = 0
     store.toast('历史订单已清空', 'success')
-    load()
   } catch (e: any) { store.toast(e.message, 'error') }
 }
 
@@ -270,7 +281,7 @@ const fmtDate = (s: string) => s ? s.replace('T', ' ').substring(0, 19) : '-'
 const fmtMoney = (n: number) => `¥${(n || 0).toFixed(2)}`
 const statusClass: Record<string, string> = { pending: 'warn', accepted: 'primary', queued: 'primary', running: 'primary', completed: 'ok', failed: 'bad', cancelled: 'muted', waiting: 'warn' }
 
-const hasActive = () => orders.value.some(o => activeStatuses.includes(o.status))
+
 function showDetail(o: OrderItem) {
   detailOrder.value = o
   auditLogs.value = []
@@ -291,12 +302,8 @@ function closeDetail() { detailOrder.value = null }
       </div>
 
       <div class="toolbar">
-        <span v-if="hasActive()" class="timer">自动刷新：{{ countdown }}秒</span>
-        <span v-else-if="orders.length" class="timer done">全部完成 ✓</span>
+        <span class="timer live">实时推送</span>
         <div class="toolbar-actions">
-          <button class="btn btn-ghost" @click="refresh">
-刷新
-</button>
           <button v-if="orders.length" class="btn btn-ghost btn-clear-history" @click="clearHistory">
 清空
 </button>
@@ -332,6 +339,9 @@ function closeDetail() { detailOrder.value = null }
         <button :class="['chip', { active: statusFilter === 'failed' }]" @click="statusFilter = 'failed'; load()">
 失败
 </button>
+        <button :class="['chip', { active: statusFilter === 'waiting' }]" @click="statusFilter = 'waiting'; load()">
+等待明天
+</button>
       </div>
 
       <div v-if="!orders.length" class="empty">
@@ -365,19 +375,15 @@ function closeDetail() { detailOrder.value = null }
               <span v-if="changedIds.has(o.order_id)" class="oc-changed">已更新</span>
             </div>
             <div v-if="o.status === 'pending'" class="oc-actions">
-              <button
+              <a
                 v-if="!o.paid"
-                class="btn btn-primary-sm"
+                class="oc-link pay-link"
                 @click.stop="repay([o.order_id])"
-              >
-去支付
-</button>
-              <button
-                class="btn btn-danger-sm"
+              >去支付</a>
+              <a
+                class="oc-link cancel-link"
                 @click.stop="cancel(o.order_id)"
-              >
-取消
-</button>
+              >取消</a>
             </div>
           </div>
           <div class="oc-info">
@@ -402,7 +408,7 @@ function closeDetail() { detailOrder.value = null }
               <span class="oci-v">{{ fmtTime(o.updated_at || '') }}</span>
             </div>
           </div>
-          <div v-if="activeStatuses.includes(o.status)" class="oc-progress">
+          <div v-if="activeStatuses.includes(o.status) && pct(o) > 0" class="oc-progress">
             <div class="ocp-bar">
               <div class="ocp-fill" :style="{ width: pct(o) + '%' }"></div>
             </div>
@@ -627,7 +633,11 @@ function closeDetail() { detailOrder.value = null }
   background: var(--c-info-bg); padding: 1px 7px; border-radius: 8px;
 }
 
-.oc-actions { display: flex; gap: 6px; }
+.oc-actions { display: flex; gap: 10px; align-items: center; }
+.oc-link { font-size: 12.5px; cursor: pointer; text-decoration: none; white-space: nowrap; }
+.oc-link:hover { text-decoration: underline; }
+.pay-link { color: var(--c-primary); font-weight: 600; }
+.cancel-link { color: var(--c-text-muted); }
 .pay-modal {
   width: 400px; max-width: 92vw; background: var(--c-surface);
   border-radius: var(--radius-lg); padding: 28px 24px;
@@ -759,7 +769,11 @@ function closeDetail() { detailOrder.value = null }
   .audit-event { font-size: 11px; }
   .audit-detail { font-size: 11px; width: 100%; }
 
-  .oc-actions { display: flex; gap: 6px; }
+  .oc-actions { display: flex; gap: 10px; align-items: center; }
+.oc-link { font-size: 12.5px; cursor: pointer; text-decoration: none; white-space: nowrap; }
+.oc-link:hover { text-decoration: underline; }
+.pay-link { color: var(--c-primary); font-weight: 600; }
+.cancel-link { color: var(--c-text-muted); }
   .pay-modal { width: 92vw; max-width: 380px; background: var(--c-surface); border-radius: var(--radius-lg); padding: 24px 20px; box-shadow: var(--shadow-lg); }
   .pm-tab.active { background: var(--c-primary); color: #fff; border-color: var(--c-primary); }
   .btn-block { width: 100%; }

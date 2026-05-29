@@ -15,6 +15,12 @@ from api.redis_client import redis_client
 # 去除易混淆字符
 _CHARS = "2345678ABCDEFGHJKMNPQRTUVWXYabcdefghjkmnpqrtuvwxy"
 _FONT_CANDIDATES = [
+    # Windows
+    "C:/Windows/Fonts/arialbd.ttf",
+    "C:/Windows/Fonts/verdanab.ttf",
+    "C:/Windows/Fonts/calibrib.ttf",
+    "C:/Windows/Fonts/tahomabd.ttf",
+    # Linux
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
     "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
@@ -95,35 +101,33 @@ class CaptchaService:
         token = uuid.uuid4().hex[:12]
         self._set(token, code, ttl=300)
 
-        # --- 绘制图片 ---
-        width, height = 140, 52
-        img = Image.new("RGB", (width, height), (255, 255, 255))
+        # --- OCR-resistant captcha design ---
+        width, height = 200, 60
+        bg_color = (248, 248, 252)
+        img = Image.new("RGB", (width, height), bg_color)
         draw = ImageDraw.Draw(img)
 
-        # 背景噪点
-        for _ in range(random.randint(200, 400)):
-            x = random.randint(0, width - 1)
-            y = random.randint(0, height - 1)
-            c = random.randint(180, 240)
-            draw.point((x, y), fill=(c, c, c))
+        # 网格背景（干扰OCR预处理，深色混淆）
+        grid_color = (180, 185, 195)
+        for gx in range(0, width, 8):
+            draw.line([(gx, 0), (gx, height)], fill=grid_color, width=1)
+        for gy in range(0, height, 8):
+            draw.line([(0, gy), (width, gy)], fill=grid_color, width=1)
 
-        # 干扰线 - 随机曲线
-        for _ in range(random.randint(2, 4)):
+        # 2条穿过文字的干扰线（破坏OCR边缘检测）
+        for _ in range(2):
             pts = []
-            start_x = random.randint(-20, 20)
-            start_y = random.randint(5, height - 5)
-            for seg in range(4):
-                pts.append((start_x + seg * 45 + random.randint(-10, 10),
-                           start_y + random.randint(-15, 15)))
-            # 画折线
+            for seg in range(6):
+                pts.append((seg * 42 + random.randint(-8, 8),
+                           random.randint(8, height - 8)))
             for i in range(len(pts) - 1):
-                lc = random.randint(80, 160)
+                lc = random.randint(80, 140)
                 draw.line([pts[i], pts[i + 1]], fill=(lc, lc, lc), width=random.randint(1, 2))
 
-        # 正弦扭曲（逐列像素偏移）
+        # 强正弦扭曲（抗OCR核心手段）
         img_array = img.load()
         amplitude = random.randint(3, 6)
-        period = random.randint(20, 35)
+        period = random.randint(22, 34)
         phase = random.randint(0, 10)
         for y in range(height):
             offset = int(amplitude * math.sin(2 * math.pi * (y + phase) / period))
@@ -133,35 +137,30 @@ class CaptchaService:
                 if 0 <= src_x < width:
                     img_array[x, y] = row[src_x]
 
-        # 重新获取 draw（因为像素操作后需要刷新）
         draw = ImageDraw.Draw(img)
 
-        # 画字符（每个字符独立旋转+颜色）
-        char_colors = [
-            (random.randint(0, 80), random.randint(0, 80), random.randint(140, 255)),  # 蓝
-            (random.randint(140, 255), random.randint(0, 60), random.randint(0, 60)),  # 红
-            (random.randint(0, 80), random.randint(120, 200), random.randint(0, 80)),  # 绿
-            (random.randint(160, 220), random.randint(80, 160), random.randint(0, 40)),  # 橙
+        # 画字符：小字号 + 相近深色 + 重叠
+        dark = random.randint(20, 60)
+        colors = [
+            (dark, dark, dark),
+            (dark + random.randint(-10, 10), dark + random.randint(-10, 10), dark + random.randint(-10, 10)),
+            (dark + random.randint(-10, 10), dark + random.randint(-10, 10), dark + random.randint(-10, 10)),
+            (dark + random.randint(-10, 10), dark + random.randint(-10, 10), dark + random.randint(-10, 10)),
         ]
-        random.shuffle(char_colors)
+        base_x_positions = [14, 56, 98, 140]
 
         for i, ch in enumerate(code):
-            char_img = Image.new("RGBA", (36, 48), (0, 0, 0, 0))
+            char_img = Image.new("RGBA", (44, 50), (0, 0, 0, 0))
             char_draw = ImageDraw.Draw(char_img)
-            font_size = random.randint(28, 34)
-            self._draw_text_with_font(char_draw, ch, (3, 2), font_size, char_colors[i])
+            font_size = random.randint(26, 34)
+            self._draw_text_with_font(char_draw, ch, (3, 2), font_size, colors[i])
 
-            # 旋转
-            angle = random.randint(-30, 30)
+            angle = random.randint(-25, 25)
             char_img = char_img.rotate(angle, expand=True, fillcolor=(0, 0, 0, 0))
 
-            # 粘贴到主图
-            x_offset = 8 + i * 32 + random.randint(-3, 3)
-            y_offset = random.randint(-2, 6)
+            x_offset = base_x_positions[i] + random.randint(-3, 3)
+            y_offset = random.randint(4, 12)
             img.paste(char_img, (x_offset, y_offset), char_img)
-
-        # 轻微模糊
-        img = img.filter(ImageFilter.GaussianBlur(radius=0.5))
 
         # 转 base64
         buf = io.BytesIO()

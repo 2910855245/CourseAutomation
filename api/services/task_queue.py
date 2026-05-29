@@ -12,10 +12,6 @@ from typing import Any, Callable, Dict, List, Optional
 
 from loguru import logger
 
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
 from sqlalchemy import delete, func, select, update
 
 from api.db.models import ChaoxingJobModel, JobBase, SchoolJobModel
@@ -264,6 +260,7 @@ class QueueManager:
         except Exception as e:
             session.rollback()
             _log.error(f"数据库更新失败 fields={list(fields.keys())} error={str(e)}")
+            raise
         finally:
             session.close()
 
@@ -353,12 +350,14 @@ class QueueManager:
     def get_job(self, job_id: str) -> Optional[QueueJob]:
         return self._db_get(job_id)
 
-    def list_jobs(self, status: Optional[str] = None, username: Optional[str] = None) -> List[QueueJob]:
+    def list_jobs(self, status: Optional[str] = None, username: Optional[str] = None, include_deleted: bool = False) -> List[QueueJob]:
         session = self._session_factory()
         try:
             stmt = select(self._model)
             if status:
                 stmt = stmt.where(self._model.status == status)
+            elif not include_deleted:
+                stmt = stmt.where(self._model.status != "deleted")
             if username:
                 stmt = stmt.where(self._model.username == username)
             stmt = stmt.order_by(self._model.created_at.desc()).limit(1000)
@@ -397,6 +396,19 @@ class QueueManager:
             if job_id in self._workers:
                 self._workers.pop(job_id, None)
         logger.info(f"任务取消 job_id={job_id}")
+        return True
+
+    def delete_job(self, job_id: str) -> bool:
+        job = self._db_get(job_id)
+        if not job:
+            return False
+        if job.status == QueueJobStatus.RUNNING:
+            return False
+        self._db_update(job_id, status="deleted", finished_at=datetime.now().isoformat())
+        with self._lock:
+            if job_id in self._workers:
+                self._workers.pop(job_id, None)
+        logger.info(f"任务删除(软) job_id={job_id}")
         return True
 
     def retry_job(self, job_id: str, force: bool = False) -> bool:
@@ -637,6 +649,7 @@ class QueueManager:
         from api.services.error_classifier import correction_loop
         from api.services.job_executor import JobExecutor
         JobExecutor.recover_stuck_jobs(self._session_factory, self._model)
+        JobExecutor.recover_unverified_jobs(self._session_factory, self._model)
         self._dispatcher_thread = threading.Thread(target=self._dispatcher_loop, daemon=True,
                                                     name=f"dispatcher-{self._name}")
         self._dispatcher_thread.start()

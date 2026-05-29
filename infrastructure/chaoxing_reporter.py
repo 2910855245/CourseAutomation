@@ -36,19 +36,26 @@ def calc_enc(clazz_id: str, userid: str, jobid: str, object_id: str,
 
 def get_video_info(session: ChaoxingSession, domain: str, object_id: str) -> dict:
     """获取视频信息（含dtoken）"""
-    url = f'{domain}/ananas/status/{object_id}?k={session.fid}&flag=normal'
+    import time
+    ts = int(time.time() * 1000)
+    # 使用固定域名 mooc1-1（domain参数可能不正确）
+    url = f'https://mooc1-1.chaoxing.com/ananas/status/{object_id}?k={session.fid}&flag=normal&ro=0&_dc={ts}'
     try:
         resp = session.get(url, referer=VIDEO_REFERER)
         if resp.status_code == 200:
             data = resp.json()
-            return {
+            result = {
                 'duration': data.get('duration', 0),
                 'dtoken': data.get('dtoken', ''),
                 'filename': data.get('filename', ''),
                 'status': data.get('status', ''),
             }
-    except Exception:
-        pass
+            logger.debug(f"get_video_info ok object_id={object_id} dtoken={result['dtoken']} duration={result['duration']}")
+            return result
+        else:
+            logger.warning(f"get_video_info status={resp.status_code} object_id={object_id} url={url}")
+    except Exception as e:
+        logger.warning(f"get_video_info error object_id={object_id} error={str(e)}")
     return {}
 
 
@@ -85,7 +92,8 @@ def report_progress(session: ChaoxingSession, cpi: str, dtoken: str,
                     clazz_id: str, jobid: str, object_id: str,
                     duration: int, play_time: int, other_info: str,
                     course_id: str, is_drag: int = 0,
-                    face_enc: str = '', dur_enc: str = '') -> dict:
+                    face_enc: str = '', dur_enc: str = '',
+                    report_url: str = '') -> dict:
     """上报视频播放进度
 
     返回: 响应JSON 或 None
@@ -109,30 +117,60 @@ def report_progress(session: ChaoxingSession, cpi: str, dtoken: str,
         'view': 'pc',
         'enc': enc,
         'dtype': 'Video',
-        'rt': rt,
+        'rt': '0.9',
         '_t': str(int(time.time() * 1000)),
+        'attDuration': str(duration),
+        'courseEngineInfo': 'false',
     }
     if face_enc:
         params['videoFaceCaptureEnc'] = face_enc
     if dur_enc:
         params['attDurationEnc'] = dur_enc
 
-    url = f'https://mooc1.chaoxing.com/mooc-ans/multimedia/log/a/{cpi}/{dtoken}'
+    # 优先用平台返回的reportUrl + dtoken
+    if report_url:
+        url = f'{report_url}/{dtoken}' if dtoken else report_url
+    else:
+        url = f'https://mooc1-1.chaoxing.com/mooc-ans/multimedia/log/a/{cpi}'
+        if dtoken:
+            url += '/' + dtoken
+
+    # 学习通 CDN 对 rnet 的进度上报请求返回 403（HTTP/2 帧差异等）
+    # 使用 urllib 发送进度上报请求（系统 TLS 栈，稳定可用）
+    import urllib.request
+    import urllib.parse
+
+    full_url = f'{url}?{urllib.parse.urlencode(params)}'
 
     for attempt in range(3):
         try:
-            resp = session.get(url, params=params, referer=VIDEO_REFERER)
-            if resp.status_code == 200:
-                return resp.json()
-            elif resp.status_code == 403:
+            req = urllib.request.Request(full_url, method='GET')
+            req.add_header('Cookie', session.cookie_str)
+            req.add_header('Referer', VIDEO_REFERER)
+            req.add_header('User-Agent', session.UA)
+
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if resp.status == 200:
+                    return json.loads(resp.read().decode('utf-8'))
+                elif resp.status == 403:
+                    if attempt < 2:
+                        time.sleep(2)
+                    else:
+                        logger.warning(f"进度上报403，重试失败 url={url}")
+                        return None
+                else:
+                    logger.warning(f"进度上报异常状态码 status={resp.status} url={url}")
+                    return None
+        except urllib.error.HTTPError as e:
+            if e.code == 403:
                 if attempt < 2:
                     logger.warning(f"进度上报403，重试 attempt={attempt + 1}")
                     time.sleep(2)
                 else:
-                    logger.warning("进度上报403，重试失败")
+                    logger.warning(f"进度上报403，重试失败 url={url}")
                     return None
             else:
-                logger.warning(f"进度上报异常状态码 status={resp.status_code}")
+                logger.warning(f"进度上报HTTP错误 status={e.code} url={url}")
                 return None
         except Exception as e:
             if attempt < 2:
@@ -158,7 +196,7 @@ def play_video(session: ChaoxingSession, cpi: str, dtoken: str,
                video_name: str = '视频', speed: str = 'normal',
                face_enc: str = '', dur_enc: str = '',
                dry_run: bool = False,
-               on_progress=None) -> bool:
+               on_progress=None, report_url: str = '') -> bool:
     """播放单个视频（循环上报进度直到完成）
 
     参数:
@@ -187,6 +225,17 @@ def play_video(session: ChaoxingSession, cpi: str, dtoken: str,
         logger.info(f"[DRY-RUN] 跳过实际播放 video={video_name}")
         return True
 
+    # 首次上报 playingTime=0 (初始化会话，浏览器行为)
+    result = report_progress(
+        session, cpi, dtoken, class_id, jobid, object_id,
+        duration, 0, other_info, course_id,
+        is_drag=3, face_enc=face_enc, dur_enc=dur_enc,
+        report_url=report_url
+    )
+    if not result:
+        logger.warning("首次上报失败 video={}", video_name)
+        return False
+
     played = 0
     fail_streak = 0
 
@@ -201,7 +250,8 @@ def play_video(session: ChaoxingSession, cpi: str, dtoken: str,
         result = report_progress(
             session, cpi, dtoken, class_id, jobid, object_id,
             duration, next_time, other_info, course_id,
-            is_drag=is_drag, face_enc=face_enc, dur_enc=dur_enc
+            is_drag=is_drag, face_enc=face_enc, dur_enc=dur_enc,
+            report_url=report_url
         )
 
         if result:
@@ -253,6 +303,11 @@ def process_knowledge_videos(session: ChaoxingSession, course_id: str,
     attachments = marg.get('attachments', [])
     defaults = marg.get('defaults', {})
     cpi = defaults.get('cpi', '')
+    report_url = defaults.get('reportUrl', '')
+    ktoken = defaults.get('ktoken', '')
+
+    logger.debug(f"enc_info domain={enc_info.get('domain')} classId={enc_info.get('classId')}")
+    logger.debug(f"mArg cpi={cpi} reportUrl={report_url} ktoken={ktoken} attachments={len(attachments)}")
 
     video_tasks = [a for a in attachments if a.get('type') == 'video']
     if not video_tasks:
@@ -307,6 +362,10 @@ def process_knowledge_videos(session: ChaoxingSession, course_id: str,
 
         vinfo = get_video_info(session, enc_info['domain'], object_id)
         dtoken = vinfo.get('dtoken', '') if vinfo else ''
+        # 如果dtoken为空，尝试用marg里的ktoken
+        if not dtoken:
+            dtoken = defaults.get('ktoken', '')
+        logger.debug(f"video={video_name} object_id={object_id} dtoken={dtoken} vinfo={vinfo}")
 
         face_enc = task.get('videoFaceCaptureEnc', '')
         dur_enc = task.get('attDurationEnc', '')
@@ -315,7 +374,8 @@ def process_knowledge_videos(session: ChaoxingSession, course_id: str,
             session, cpi, dtoken, enc_info['classId'], jobid, object_id,
             duration, other_info, course_id, video_name, speed,
             face_enc=face_enc, dur_enc=dur_enc, dry_run=dry_run,
-            on_progress=on_progress
+            on_progress=on_progress,
+            report_url=defaults.get('reportUrl', '')
         )
 
         if ok:

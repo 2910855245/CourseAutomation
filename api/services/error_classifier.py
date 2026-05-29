@@ -3,6 +3,7 @@ import time
 from typing import Any, Callable, Dict
 
 from loguru import logger
+from sqlalchemy import select
 
 
 
@@ -141,7 +142,7 @@ class ErrorClassifier:
 
         except Exception as e:
             session.rollback()
-            logger.error(f"自动纠错异常 exc_info={True}")
+            logger.error("自动纠错异常", exc_info=True)
             return 0
         finally:
             session.close()

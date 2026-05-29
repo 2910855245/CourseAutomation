@@ -7,8 +7,6 @@ from typing import List
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
 from loguru import logger
 
 from api.models import ApiResponse, ProgressSummary

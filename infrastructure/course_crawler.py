@@ -37,8 +37,8 @@ def get_courses(session) -> List[Dict]:
     if not resp:
         return []
 
-    resp.encoding = "utf-8"
-    tree = Adaptor(resp.text, adaptive=True)
+    html = resp.content.decode('utf-8', errors='replace')
+    tree = Adaptor(html, adaptive=True)
     course_nodes = tree.xpath('//div[contains(@class,"user-course")]//div[@class="item"]')
     courses = []
     for node in course_nodes:
@@ -65,6 +65,96 @@ def get_courses(session) -> List[Dict]:
             "course_id": course_id
         })
     return courses
+
+
+def get_courses_with_diag(session) -> Dict:
+    """带诊断信息的课程获取，返回 {"courses": [...], "error": "...", "http_code": int}"""
+    from config import USER_CENTER_URL
+    result = {"courses": [], "error": "", "http_code": 0}
+
+    resp = None
+    for attempt in range(3):
+        try:
+            headers = get_dynamic_headers()
+            resp = session.get(USER_CENTER_URL, headers=headers, timeout=15, follow_redirects=False)
+            result["http_code"] = resp.status_code
+
+            if resp.status_code == 302:
+                location = resp.headers.get('Location', '')
+                if 'login' in location.lower():
+                    result["error"] = "重定向到登录页，会话已失效"
+                    return result
+                redirect_url = location if location.startswith('http') else USER_CENTER_URL.rstrip('/') + '/' + location.lstrip('/')
+                resp = session.get(redirect_url, headers=headers, timeout=15)
+                result["http_code"] = resp.status_code
+
+            resp.raise_for_status()
+            if "SQLSTATE" in resp.text or "数据出现异常" in resp.text:
+                result["error"] = "平台数据库异常"
+                import time; time.sleep(1 * (2 ** attempt))
+                continue
+            break
+        except Exception as e:
+            result["error"] = f"请求异常: {type(e).__name__}: {e}"
+            import time; time.sleep(1 * (2 ** attempt))
+    else:
+        if not result["error"]:
+            result["error"] = "请求失败(重试3次)"
+        return result
+
+    html = resp.content.decode('utf-8', errors='replace')
+
+    # 检查是否是登录页面（200但内容是登录表单）
+    # 先看有没有课程区域，有的话说明是正常用户中心页
+    has_course_section = 'user-course' in html
+    if not has_course_section and 'login' in html.lower() and ('password' in html.lower() or '密码' in html):
+        # 没有课程区域且有登录表单特征 → 确实是登录页
+        result["error"] = "返回登录页面，Cookie已失效"
+        return result
+
+    # 检查账号是否被禁用/锁定
+    if '禁用' in html or '锁定' in html or '冻结' in html:
+        result["error"] = "账号可能被禁用或锁定"
+        return result
+
+    tree = Adaptor(html, adaptive=True)
+    course_nodes = tree.xpath('//div[contains(@class,"user-course")]//div[@class="item"]')
+
+    if not course_nodes:
+        # 进一步诊断：页面正常但没课程
+        page_text = _text(tree.xpath('//body')[0]) if tree.xpath('//body') else ""
+        if '暂无' in page_text or '没有' in page_text or '无课程' in page_text:
+            result["error"] = "账号下确实无课程（未报名或课程已结束）"
+        elif len(page_text) < 200:
+            result["error"] = f"页面内容异常（仅{len(page_text)}字），可能被拦截"
+        else:
+            result["error"] = "页面正常但未匹配到课程节点，页面结构可能变化"
+        return result
+
+    from config import BASE_URL
+    for node in course_nodes:
+        name = node.xpath('.//div[@class="name"]/a/text()')
+        name = _s(name[0]).strip() if name else "未知课程"
+
+        detail_link = node.xpath('.//div[@class="name"]/a/@href')
+        detail_link = BASE_URL + _s(detail_link[0]) if detail_link else ""
+
+        study_record_href = node.xpath('.//div[@class="note"]/div[@class="status"]/a/@href')
+        study_record_url = BASE_URL + _s(study_record_href[0]) if study_record_href else ""
+
+        course_id = None
+        if study_record_url and "courseId=" in study_record_url:
+            course_id = study_record_url.split("courseId=")[-1].split("&")[0]
+        elif detail_link and "courseId=" in detail_link:
+            course_id = detail_link.split("courseId=")[-1].split("&")[0]
+
+        result["courses"].append({
+            "name": name,
+            "detail_link": detail_link,
+            "study_record_url": study_record_url,
+            "course_id": course_id
+        })
+    return result
 
 
 # ==================== API 方式获取节点数据 ====================
@@ -163,6 +253,7 @@ def get_course_nodes_from_api(session, course_id: str, course_name: str = "") ->
 
 def _fetch_all_pages(session, base_url: str, course_id: str, headers: dict) -> List[dict]:
     """分页获取所有数据"""
+    from loguru import logger
     all_items = []
     page = 1
     while True:
@@ -171,6 +262,7 @@ def _fetch_all_pages(session, base_url: str, course_id: str, headers: dict) -> L
                 "courseId": course_id, "page": page
             }, headers=headers, timeout=15)
             if resp.status_code != 200:
+                logger.warning("分页请求返回非200 status={} url={} page={}", resp.status_code, base_url, page)
                 break
             data = resp.json()
             if not data.get("status"):
@@ -183,7 +275,9 @@ def _fetch_all_pages(session, base_url: str, course_id: str, headers: dict) -> L
             if page >= page_info.get("pageCount", 1):
                 break
             page += 1
-        except Exception as e:
+        except Exception:
+            logger.exception("分页获取数据失败 url={} course_id={} page={} fetched={}",
+                           base_url, course_id, page, len(all_items))
             break
     return all_items
 
@@ -388,8 +482,7 @@ def get_course_content(session, course_id: str, website_id: int = None) -> Optio
     resp = safe_request(session, full_url)
     if not resp:
         return None
-    resp.encoding = "utf-8"
-    return resp.text
+    return resp.content.decode('utf-8', errors='replace')
 
 
 def transform_course_content(content: Optional[str]) -> List[Dict]:

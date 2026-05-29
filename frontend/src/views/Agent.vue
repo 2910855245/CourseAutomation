@@ -58,8 +58,8 @@ onUnmounted(() => {
   if (dashboard.upgradePollInterval.value) { clearTimeout(dashboard.upgradePollInterval.value); dashboard.upgradePollInterval.value = null }
 })
 
-const orderStatusLabel: Record<string, string> = { pending: '待处理', running: '执行中', completed: '已完成', failed: '失败', cancelled: '已取消' }
-const orderStatusClass: Record<string, string> = { pending: 'warn', running: 'primary', completed: 'ok', failed: 'bad', cancelled: 'muted' }
+const orderStatusLabel: Record<string, string> = { pending: '待处理', accepted: '已接单', running: '执行中', completed: '已完成', failed: '失败', cancelled: '已取消', waiting: '等待明天', paid: '已支付', queued: '排队中', retrying: '重试中', amount_mismatch: '金额异常' }
+const orderStatusClass: Record<string, string> = { pending: 'warn', accepted: 'primary', running: 'primary', completed: 'ok', failed: 'bad', cancelled: 'muted', waiting: 'primary', paid: 'ok', queued: 'primary', retrying: 'warn', amount_mismatch: 'bad' }
 const fmtDate = (s: string) => s ? s.replace('T', ' ').substring(0, 19) : '-'
 const fmtMoney = (n: number) => `¥${(n || 0).toFixed(2)}`
 const statusLabel: Record<string, string> = { pending: '待审核', active: '正常', suspended: '已暂停' }
@@ -851,7 +851,7 @@ L{{ t }}
 .auth-form-compact { text-align: left; }
 .auth-form-compact .field { margin-bottom: 12px; }
 .auth-form-compact input { height: 42px; }
-.captcha-row { display: flex; flex-direction: row; gap: 8px; align-items: center; margin-bottom: 12px; }
+.captcha-row { display: flex; gap: 8px; align-items: stretch; margin-bottom: 12px; }
 .captcha-row input { flex: 1; min-width: 0; height: 42px; padding: 0 14px; border: 1px solid var(--c-border); border-radius: var(--radius-sm); background: var(--c-bg); color: var(--c-text); font-size: 14px; outline: none; }
 .captcha-row input:focus { border-color: var(--c-primary); box-shadow: 0 0 0 3px rgba(79,110,247,.12); background: var(--c-surface); }
 .captcha-img { height: 42px; cursor: pointer; border-radius: 6px; border: 1px solid var(--c-border); flex-shrink: 0; }

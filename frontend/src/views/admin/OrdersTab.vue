@@ -105,14 +105,14 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
                   接单
                 </button>
                 <button
-                  v-if="o.status === 'pending' && currentRole === 'admin'"
+                  v-if="(o.status === 'pending' || o.status === 'accepted') && currentRole === 'admin'"
                   class="btn btn-xs btn-primary"
                   @click="executeOrder(o.order_id)"
                 >
                   执行
                 </button>
                 <button
-                  v-if="o.status === 'pending' && currentRole === 'admin'"
+                  v-if="(o.status === 'pending' || o.status === 'accepted') && currentRole === 'admin'"
                   class="btn btn-xs btn-primary"
                   @click="enqueueOrder(o.order_id)"
                 >

@@ -11,7 +11,7 @@ from openai import OpenAI
 
 
 class AIAnswerer:
-    def __init__(self, api_key: str, model: str = "deepseek-chat", base_url: str = "https://api.deepseek.com"):
+    def __init__(self, api_key: str, model: str = "deepseek-v4-flash", base_url: str = "https://api.deepseek.com"):
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model = model
         self._cache: Dict[str, str] = {}
@@ -25,12 +25,13 @@ class AIAnswerer:
         is_choice = '单选' in q_type or '多选' in q_type or '判断' in q_type
 
         prompt = self._build_prompt(topic)
+        token_limit = 1024
         try:
             resp = self.client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=200,
+                max_tokens=token_limit,
             )
             content = resp.choices[0].message.content.strip()
             answer = self._extract_answer(content, is_choice=is_choice)
@@ -48,11 +49,11 @@ class AIAnswerer:
         opt_text = '\n'.join(options) if options else ''
 
         if '多选' in q_type:
-            type_hint = '这是一道多选题，请返回所有正确选项的字母（如 ABC、ABD），不要解释。'
+            type_hint = '这是一道多选题，有多个正确答案。请仔细分析每个选项，返回所有正确选项的字母（如 ABC、ABD），不要解释。注意：多选少选均不得分。'
         elif '判断' in q_type:
-            type_hint = '这是一道判断题，A表示正确，B表示错误，只返回一个字母。'
+            type_hint = '这是一道判断题，A表示正确，B表示错误，只返回一个字母。请仔细分析题干中的关键词。'
         elif is_choice:
-            type_hint = '请回答以下题目，只返回答案字母（如 A/B/C/D），不要解释。'
+            type_hint = '这是一道单选题，请仔细分析所有选项后返回最准确的答案字母（如 A/B/C/D），不要解释。'
         else:
             type_hint = '这是一道填空/简答题，请直接返回答案内容（不要返回选项字母），简洁作答，不要解释。'
 
@@ -75,11 +76,14 @@ class AIAnswerer:
     def _extract_answer(self, content: str, is_choice: bool = True) -> str:
         import re
         if not is_choice:
-            # 非选择题：直接返回文本内容（去掉引号、多余空白）
-            text = content.strip().strip('"').strip("'").strip('`')
+            # 去掉代码块标记 ```lang ... ``` 或 ``` ... ```
+            text = re.sub(r'^```\w*\s*\n?', '', content.strip())
+            text = re.sub(r'\n?```\s*$', '', text)
+            # 去掉引号、多余空白
+            text = text.strip().strip('"').strip("'")
             # 去掉可能的 "答案：" 前缀
-            text = re.sub(r'^答案[：:]\\s*', '', text)
-            return text[:500] if text else content[:500]
+            text = re.sub(r'^答案[：:]\s*', '', text)
+            return text[:5000] if text else content[:5000]
         # 多选答案：如 "ABC"、"A B C"、"A、B、C"
         multi = re.findall(r'[A-Ha-h]', content)
         if len(multi) > 1:
@@ -144,21 +148,27 @@ class WorkSubmitter:
         url = self._get_submit_url()
         is_choice = '单选' in q_type or '多选' in q_type or '判断' in q_type
 
-        # 多选题: answer[]=B&answer[]=C
+        # 多选题: 需要 answer[]=A&answer[]=B 格式（重复key）
         if '多选' in q_type and len(answer) > 1:
-            data = [
-                ('answerId', answer_id),
-                (self._get_id_key(), str(self.work_id)),
-            ]
-            for ch in answer.upper():
-                if ch in 'ABCDEFGH':
-                    data.append(('answer[]', ch))
+            from urllib.parse import urlencode
+            letters = [ch for ch in answer.upper() if ch in 'ABCDEFGH']
+            pairs = [('answerId', answer_id), (self._get_id_key(), str(self.work_id))]
+            for ch in letters:
+                pairs.append(('answer[]', ch))
             if self.submit_type == 'exam' and self.node_id:
-                data.append(('nodeId', self.node_id))
+                pairs.append(('nodeId', self.node_id))
+            headers = {
+                "X-Requested-With": "XMLHttpRequest",
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "Referer": self.referer_url,
+                "Content-Type": "application/x-www-form-urlencoded",
+            }
+            resp = self.session.post(url, content=urlencode(pairs).encode(), headers=headers, timeout=15)
+            return self._safe_json(resp)
         elif not is_choice:
-            # 非选择题（填空/简答）：用 content 字段
+            # 非选择题（填空/简答）
             data = {
-                'content': answer,
+                'answer': answer,
                 'answerId': answer_id,
                 self._get_id_key(): str(self.work_id),
             }
@@ -172,6 +182,21 @@ class WorkSubmitter:
             }
             if self.submit_type == 'exam' and self.node_id:
                 data['nodeId'] = self.node_id
+        return self._post_json(url, data)
+
+    def submit_topic_with_files(self, answer_id: str, answer: str,
+                                 files_json: str = '[]', images_json: str = '[]') -> Dict:
+        """提交带文件附件的题目（项目提交题型）"""
+        url = self._get_submit_url()
+        data = {
+            'answer': answer,
+            'answerId': answer_id,
+            self._get_id_key(): str(self.work_id),
+            'images': images_json,
+            'files': files_json,
+        }
+        if self.submit_type == 'exam' and self.node_id:
+            data['nodeId'] = self.node_id
         return self._post_json(url, data)
 
     def final_submit(self, answer_id: str = '', answer: str = '') -> Dict:
@@ -194,7 +219,7 @@ class AIWorkRunner:
                  cookie_str: Optional[str] = None,
                  username: Optional[str] = None,
                  password: Optional[str] = None,
-                 model: str = "deepseek-chat"):
+                 model: str = "deepseek-v4-flash"):
         from infrastructure.exam_login import LoginHelper, normalize_base_url
         self.base_url = normalize_base_url(base_url)
         self.api_key = api_key
@@ -202,7 +227,8 @@ class AIWorkRunner:
         self.session = None
 
         if cookie_str:
-            self.session = httpx.Client(timeout=httpx.Timeout(30.0), verify=False)
+            from infrastructure.http_session import create_sync_client
+            self.session = create_sync_client()
             self.session.headers.update({
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "X-Requested-With": "XMLHttpRequest",
@@ -241,49 +267,115 @@ class AIWorkRunner:
             logger.info(f"已获取作业 '{work_data['work_title']}'，共 {len(work_data['topics'])} 道题。")
 
             submit_type = fetcher._submit_type if hasattr(fetcher, '_submit_type') else 'work'
-            if submit_type == 'exam':
-                model = "deepseek-v4-flash"
-            else:
-                model = "deepseek-chat"
+            model = "deepseek-v4-flash"
             logger.info(f"使用模型: {model} (类型: {submit_type})")
 
             answerer = AIAnswerer(self.api_key, model=model)
             answers = {}
+            total_topics = len(work_data['topics'])
+            ai_failed = 0
             for topic in work_data['topics']:
                 tid = topic['topic_id']
-                ai_res = answerer.ask_one_topic(topic)
-                answer = ai_res.get('answer', '').strip()
-                if not answer:
-                    q_type = topic.get('q_type', '')
-                    is_ch = '单选' in q_type or '多选' in q_type or '判断' in q_type
-                    answer = 'A' if is_ch else '暂无'
-                answers[tid] = answer
-                logger.info(f"第{topic['number']}题 -> {answer}（置信度 {ai_res.get('confidence', 0)}）")
+                q_type = topic.get('q_type', '')
+                is_multi = '多选' in q_type
+                is_choice = '单选' in q_type or is_multi or '判断' in q_type
+
+                answer = ''
+                # 最多重试 3 次（含首次）
+                for attempt in range(3):
+                    try:
+                        ai_res = answerer.ask_one_topic(topic)
+                        answer = ai_res.get('answer', '').strip()
+                    except Exception as e:
+                        logger.warning(f"第{topic['number']}题 AI 答题异常(第{attempt+1}次): {e}")
+                        answer = ''
+
+                    if not answer:
+                        continue  # 空答案重试
+
+                    # 校验答案有效性
+                    if is_choice:
+                        import re as _re
+                        letters = _re.findall(r'[A-H]', answer.upper())
+                        if not letters:
+                            logger.warning(f"第{topic['number']}题 答案无有效选项: \"{answer}\", 重试")
+                            answer = ''
+                            continue
+                        if is_multi and len(letters) < 2:
+                            logger.warning(f"第{topic['number']}题 多选题仅1个选项: \"{answer}\", 重试")
+                            answer = ''
+                            continue
+
+                    break  # 答案有效，跳出重试
+
+                # 3 次重试后仍无有效答案
+                if not answer or (is_choice and not re.findall(r'[A-H]', answer.upper())):
+                    logger.error(f"第{topic['number']}题 AI 3次答题均失败，标记为失败")
+                    ai_failed += 1
+                    answers[tid] = ''
+                else:
+                    answers[tid] = answer
+                logger.info(f"第{topic['number']}题 -> {answers[tid]}")
 
             with open(f'answers_{work_id}.json', 'w', encoding='utf-8') as f:
                 json.dump(answers, f, ensure_ascii=False, indent=2)
             logger.info(f"答案已保存到 answers_{work_id}.json")
 
             if auto_submit and work_data['node_id']:
+                # 题目没答完不准交卷
+                if len(answers) < total_topics:
+                    logger.error(f"题目未答完：共 {total_topics} 道，仅答 {len(answers)} 道，跳过提交")
+                    return answers
+                if ai_failed > 0:
+                    logger.error(f"有 {ai_failed} 道题 AI 答题失败，跳过提交")
+                    return answers
+                # 校验所有答案非空
+                empty_answers = [tid for tid, ans in answers.items() if not ans]
+                if empty_answers:
+                    logger.error(f"有 {len(empty_answers)} 道题答案为空，跳过提交")
+                    return answers
                 referer_url = self.base_url
                 submit_type = fetcher._submit_type if hasattr(fetcher, '_submit_type') else 'work'
                 submitter = WorkSubmitter(self.session, self.base_url, work_data['work_id'], referer_url, submit_type=submit_type, node_id=work_data.get('node_id', ''))
                 logger.info("已启用自动提交，开始...")
                 last_aid = ''
                 ans = 'A'
+                submit_ok = 0
+                submit_fail = 0
                 for topic in work_data['topics']:
                     aid = topic.get('answer_id', topic.get('topic_id', ''))
                     last_aid = aid
                     ans = answers.get(topic['topic_id'], answers.get(aid, 'A'))
                     q_type = topic.get('q_type', '')
-                    ret = submitter.submit_topic(aid, ans, q_type=q_type)
-                    if ret.get('status') == False:
-                        logger.error(f"提交 {aid} 失败：{ret.get('msg')}")
-                    else:
-                        logger.info(f"已提交 {aid} -> {ans}")
+                    # 最多重试 2 次
+                    for attempt in range(3):
+                        try:
+                            ret = submitter.submit_topic(aid, ans, q_type=q_type)
+                        except Exception as e:
+                            logger.warning(f"提交异常(网络波动)，重试 {attempt+1}/2: {e}")
+                            if attempt < 2:
+                                time.sleep(1)
+                                continue
+                            submit_fail += 1
+                            break
+                        if ret.get('status') is False:
+                            if attempt < 2:
+                                logger.warning(f"答案保存异常(网络波动)，重试 {attempt+1}/2")
+                                time.sleep(1)
+                                continue
+                            logger.error(f"答案保存失败(网络超时/服务器繁忙)：{aid}")
+                            submit_fail += 1
+                        else:
+                            submit_ok += 1
+                            logger.info(f"已提交 {aid} -> {ans}")
+                        break
                     time.sleep(0.5)
-                final = submitter.final_submit(last_aid, ans)
-                logger.info(f"最终提交结果：{final}")
+                # 有题目提交失败则不交卷
+                if submit_fail > 0:
+                    logger.error(f"有 {submit_fail} 道题因网络波动保存失败（成功 {submit_ok}），跳过交卷")
+                else:
+                    final = submitter.final_submit(last_aid, ans)
+                    logger.info(f"最终提交结果：{final}")
 
             logger.info("任务完成。")
             return answers

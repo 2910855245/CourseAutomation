@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from api.auth import get_current_admin
+from api.auth import get_current_admin, get_optional_user
 from api.database import db
 
 router = APIRouter(prefix="/api/admin/config", tags=["系统配置"])
+announcement_router = APIRouter(prefix="/api", tags=["公告"])
 
 
 class ConfigSet(BaseModel):
@@ -92,3 +93,38 @@ def test_deepseek(payload: TestModelInput = None, admin: dict = Depends(get_curr
             result["error"] = f"API 调用失败: {err[:200]}"
 
     return {"code": 0, "data": result}
+
+
+# ── 系统公告 ──────────────────────────────────────────
+
+@announcement_router.get("/announcement")
+def get_announcement():
+    content = db.config_get("announcement_content") or ""
+    ann_id = int(db.config_get("announcement_id") or "0")
+    active = (db.config_get("announcement_active") or "0") == "1"
+    return {"code": 0, "data": {"id": ann_id, "content": content, "active": active}}
+
+
+class AnnouncementSet(BaseModel):
+    content: str
+
+
+@announcement_router.post("/admin/announcement")
+def set_announcement(payload: AnnouncementSet, admin: dict = Depends(get_current_admin)):
+    if not payload.content.strip():
+        raise HTTPException(status_code=400, detail="公告内容不能为空")
+    cur_id = int(db.config_get("announcement_id") or "0")
+    new_id = cur_id + 1
+    db.config_set("announcement_content", payload.content.strip())
+    db.config_set("announcement_id", str(new_id))
+    db.config_set("announcement_active", "1")
+    db.audit_log("announcement_updated", operator=admin.get("username", "admin"),
+                 detail=f"公告已更新 id={new_id}")
+    return {"code": 0, "message": "公告已发布", "data": {"id": new_id}}
+
+
+@announcement_router.post("/admin/announcement/disable")
+def disable_announcement(admin: dict = Depends(get_current_admin)):
+    db.config_set("announcement_active", "0")
+    db.audit_log("announcement_disabled", operator=admin.get("username", "admin"), detail="公告已停用")
+    return {"code": 0, "message": "公告已停用"}

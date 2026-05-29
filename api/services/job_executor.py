@@ -109,8 +109,7 @@ class JobExecutor:
                                 finished_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
                 logger.info(f"任务进入等待状态 job_id={job_id} progress={progress}")
                 # 不清除密码 — 明天恢复时需要
-                if self._on_complete:
-                    self._on_complete(job)
+                # 不触发 _on_complete（订单不标记完成，保持运行中直到真正完成）
                 return
             else:
                 self._db_update(
@@ -131,9 +130,9 @@ class JobExecutor:
         except Exception as e:
             err_str = str(e)
             logger.error(f"任务执行失败 job_id={job_id} error={err_str}")
-            # 登录失败且首次执行 → 尝试从订单恢复密码后重试一次
+            # 登录失败 → 尝试从订单恢复密码后重试
             is_login_err = any(kw in err_str for kw in ("登录", "密码"))
-            if is_login_err and job.order_id and job.retry_count == 0:
+            if is_login_err and job.order_id:
                 try:
                     from api.database import db
                     order = db.get_order(job.order_id)
@@ -207,11 +206,22 @@ class JobExecutor:
                     err_str = str(retry_err)
             enhanced_err = self._enhance_error_message(str(e))
             if job.retry_count < job.max_retries:
+                # 恢复密码以便下次重试
+                pwd = job.password
+                if not pwd and job.order_id:
+                    try:
+                        from api.database import db
+                        _order = db.get_order(job.order_id)
+                        if _order:
+                            pwd = _order.get("password", "")
+                    except Exception:
+                        pass
                 self._db_update(
                     job_id,
                     status=QueueJobStatus.RETRYING,
                     retry_count=job.retry_count + 1,
                     error_message=enhanced_err,
+                    password=pwd,
                 )
                 logger.info(f"任务重试 job_id={job_id} retry={job.retry_count + 1}")
             else:
@@ -261,8 +271,26 @@ class JobExecutor:
                 video_total = data.get("video_total", 0)
                 message = data.get("message", "")
 
+                # 学习通任务：从 points/study 字段计算进度
+                if video_pct == 0:
+                    phase = data.get("phase", "")
+                    pt = data.get("points_total", 0)
+                    pt_target = data.get("points_target", 0)
+                    st_done = data.get("study_done", 0)
+                    st_total = data.get("study_total", 0)
+                    if phase == "study_must_learn" and st_total > 0:
+                        # 从 message 中解析当前篇的百分比
+                        import re as _re
+                        _m = _re.search(r'(\d+)%', message)
+                        _cur_pct = int(_m.group(1)) / 100 if _m else 0
+                        video_pct = min(100.0, (st_done + _cur_pct) / st_total * 100)
+                    elif pt_target > 0:
+                        video_pct = min(100.0, pt / pt_target * 100)
+
                 self._db_update(job_id, progress=float(video_pct),
                                 current_step_name=message or f"刷视频中 {video_done}/{video_total}")
+                if self._on_progress:
+                    self._on_progress(job_id, float(video_pct), video_done, message or f"刷视频中 {video_done}/{video_total}")
 
                 if data.get("done") and data.get("success"):
                     actual_pct = data.get("video_pct", video_pct)
@@ -343,6 +371,7 @@ class JobExecutor:
             return "未知错误（进程异常退出）"
         error_keywords = ("失败", "错误", "超时", "异常", "中断", "不存在", "删除", "禁用",
                           "登录", "密码", "题库", "期末考试", "不支持", "暂不支持",
+                          "课程", "账号", "Cookie", "会话", "锁定",
                           "timeout", "error", "exception", "killed")
         if any(kw in err_msg for kw in error_keywords):
             return err_msg
@@ -362,7 +391,7 @@ class JobExecutor:
                     for proc in psutil.process_iter(["cmdline"]):
                         cmdline = proc.info.get("cmdline") or []
                         cmdline_str = " ".join(cmdline)
-                        if "study_worker" in cmdline_str and job.order_id and job.order_id in cmdline_str:
+                        if ("study_worker" in cmdline_str or "chaoxing_worker" in cmdline_str) and job.order_id and job.order_id in cmdline_str:
                             alive = True
                             break
                 except ImportError:
@@ -373,7 +402,7 @@ class JobExecutor:
                                        capture_output=True, text=True, timeout=5)
                             alive = job.order_id in r.stdout if r.stdout else False
                         else:
-                            r = sp.run(["pgrep", "-f", f"study_worker.*{job.order_id}"],
+                            r = sp.run(["pgrep", "-f", f"(study_worker|chaoxing_worker).*{job.order_id}"],
                                        capture_output=True, text=True, timeout=5)
                             alive = bool(r.stdout.strip())
                     except Exception as e:
@@ -405,3 +434,51 @@ class JobExecutor:
             logger.error("恢复卡死任务失败 error={}", str(e))
         finally:
             session.close()
+
+    @staticmethod
+    def recover_unverified_jobs(db_session_factory, db_model):
+        """启动时补核查：已完成但未核查的任务重新验证"""
+        session = db_session_factory()
+        try:
+            jobs = session.scalars(select(db_model).filter(
+                db_model.status == "completed",
+                db_model.verified == 0,
+            ).order_by(db_model.finished_at.desc()).limit(20)).all()
+        finally:
+            session.close()
+
+        if not jobs:
+            return
+
+        logger.info(f"补核查未验证任务 count={len(jobs)}")
+
+        def _batch_verify():
+            import time as _time
+            _time.sleep(30)  # 等待会话恢复完成
+            from api.services.task_verifier import verify_task_completion
+            for job in jobs:
+                try:
+                    result = verify_task_completion(
+                        username=job.username,
+                        website_id=job.website_id,
+                        course_ids=job.course_ids or [],
+                        job_type=job.job_type,
+                    )
+                    s = db_session_factory()
+                    try:
+                        db_job = s.get(db_model, job.job_id)
+                        if db_job:
+                            db_job.verified = 1 if result.get("verified") else 0
+                            s.commit()
+                    finally:
+                        s.close()
+
+                    if result.get("verified"):
+                        logger.info("补核查通过 job_id={} detail={}", job.job_id, result.get("detail"))
+                    else:
+                        logger.warning("补核查未通过 job_id={} detail={}", job.job_id, result.get("detail"))
+                except Exception as e:
+                    logger.warning(f"补核查异常 job_id={job.job_id} error={str(e)}")
+
+        t = threading.Thread(target=_batch_verify, daemon=True, name="recover-verify")
+        t.start()

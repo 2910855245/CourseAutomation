@@ -6,11 +6,9 @@ from typing import Optional
 
 import httpx
 from loguru import logger
-import urllib3
 from bs4 import BeautifulSoup
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
+from infrastructure.http_session import create_sync_client
 
 
 def normalize_base_url(url: str) -> str:
@@ -22,7 +20,7 @@ def normalize_base_url(url: str) -> str:
 class LoginHelper:
     def __init__(self, base_url: str):
         self.base_url = normalize_base_url(base_url)
-        self.session = httpx.Client(timeout=httpx.Timeout(30.0), verify=False)
+        self.session = create_sync_client(base_url)
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "X-Requested-With": "XMLHttpRequest",

@@ -1,8 +1,66 @@
 <script setup lang="ts">
 // @ts-nocheck
+import { ref, reactive } from 'vue'
 import { useAdminState } from './adminState'
+import { useAppStore } from '@/stores/app'
+import { useConfirmSingleton } from '@/composables/useConfirm'
+import { api } from '@/api'
 
-const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, adFileInput, adFileUploading, adForm, adImgInput, addDomain, addDomainForm, adminPass, adminState, adminUser, adsList, agentFees, agentStats, agentStatusFilter, agentSubTab, agentTotal, agents, agentsByTier, alertCount, aliAccounts, all, allSidebarItems, allUp, applyAutoConcurrency, applyPackagePricing, applyingPackage, approveAgent, approveWithdrawal, base64, body, buildRiskChecks, cancelEditPricing, cancelQueueJob, captchaAnswer, captchaImage, captchaLoading, captchaToken, cfg, changeAdminPassword, changingPw, channelCodeHelp, channelCodeLabels, channelTestAccount, channelTestAllOk, channelTestChecks, channelTestLoading, channelTestQrImage, chars, checks, circumference, clearCommissionHistory, clearDeepseekKey, clearOrderHistory, clearQueueHistory, clearRiskAlerts, clearWithdrawalHistory, clearYpayOrderHistory, closeAccountModal, closeExpiredYpayOrders, closePayTest, codeLabel, commissionTotal, commissions, completeOrder, configs, count, creatingSubAdmin, currentRole, d, dash, dashError, deepseekApiKey, deepseekKeyMasked, deepseekTestResult, defaultCodes, deleteAccount, deleteAd, detectServerSpecs, doChangeTier, doCreateSubAdmin, doRevokeSubAdmin, doTopup, domainCount, downloadQrImage, downloadQrLoading, dsRes, editPricing, editingAccount, editingAd, editingPricing, end, enqueueOrder, examModel, executeOrder, failCount, failOrder, fd, file, filled, finalExamModel, fmtDate, fmtHeartbeat, fmtMoney, fmtShortDate, fn, genRandomStr, getPlatformName, getRecommendation, hChecks, hNameMap, hOrder, healthAccountInput, healthAccountSaving, healthChecking, healthIntervalInput, healthIntervalSaving, healthPasswordInput, healthSummary, homeworkModel, html, imgTag, interval, isLoggedIn, jsChanged, jsChecked, jsFiles, jsRes, key, list, loadAccounts, loadAds, loadAgentFees, loadAgentStats, loadAgents, loadAgentsByTier, loadCommissions, loadDashboard, loadDeepseekKey, loadHealthAccount, loadHealthInterval, loadOrders, loadPairQr, loadPlatformNames, loadPricing, loadProxySettings, loadQueueData, loadRiskData, loadSubAdmins, loadTierCommissions, loadUnifiedUsers, loadUsers, loadWithdrawals, loadYpay, loadYpayOrders, loadingAccounts, loadingAds, loadingAgents, loadingAgentsByTier, loadingCommissions, loadingDash, loadingHealth, loadingOrders, loadingQueue, loadingRisk, loadingSubAdmins, loadingUnified, loadingUsers, loadingWithdrawals, loadingYpayOrders, loginErr, marketForm, maxBarOrders, maxBarRevenue, maxPartnerStatusCount, maxStatusCount, maxWorkersInput, mobileSidebarOpen, needAppid, needQrUrl, needRemark, newRate, newStatus, newSubAdmin, newTierLevel, nextSlot, ok, okCount, onAdFileChange, onAdImgChange, onQrFileChange, openAddAccount, openCreateAd, openEditAccount, openEditAd, openRateModal, openTierModal, openTopup, orderStatusClass, orderStatusLabel, orders, ordersStatusFilter, ordersTotal, packagePricing, pairQrImage, pairQrLoading, pairQrTs, params, partnerAgentStats, partnerAllowedTabs, passCount, pauseQueue, payTestAccountId, payTestBatchId, payTestChannelName, payTestChecks, payTestExpired, payTestLoading, payTestPaid, payTestPolling, payTestQrImage, payTestReallyPrice, payTestStarted, payTestTimer, payTestTradeNo, payTypeLabels, personnelTab, platformColors, platformNames, platforms, pricingModel, proxyForm, proxySaving, proxyTestOk, proxyTestResult, proxyTesting, pwForm, qrFileInput, qrUploading, queueJobs, queuePausing, queueStats, queueStatusFilter, r, rateTarget, reactivateAgent, reader, recommendResult, recommending, regenerateYpayKey, rejectWithdrawal, relImgs, removeDomain, res, resetAccountForm, resetYpayConnection, resumeQueue, retryQueueJob, riskAlerts, riskCheckStep, riskChecking, riskChecks, riskDomainStatus, riskHealth, riskIntervalInput, riskJsStatus, riskLoginAndCheck, riskLoginForm, riskLoginLoading, riskNeedLogin, riskScore, riskScoreColor, riskScoreDash, riskScoreDesc, riskScoreLevel, riskScoreText, role, runDomainCheck, runFullRiskCheck, runHealthCheck, runJsCheck, runYpayTest, s, saveAccount, saveAd, saveAgentFees, saveDeepseekKey, saveHealthAccount, saveHealthInterval, saveModels, savePricingConfig, saveProxy, saveRate, saveRiskInterval, saveTierCommissions, saveYpayKeyOnly, saveYpaySettings, savingAccount, savingAd, savingAgentFees, savingDeepseekKey, savingModels, savingPricing, savingTierCommissions, serverPublicIp, serverSpecs, setMaxWorkers, showAccountModal, showAdModal, showAddDomainModal, showCertFields, showChannelTest, showCreateSubAdmin, showDeepseekKey, showHealthSettings, showPayTest, showQrModal, showRateModal, showTierModal, showTopupModal, sidebarCollapsed, sidebarGroups, someUp, st, start, startChannelPayTest, startPayTestPolling, statusClass, statusLabel, stopPayTestPolling, subAdmins, suspendAgent, switchTab, t, ta, taskTypeNames, testChannel, testDeepseekApi, testModelApi, testProxy, testingDeepseek, testingModel, tierCommissions, tierNames, tierTarget, toggleAccount, toggleAdActive, toppingUp, toppupMode, topupAmount, topupNote, topupTarget, totalPlatformOrders, triggerAdFileUpload, triggerAdImgUpload, triggerQrUpload, typeLabels, unifiedAgentFilter, unifiedRoleFilter, unifiedSearch, unifiedStats, unifiedTotal, unifiedUsers, usedSlots, users, usersSubTab, usersTotal, val, visibleSidebarGroups, warnCount, withdrawalStatusFilter, withdrawals, withdrawalsTotal, wxAccounts, ypayAccounts, ypayForm, ypayLoaded, ypayOrderFilters, ypayOrderStatusFilter, ypayOrders, ypayOrdersPage, ypayOrdersTotal, ypaySaving, ypayStateLabels, ypayStatus, ypayTab, ypayTestResult, ypayTesting } = useAdminState()
+const store = useAppStore()
+const { showConfirm } = useConfirmSingleton()
+const { currentRole, usersSubTab, unifiedUsers, unifiedTotal, unifiedStats, unifiedRoleFilter, unifiedAgentFilter, unifiedSearch, loadingUnified, loadUnifiedUsers, subAdmins, loadingSubAdmins, loadSubAdmins, doRevokeSubAdmin, fmtMoney, fmtDate, fmtShortDate, statusClass, statusLabel, openTopup, openRateModal, approveAgent, suspendAgent, reactivateAgent } = useAdminState()
+
+// Local modal state — avoids cross-component reactivity issues with initAdminState
+const showCreateModal = ref(false)
+const newSubAdmin = reactive({ user_id: '', username: '', password: '' })
+const creatingSubAdmin = ref(false)
+
+async function doCreateSubAdmin() {
+  if (!newSubAdmin.user_id.trim() || !newSubAdmin.username.trim() || !newSubAdmin.password) {
+    store.toast('请填写完整信息', 'warning')
+    return
+  }
+  if (newSubAdmin.password.length < 6) {
+    store.toast('密码至少6位', 'warning')
+    return
+  }
+  if (!/[a-zA-Z]/.test(newSubAdmin.password) || !/\d/.test(newSubAdmin.password)) {
+    store.toast('密码需同时包含字母和数字', 'warning')
+    return
+  }
+  creatingSubAdmin.value = true
+  try {
+    await api.admin.subAdmins.create({
+      user_id: newSubAdmin.user_id.trim(),
+      username: newSubAdmin.username.trim(),
+      password: newSubAdmin.password,
+      nickname: newSubAdmin.username.trim(),
+    })
+    store.toast('合伙人创建成功', 'success')
+    showCreateModal.value = false
+    newSubAdmin.user_id = ''
+    newSubAdmin.username = ''
+    newSubAdmin.password = ''
+    loadSubAdmins()
+  } catch (e: any) {
+    store.toast(e.message || '创建失败', 'error')
+  } finally {
+    creatingSubAdmin.value = false
+  }
+}
+
+async function deleteUser(u: any) {
+  const label = u.nickname || u.username || u.user_id
+  const ok = await showConfirm({ title: '删除用户', message: `确定删除用户「${label}」吗？`, type: 'warning' })
+  if (!ok) return
+  try {
+    await api.adminUsers.delete(u.user_id)
+    store.toast(`用户 ${label} 已删除`, 'success')
+    loadUnifiedUsers()
+  } catch (e: any) {
+    store.toast(e.message || '删除失败', 'error')
+  }
+}
 </script>
 
 <template>
@@ -226,49 +284,65 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
                 {{ fmtDate(u.created_at) }}
               </td>
               <td>
-                <div class="action-group">
-                  <button
-                    class="btn btn-xs btn-success"
-                    @click="openTopup(u, 'topup')"
-                  >
-                    充值
-                  </button>
-                  <button
-                    class="btn btn-xs btn-warn"
-                    @click="openTopup(u, 'deduct')"
-                  >
-                    扣费
-                  </button>
-                  <template v-if="u.agent">
+                <div
+                  v-if="u.role !== 'admin'"
+                  class="action-cell"
+                >
+                  <span class="action-slot">
                     <button
-                      v-if="u.agent.status === 'pending'"
                       class="btn btn-xs btn-success"
-                      @click="approveAgent(u.agent.agent_id)"
+                      @click="openTopup(u, 'topup')"
                     >
-                      审核
+                      充值
                     </button>
                     <button
-                      v-if="u.agent.status === 'active'"
                       class="btn btn-xs btn-warn"
-                      @click="suspendAgent(u.agent.agent_id)"
+                      @click="openTopup(u, 'deduct')"
                     >
-                      暂停
+                      扣费
                     </button>
-                    <button
-                      v-if="u.agent.status === 'suspended'"
-                      class="btn btn-xs btn-primary"
-                      @click="reactivateAgent(u.agent.agent_id)"
-                    >
-                      恢复
-                    </button>
-                    <button
-                      class="btn btn-xs btn-ghost"
-                      @click="openRateModal(u.agent)"
-                    >
-                      调比例
-                    </button>
-                  </template>
+                    <template v-if="u.agent">
+                      <button
+                        v-if="u.agent.status === 'pending'"
+                        class="btn btn-xs btn-success"
+                        @click="approveAgent(u.agent.agent_id)"
+                      >
+                        审核
+                      </button>
+                      <button
+                        v-if="u.agent.status === 'active'"
+                        class="btn btn-xs btn-warn"
+                        @click="suspendAgent(u.agent.agent_id)"
+                      >
+                        暂停
+                      </button>
+                      <button
+                        v-if="u.agent.status === 'suspended'"
+                        class="btn btn-xs btn-primary"
+                        @click="reactivateAgent(u.agent.agent_id)"
+                      >
+                        恢复
+                      </button>
+                      <button
+                        class="btn btn-xs btn-ghost"
+                        @click="openRateModal(u.agent)"
+                      >
+                        调比例
+                      </button>
+                    </template>
+                  </span>
+                  <button
+                    class="del-btn"
+                    title="删除用户"
+                    @click="deleteUser(u)"
+                  >
+                    X
+                  </button>
                 </div>
+                <span
+                  v-else
+                  class="status-tag muted"
+                >-</span>
               </td>
             </tr>
           </tbody>
@@ -289,7 +363,7 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
           <h3>合伙人列表</h3>
           <button
             class="btn btn-sm btn-primary"
-            @click="showCreateSubAdmin = true"
+            @click="showCreateModal = true"
           >
             <svg
               width="14"
@@ -382,5 +456,56 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
         </div>
       </div>
     </div>
+
+    <!-- Create SubAdmin Modal (local) -->
+    <div v-if="showCreateModal" class="modal-overlay" @click.self="showCreateModal = false">
+      <div class="modal">
+        <h3>添加合伙人</h3>
+        <p class="modal-sub">合伙人可以审批代理、管理订单、查看佣金数据</p>
+        <div class="field">
+          <label>用户ID</label>
+          <input v-model="newSubAdmin.user_id" placeholder="如: subadmin001" />
+        </div>
+        <div class="field">
+          <label>用户名</label>
+          <input v-model="newSubAdmin.username" placeholder="如: 张三" />
+        </div>
+        <div class="field">
+          <label>密码</label>
+          <input v-model="newSubAdmin.password" type="password" placeholder="至少6位，包含字母和数字" />
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" @click="showCreateModal = false; newSubAdmin.user_id=''; newSubAdmin.username=''; newSubAdmin.password=''">取消</button>
+          <button class="btn btn-primary" :disabled="creatingSubAdmin" @click="doCreateSubAdmin">
+            {{ creatingSubAdmin ? '创建中...' : '确认创建' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
+
+<style scoped>
+.action-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.action-slot {
+  display: inline-flex;
+  min-width: 32px;
+}
+.del-btn {
+  margin-left: auto;
+  color: #ccc;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0 4px;
+  border: none;
+  background: none;
+  line-height: 1;
+}
+.del-btn:hover {
+  color: #ef4444;
+}
+</style>

@@ -4,8 +4,6 @@ import os
 import sys
 import unicodedata
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from rich import box
 from rich.align import Align
 from rich.console import Console

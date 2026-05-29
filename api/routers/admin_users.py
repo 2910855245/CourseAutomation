@@ -62,6 +62,21 @@ def topup_user(user_id: str, req: TopUpRequest, admin: dict = Depends(_require_a
     )
 
 
+@router.delete("/users/{user_id}", response_model=ApiResponse)
+def delete_user(user_id: str, admin: dict = Depends(_require_admin)):
+    user = db.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if user["role"] == "admin":
+        raise HTTPException(status_code=400, detail="不能删除管理员账户")
+    if user["user_id"] == admin.get("user_id"):
+        raise HTTPException(status_code=400, detail="不能删除自己的账户")
+    ok = db.soft_delete_user(user_id)
+    if not ok:
+        raise HTTPException(status_code=500, detail="删除失败")
+    return ApiResponse(message=f"用户 {user['username']} 已删除")
+
+
 @router.post("/users/{user_id}/deduct", response_model=ApiResponse)
 def deduct_user(user_id: str, req: TopUpRequest, admin: dict = Depends(_require_admin)):
     user = db.get_user(user_id)

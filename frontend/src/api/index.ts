@@ -228,6 +228,7 @@ export const api = {
       post<ApiResponse<any>>('/api/admin/users/' + userId + '/topup', { amount, note }),
     deduct: (id: string, amount: number, note?: string) =>
       post<ApiResponse<any>>('/api/admin/users/' + id + '/deduct', { amount, note }),
+    delete: (id: string) => del<ApiResponse<any>>('/api/admin/users/' + id),
   },
   adminWithdrawals: {
     list: (params?: { status?: string; limit?: number; offset?: number }) =>
@@ -243,6 +244,7 @@ export const api = {
     jobs: (params?: { status?: string; queue?: string }) =>
       get<ApiResponse<any[]>>('/api/queue/jobs' + buildQuery(params)),
     cancel: (id: string) => post<ApiResponse<any>>('/api/queue/jobs/' + id + '/cancel'),
+    delete: (id: string) => del<ApiResponse<any>>('/api/queue/jobs/' + id),
     retry: (id: string) => post<ApiResponse<any>>('/api/queue/jobs/' + id + '/retry'),
     clear: () => post<ApiResponse<any>>('/api/queue/clear'),
     pause: (queue?: string) => post<ApiResponse<any>>(queue ? '/api/queue/pause/' + queue : '/api/queue/pause'),
@@ -401,6 +403,11 @@ export const api = {
   captcha: {
     generate: () => get<ApiResponse<{ token: string; image: string }>>('/api/captcha/generate'),
   },
+  announcement: {
+    get: () => get<ApiResponse<{ id: number; content: string; active: boolean }>>('/api/announcement'),
+    set: (content: string) => post<ApiResponse<{ id: number }>>('/api/admin/announcement', { content }),
+    disable: () => post<ApiResponse<any>>('/api/admin/announcement/disable'),
+  },
   healthMonitor: {
     summary: () => get<ApiResponse<{ status: string; check_time: string; website: string; checks: Record<string, { status: string; message: string }> }>>('/api/health/summary'),
     check: (websiteId: number) => post<ApiResponse<{ website_id: number; website_name: string; check_time: string; checks: Record<string, { status: string; message: string; [k: string]: any }>; overall: string }>>(`/api/health/check/${websiteId}`),
@@ -408,7 +415,7 @@ export const api = {
     getInterval: () => get<ApiResponse<{ interval: number }>>('/api/health/interval'),
     setInterval: (interval: number) => put<ApiResponse<{ interval: number }>>('/api/health/interval', { interval }),
     getAccount: () => get<ApiResponse<{ accounts: { username: string; password: string; active: boolean }[] }>>('/api/health/account'),
-    setAccount: (username: string, password: string) => put<ApiResponse>('/api/health/account', { username, password }),
+    setAccount: (username: string, password: string, website_type: string = 'school') => put<ApiResponse>('/api/health/account', { username, password, website_type }),
     setAccounts: (accounts: { username: string; password: string; active: boolean }[]) => put<ApiResponse>('/api/health/accounts', { accounts }),
   },
 }

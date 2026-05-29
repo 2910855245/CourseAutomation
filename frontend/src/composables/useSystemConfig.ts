@@ -19,6 +19,7 @@ export function useSystemConfig() {
   const finalExamModel = ref('deepseek-v4-flash')
   const homeworkModel = ref('deepseek-chat')
   const pricingModel = ref('deepseek-v4-pro')
+  const chaoxingModel = ref('deepseek-chat')
   const savingModels = ref(false)
   const testingModel = ref('')
   const DEEPSEEK_MODELS = [
@@ -39,6 +40,7 @@ export function useSystemConfig() {
       if (configs.deepseek_exam_model) examModel.value = configs.deepseek_exam_model
       if (configs.deepseek_final_exam_model) finalExamModel.value = configs.deepseek_final_exam_model
       if (configs.deepseek_homework_model) homeworkModel.value = configs.deepseek_homework_model
+      if (configs.deepseek_chaoxing_model) chaoxingModel.value = configs.deepseek_chaoxing_model
       if (configs.deepseek_pricing_model) pricingModel.value = configs.deepseek_pricing_model
     } catch {}
   }
@@ -88,6 +90,7 @@ export function useSystemConfig() {
       await api.adminConfig.set('deepseek_final_exam_model', finalExamModel.value)
       await api.adminConfig.set('deepseek_homework_model', homeworkModel.value)
       await api.adminConfig.set('deepseek_pricing_model', pricingModel.value)
+      await api.adminConfig.set('deepseek_chaoxing_model', chaoxingModel.value)
       store.toast('模型配置已保存', 'success')
     } catch (e: any) { store.toast(e?.message || '保存失败', 'error') }
     finally { savingModels.value = false }
@@ -270,6 +273,13 @@ export function useSystemConfig() {
   const healthAccountInput = ref('')
   const healthPasswordInput = ref('')
   const healthAccountSaving = ref(false)
+  const healthChaoxingAccountInput = ref('')
+  const healthChaoxingPasswordInput = ref('')
+  const healthChaoxingSaving = ref(false)
+  const healthSchoolSaved = ref(false)
+  const healthChaoxingSaved = ref(false)
+  const healthSchoolSwitched = ref(false)
+  const healthChaoxingSwitched = ref(false)
   const showHealthSettings = ref(false)
   const riskLoginForm = reactive({ username: '', password: '' })
   const riskLoginLoading = ref(false)
@@ -420,23 +430,41 @@ export function useSystemConfig() {
     try { const res = await api.healthMonitor.getInterval(); if (res.data?.interval) healthIntervalInput.value = res.data.interval } catch {}
   }
 
-  async function saveHealthAccount() {
-    if (!healthAccountInput.value.trim() || !healthPasswordInput.value) { store.toast('请输入检测账号和密码', 'error'); return }
-    healthAccountSaving.value = true
+  async function saveHealthAccount(websiteType: string = 'school') {
+    const isChaoxing = websiteType === 'chaoxing'
+    const username = isChaoxing ? healthChaoxingAccountInput.value.trim() : healthAccountInput.value.trim()
+    const password = isChaoxing ? healthChaoxingPasswordInput.value : healthPasswordInput.value
+    if (!username || !password) { store.toast('请输入检测账号和密码', 'error'); return }
+    if (isChaoxing) healthChaoxingSaving.value = true
+    else healthAccountSaving.value = true
     try {
-      await api.healthMonitor.setAccount(healthAccountInput.value.trim(), healthPasswordInput.value)
-      store.toast('检测账号已保存，正在重新检查...', 'success')
-      await loadHealthAccount(); await runHealthCheck()
+      // 检测是否是切换账号（之前已有保存的账号）
+      const prevSaved = isChaoxing ? healthChaoxingSaved.value : healthSchoolSaved.value
+      await api.healthMonitor.setAccount(username, password, websiteType)
+      if (isChaoxing) {
+        healthChaoxingSaved.value = true
+        healthChaoxingSwitched.value = prevSaved
+      } else {
+        healthSchoolSaved.value = true
+        healthSchoolSwitched.value = prevSaved
+      }
+      store.toast(prevSaved ? '检测账号已切换' : '检测账号已保存', 'success')
+      await loadHealthAccount()
     } catch (e: any) { store.toast(e?.message || '保存失败', 'error') }
-    finally { healthAccountSaving.value = false }
+    finally {
+      if (isChaoxing) healthChaoxingSaving.value = false
+      else healthAccountSaving.value = false
+    }
   }
 
   async function loadHealthAccount() {
     try {
       const res = await api.healthMonitor.getAccount()
       const accounts = res.data?.accounts || []
-      const active = accounts.find((a: any) => a.active) || accounts[0]
-      if (active) { healthAccountInput.value = active.username; healthPasswordInput.value = active.password }
+      const school = accounts.find((a: any) => (a.website_type || 'school') === 'school' && a.active) || accounts.find((a: any) => (a.website_type || 'school') === 'school')
+      const chaoxing = accounts.find((a: any) => a.website_type === 'chaoxing' && a.active) || accounts.find((a: any) => a.website_type === 'chaoxing')
+      if (school) { healthAccountInput.value = school.username; healthPasswordInput.value = school.password; healthSchoolSaved.value = true }
+      if (chaoxing) { healthChaoxingAccountInput.value = chaoxing.username; healthChaoxingPasswordInput.value = chaoxing.password; healthChaoxingSaved.value = true }
     } catch {}
   }
 
@@ -503,13 +531,13 @@ export function useSystemConfig() {
   }
 
   const platformColors: string[] = ['#4f6ef7','#22c55e','#f59e0b','#ef4444','#8b5cf6','#0ea5e9']
-  const taskTypeNames: Record<string, string> = { video: '视频', exam: '考试', full: '全包' }
+  const taskTypeNames: Record<string, string> = { video: '视频', exam: '考试', full: '全包', chaoxing_points: '学习通积分', both: '视频+考试' }
   const tierNames: Record<string, string> = { '1': '入门代理', '2': '高级代理', '3': '合伙人' }
 
   return {
     // DeepSeek
     deepseekApiKey, deepseekKeyMasked, savingDeepseekKey, showDeepseekKey, testingDeepseek,
-    deepseekTestResult, examModel, finalExamModel, homeworkModel, pricingModel, savingModels,
+    deepseekTestResult, examModel, finalExamModel, homeworkModel, pricingModel, chaoxingModel, savingModels,
     testingModel, DEEPSEEK_MODELS,
     loadDeepseekKey, saveDeepseekKey, clearDeepseekKey, testDeepseekApi, saveModels, testModelApi,
     // Pricing
@@ -523,7 +551,7 @@ export function useSystemConfig() {
     riskDomainStatus, riskJsStatus, riskHealth, riskAlerts, loadingRisk, riskChecking,
     riskIntervalInput, showAddDomainModal, addDomainForm, healthSummary, loadingHealth,
     healthChecking, riskCheckStep, healthIntervalInput, healthIntervalSaving,
-    healthAccountInput, healthPasswordInput, healthAccountSaving, showHealthSettings,
+    healthAccountInput, healthPasswordInput, healthAccountSaving, healthChaoxingAccountInput, healthChaoxingPasswordInput, healthChaoxingSaving, healthSchoolSaved, healthChaoxingSaved, healthSchoolSwitched, healthChaoxingSwitched, showHealthSettings,
     riskLoginForm, riskLoginLoading, riskNeedLogin, riskChecks,
     riskScore, riskScoreColor, riskScoreLevel, riskScoreText, riskScoreDesc, riskScoreDash,
     buildRiskChecks, loadRiskData, runDomainCheck, runJsCheck, saveRiskInterval,

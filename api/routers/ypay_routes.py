@@ -322,6 +322,9 @@ def batch_pay_create(payload: BatchCreateRequest):
         if o.get("paid"):
             skipped.append(oid)
             continue
+        if o.get("status") not in ("pending", "awaiting_payment"):
+            skipped.append(oid)
+            continue
         orders.append(o)
 
     if not orders:

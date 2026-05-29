@@ -1,11 +1,30 @@
 import json
 import os
 import time
+from urllib.parse import urlparse
 
 import httpx
 from loguru import logger
 
 from config import get_account_cookies_path, get_base_url, get_random_user_agent
+
+# 已知的目标平台域名白名单，这些平台的SSL证书可能不被CA信任，
+# 仅对这些域名跳过SSL验证（而非全局禁用）
+_SSL_SKIP_DOMAINS = {
+    "cdcas.suwankj.com",
+    "cdcas.taiskeji.com",
+    "cdcas.chaoxiankeji.com",
+}
+
+
+def _should_skip_ssl(url: str = None) -> bool:
+    if not url:
+        return False
+    try:
+        hostname = urlparse(url).hostname or ""
+        return any(hostname == d or hostname.endswith("." + d) for d in _SSL_SKIP_DOMAINS)
+    except Exception:
+        return False
 
 
 def _on_request(request: httpx.Request):
@@ -18,10 +37,15 @@ def _on_response(response: httpx.Response):
 
 
 def create_async_client(**kwargs) -> httpx.AsyncClient:
-    """创建异步 HTTP 客户端，支持 HTTP/2 和事件钩子"""
+    """创建异步 HTTP 客户端，支持 HTTP/2 和事件钩子
+
+    默认启用SSL验证。仅当目标域在白名单中时才跳过验证。
+    调用方可显式传入 verify=False 覆盖。
+    """
+    verify = kwargs.pop("verify", True)
     defaults = {
         "timeout": httpx.Timeout(30.0),
-        "verify": False,
+        "verify": verify,
         "http2": True,
         "follow_redirects": True,
         "event_hooks": {
@@ -30,7 +54,37 @@ def create_async_client(**kwargs) -> httpx.AsyncClient:
         },
     }
     defaults.update(kwargs)
+    if not defaults["verify"]:
+        logger.debug("SSL verification disabled for client")
     return httpx.AsyncClient(**defaults)
+
+
+def create_platform_client(base_url: str = None, **kwargs) -> httpx.AsyncClient:
+    """为已知目标平台创建HTTP客户端，自动跳过SSL验证仅对白名单域名生效"""
+    url = base_url or get_base_url()
+    skip = _should_skip_ssl(url)
+    if skip:
+        logger.debug("Target platform domain in SSL skip whitelist: {}", urlparse(url).hostname)
+    return create_async_client(verify=not skip, **kwargs)
+
+
+def create_sync_client(base_url: str = None, **kwargs) -> httpx.Client:
+    """创建同步HTTP客户端，仅对白名单域名跳过SSL验证
+
+    统一替代代码库中的 httpx.Client(verify=False, ...) 调用。
+    """
+    url = base_url or get_base_url()
+    skip = _should_skip_ssl(url)
+    verify = kwargs.pop("verify", not skip)
+    if skip:
+        logger.debug("Target platform domain in SSL skip whitelist: {}", urlparse(url).hostname)
+    defaults = {
+        "timeout": httpx.Timeout(30.0),
+        "verify": verify,
+        "follow_redirects": True,
+    }
+    defaults.update(kwargs)
+    return httpx.Client(**defaults)
 
 
 def get_dynamic_headers(ref_url: str = None) -> dict:
@@ -62,17 +116,33 @@ def check_rate_limit(session, url: str, max_retries: int = 3) -> bool:
 
     Returns: True 表示正常，False 表示被限制且重试失败
     """
+    # 中文教育平台常见的限流关键词
+    _rate_limit_keywords = ('频率', '请求过快', '稍后再试', '访问过于频繁', '操作频繁')
+
     for attempt in range(max_retries):
-        resp = session.get(url, timeout=10)
+        try:
+            resp = session.get(url, timeout=10)
+        except Exception:
+            logger.warning("频率检测请求异常 attempt={}/{}", attempt + 1, max_retries)
+            time.sleep(10 * (attempt + 1))
+            continue
+
         if resp.status_code == 429:
             wait = int(resp.headers.get('Retry-After', 30 + attempt * 15))
+            logger.info("HTTP 429 限流，等待 {}s", wait)
             time.sleep(wait)
             continue
-        if '频率' in resp.text or '请求过快' in resp.text or '稍后再试' in resp.text:
+
+        text = resp.text or ""
+        if any(kw in text for kw in _rate_limit_keywords):
             wait = 20 + attempt * 10
+            logger.info("检测到限流关键词，等待 {}s", wait)
             time.sleep(wait)
             continue
+
         return True
+
+    logger.warning("频率限制重试耗尽 url={}", url)
     return False
 
 def save_cookie(session):

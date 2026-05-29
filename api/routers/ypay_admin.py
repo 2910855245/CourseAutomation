@@ -19,6 +19,8 @@ from api.auth import get_current_admin
 from api.database import db
 from api.models import ApiResponse
 from api.services.ypay_service import ypay
+from api.services.ypay_qr import generate_qrcode
+from api.utils import make_qr_base64 as _make_qr_base64
 
 
 
@@ -428,7 +430,7 @@ def channel_test(account_id: int, admin: dict = Depends(get_current_admin)):
     # 尝试生成测试二维码
     test_trade_no = f"TEST{int(time.time())}"
     try:
-        qrcode_content, h5_url = ypay._generate_qrcode(account, 0.01, test_trade_no, "TEST")
+        qrcode_content, h5_url = generate_qrcode(account, 0.01, test_trade_no, "TEST", ypay._get_site_url)
         qr_ok = bool(qrcode_content)
         checks.append({"name": "QR码生成", "ok": qr_ok, "msg": "成功" if qr_ok else "失败"})
     except Exception as e:
@@ -487,7 +489,7 @@ def ypay_pay_test_create(account_id: int, admin: dict = Depends(get_current_admi
     out_time = (datetime.now() + timedelta(seconds=300)).isoformat()
 
     try:
-        qrcode_content, h5_url = ypay._generate_qrcode(account, price, trade_no, batch_id)
+        qrcode_content, h5_url = generate_qrcode(account, price, trade_no, batch_id, ypay._get_site_url)
     except Exception as e:
         logger.error(f"pay_test_qr_error error={str(e)}")
         return {"code": -1, "message": f"生成测试二维码失败: {str(e)[:80]}"}

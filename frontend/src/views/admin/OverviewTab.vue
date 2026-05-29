@@ -370,7 +370,7 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
           </div>
         </div>
         <div
-          v-if="dash.agent_upgrades"
+          v-if="dash.agent_upgrades && (dash.agent_upgrades.today_count || dash.agent_upgrades.today_revenue)"
           class="kpi-card"
         >
           <div class="kpi-icon upg">
@@ -394,6 +394,46 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
           <div class="kpi-sub">
             今日 {{ dash.agent_upgrades.today_count }} 笔 · 本周 {{ fmtMoney(dash.agent_upgrades.week_revenue) }}
           </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-icon agt">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          </div>
+          <div class="kpi-body">
+            <div class="kpi-val">{{ dash.orders.pending || 0 }}</div>
+            <div class="kpi-label">待处理订单</div>
+          </div>
+          <div class="kpi-sub">执行中 {{ dash.orders.running || 0 }} 单</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-icon rev">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>
+          </div>
+          <div class="kpi-body">
+            <div class="kpi-val">{{ fmtMoney(dash.revenue.total) }}</div>
+            <div class="kpi-label">累计收入</div>
+          </div>
+          <div class="kpi-sub">本周 {{ fmtMoney(dash.revenue.week) }}</div>
+        </div>
+        <div v-if="(dash.orders.failed || 0) > 0" class="kpi-card">
+          <div class="kpi-icon ord">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          </div>
+          <div class="kpi-body">
+            <div class="kpi-val">{{ dash.orders.failed }}</div>
+            <div class="kpi-label">失败订单</div>
+          </div>
+          <div class="kpi-sub">今日 {{ dash.orders.today || 0 }} 单</div>
+        </div>
+        <div v-if="(dash.agents.total_commission || 0) > 0" class="kpi-card">
+          <div class="kpi-icon rate">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+          </div>
+          <div class="kpi-body">
+            <div class="kpi-val">{{ fmtMoney(dash.agents.total_commission) }}</div>
+            <div class="kpi-label">累计佣金</div>
+          </div>
+          <div class="kpi-sub">{{ dash.agents.active || 0 }} 活跃代理</div>
         </div>
       </div>
 

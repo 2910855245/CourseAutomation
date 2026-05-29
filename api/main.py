@@ -171,7 +171,8 @@ async def rate_limit_middleware(request: Request, call_next):
         return await call_next(request)
 
     path = request.url.path
-    if path.startswith("/api/payment/notify") or path.startswith("/api/setup/") or path.startswith("/api/ypay/vmq/"):
+    # 支付回调/安装向导/YPay通知/课程扫描/验证码 不做限流
+    if path.startswith("/api/payment/notify") or path.startswith("/api/setup/") or path.startswith("/api/ypay/vmq/") or path.startswith("/api/courses/") or path.startswith("/api/captcha/"):
         return await call_next(request)
 
     client_ip = request.client.host if request.client else "unknown"
@@ -251,6 +252,7 @@ app.include_router(agents_router)
 app.include_router(admin_agents.router)
 app.include_router(crack_admin.router)
 app.include_router(config_admin.router)
+app.include_router(config_admin.announcement_router)
 app.include_router(invite.router)
 app.include_router(pricing.router)
 app.include_router(sub_admin.router)

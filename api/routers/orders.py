@@ -157,6 +157,7 @@ def create_order(
         task_type=req.task_type.value,
         course_ids=req.course_ids,
         video_count=req.video_count,
+        exam_count=req.exam_count,
         price=req.price,
         notes=req.notes,
         user_id=uid,
@@ -191,10 +192,25 @@ def create_batch_orders(
             if role in ("admin", "sub_admin"):
                 is_privileged = True
 
-    from api.services.order_service import compute_batch_price, submit_free_order, validate_order_amount
+    from api.services.order_service import compute_batch_price, submit_free_order
     computed_total, detail_lines = compute_batch_price(req.orders)
     total_price = round(sum(o.price for o in req.orders), 2)
-    validate_order_amount(total_price, computed_total, detail_lines, is_privileged)
+
+    # 后端计算价格为准，覆盖前端传来的价格
+    if abs(total_price - computed_total) > 0.015 and not is_privileged:
+        from loguru import logger
+        logger.bind(front_total=total_price, back_total=computed_total).info(
+            "价格校验-以后端为准 details={}", " | ".join(detail_lines))
+        # 按比例分配后端价格到各订单
+        if total_price > 0:
+            ratio = computed_total / total_price
+            for item in req.orders:
+                item.price = round(item.price * ratio, 2)
+            # 修正浮点误差：将差额加到第一个订单
+            diff = round(computed_total - sum(o.price for o in req.orders), 2)
+            if diff != 0 and req.orders:
+                req.orders[0].price = round(req.orders[0].price + diff, 2)
+        total_price = computed_total
 
     free_order = total_price == 0 and is_privileged
 
@@ -217,7 +233,8 @@ def create_batch_orders(
             user_id=uid,
             inviter_code=req.inviter_code,
         )
-        if free_order:
+        # 管理员/合伙人下单直接入队执行（免支付）
+        if free_order or is_privileged:
             submit_free_order(order, req.username, req.password, item.website_id)
         created.append(_mask_password(order))
 
@@ -262,12 +279,11 @@ def list_orders(
     current_user: dict = Depends(get_optional_user),
 ):
     uid = current_user["user_id"] if current_user["user_id"] != "guest" else None
-    if not uid:
-        raise HTTPException(status_code=401, detail="请先登录")
-    user = db.get_user(uid)
-    role = user.get("role") if user else None
-    if role in ("admin", "sub_admin"):
-        uid = None
+    if uid:
+        user = db.get_user(uid)
+        role = user.get("role") if user else None
+        if role in ("admin", "sub_admin"):
+            uid = None
     offset = (page - 1) * page_size
     orders = db.list_orders(status=status, user_id=uid, search=search,
                             sort_by=sort_by, sort_dir=sort_dir,
@@ -335,12 +351,14 @@ def cancel_order(order_id: str, current_user: dict = Depends(get_optional_user))
     if not order:
         raise HTTPException(status_code=404, detail="订单不存在")
     uid = current_user["user_id"] if current_user["user_id"] != "guest" else None
-    if not uid:
-        raise HTTPException(status_code=401, detail="请先登录")
-    if order.get("user_id") and order["user_id"] != uid:
-        user = db.get_user(uid)
-        if not user or user.get("role") not in ("admin", "sub_admin"):
-            raise HTTPException(status_code=403, detail="无权操作此订单")
+    # 如果订单有关联用户，则必须登录验证身份；游客创建的订单无需登录即可取消
+    if order.get("user_id"):
+        if not uid:
+            raise HTTPException(status_code=401, detail="请先登录")
+        if order["user_id"] != uid:
+            user = db.get_user(uid)
+            if not user or user.get("role") not in ("admin", "sub_admin"):
+                raise HTTPException(status_code=403, detail="无权操作此订单")
     if order["status"] not in ("pending",):
         raise HTTPException(status_code=400, detail=f"当前状态 [{order['status']}] 不允许取消")
 
@@ -363,8 +381,8 @@ def cancel_order(order_id: str, current_user: dict = Depends(get_optional_user))
 
 
 @router.post("/clear-history", response_model=ApiResponse)
-def clear_history(current_user: dict = Depends(get_current_user)):
-    uid = current_user["user_id"]
+def clear_history(current_user: dict = Depends(get_optional_user)):
+    uid = current_user["user_id"] if current_user["user_id"] != "guest" else None
     try:
         count = db.clear_history_orders(user_id=uid)
         return ApiResponse(message=f"已清除 {count} 条历史订单")

@@ -69,7 +69,8 @@ def classify_videos(raw_points: list, points_info: dict = None) -> List[Dict]:
 # ── 课程完整数据清洗 ──────────────────────────────────────
 
 def clean_course_full(raw_course: dict, raw_points: list, points_info: dict,
-                      work_total: int = 0, work_pending: int = 0, work_completed: int = 0) -> dict:
+                      work_total: int = 0, work_pending: int = 0, work_completed: int = 0,
+                      must_learn_status: dict = None) -> dict:
     """清洗单门课程的完整数据
 
     输入:
@@ -86,6 +87,26 @@ def clean_course_full(raw_course: dict, raw_points: list, points_info: dict,
     # 统计视频状态
     video_done = sum(1 for v in video_points if v["status"] == "已学")
     video_pending = len(video_points) - video_done
+
+    # 必学知识点完成状态
+    ml_video_done, ml_video_total = 0, 0
+    ml_quiz_done, ml_quiz_total = 0, 0
+    ml_read_done, ml_read_total = 0, 0
+    must_learn_done = True  # 默认完成（无必学时）
+
+    if must_learn_status:
+        for kid, status in must_learn_status.items():
+            ml_video_done += status.get("video_done", 0)
+            ml_video_total += status.get("video_total", 0)
+            ml_quiz_done += status.get("quiz_done", 0)
+            ml_quiz_total += status.get("quiz_total", 0)
+            ml_read_done += status.get("read_done", 0)
+            ml_read_total += status.get("read_total", 0)
+        # 有必学知识点时，必须全部完成
+        must_learn_done = all(s.get("all_done", False) for s in must_learn_status.values())
+        # 如果没有任何任务（纯讨论/笔记知识点），也算完成
+        if ml_video_total + ml_quiz_total + ml_read_total == 0:
+            must_learn_done = True
 
     # 积分系统：空字典表示该课程无积分系统
     has_points = bool(points_info)
@@ -120,4 +141,12 @@ def clean_course_full(raw_course: dict, raw_points: list, points_info: dict,
         "days_needed": days_needed,
         "study_days": points_info.get("study_days", 0) if has_points else 0,
         "total_minutes": total_minutes,
+        # 必学知识点完成状态
+        "must_learn_done": must_learn_done,
+        "must_learn_video_done": ml_video_done,
+        "must_learn_video_total": ml_video_total,
+        "must_learn_quiz_done": ml_quiz_done,
+        "must_learn_quiz_total": ml_quiz_total,
+        "must_learn_read_done": ml_read_done,
+        "must_learn_read_total": ml_read_total,
     }

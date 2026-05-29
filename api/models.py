@@ -157,6 +157,7 @@ class CreateOrderRequest(BaseModel):
             "task_type": "video",
             "course_ids": ["CRS-001", "CRS-002"],
             "video_count": 30,
+            "exam_count": 0,
             "price": 5.0,
         }]
     }}
@@ -168,6 +169,7 @@ class CreateOrderRequest(BaseModel):
     task_type: TaskType = Field(default=TaskType.VIDEO, description="任务类型")
     course_ids: Optional[List[str]] = Field(default=None, description="指定课程ID列表")
     video_count: int = Field(default=50, ge=1, description="视频数量限制")
+    exam_count: int = Field(default=0, ge=0, description="考试数量限制")
     price: float = Field(default=0.0, ge=0, description="订单金额(元)")
     notes: str = Field(default="", max_length=500, description="备注")
 
@@ -255,6 +257,10 @@ class PaymentCreateRequest(BaseModel):
 class CourseDetail(BaseModel):
     video_total: int = Field(default=0, ge=0, description="课程视频总数")
     video_completed: int = Field(default=0, ge=0, description="已完成视频数")
+    exam_total: int = Field(default=0, ge=0, description="考试总数")
+    exam_done: int = Field(default=0, ge=0, description="已完成考试数")
+    homework_total: int = Field(default=0, ge=0, description="作业总数")
+    homework_done: int = Field(default=0, ge=0, description="已完成作业数")
 
 
 class BatchOrderItem(BaseModel):

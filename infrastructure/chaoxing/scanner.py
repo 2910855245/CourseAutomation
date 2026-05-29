@@ -6,10 +6,13 @@ from infrastructure.chaoxing.crawler import (
     fetch_course_list,
     fetch_knowledge_list,
     fetch_points,
+    fetch_must_learn_kids,
+    fetch_must_learn_completion,
 )
 from infrastructure.chaoxing.cleaner import clean_courses, clean_course_full
 from infrastructure.chaoxing.task_filter import get_actionable_tasks, get_done_courses, get_no_points_courses
 from infrastructure.chaoxing_quiz import get_work_list
+from infrastructure.chaoxing_points import ScoreRuleParser, PointsRule
 
 
 
@@ -41,14 +44,34 @@ def scan_chaoxing(session: ChaoxingSession) -> dict:
     if ended_count:
         logger.info(f"排除已结束课程 ended={ended_count} active={len(active_courses)}")
 
-    # 3. 逐课爬取知识点 + 积分 + 作业，清洗
+    # 3. 获取 cpi 映射（courseId → cpi）
+    cpi_map = {}
+    try:
+        resp = session.get('https://mooc1-api.chaoxing.com/mycourse/backclazzdata?view=json&rss=1')
+        for ch in resp.json().get('channelList', []):
+            content = ch.get('content', {})
+            if isinstance(content, dict):
+                for cr in content.get('course', {}).get('data', []):
+                    cpi_map[str(cr.get('id', ''))] = str(ch.get('cpi', ''))
+    except Exception as e:
+        logger.warning(f"获取cpi映射失败 error={str(e)}")
+
+    # 4. 逐课爬取知识点 + 积分 + 作业 + 必学完成状态，清洗
     courses = []
     for c in active_courses:
         cid = c["course_id"]
         clid = c["class_id"]
+        cpi = cpi_map.get(cid, "")
 
         points = fetch_points(session, cid, clid)
         raw_points = fetch_knowledge_list(session, cid, clid)
+
+        # 获取积分规则
+        try:
+            points_rule = ScoreRuleParser.fetch_rules(session, cid, clid)
+        except Exception as e:
+            logger.warning(f"获取积分规则失败 course_id={cid} error={str(e)}")
+            points_rule = PointsRule()
 
         # 检测作业列表
         try:
@@ -62,6 +85,17 @@ def scan_chaoxing(session: ChaoxingSession) -> dict:
             logger.warning(f"获取作业列表失败 course_id={cid} error={str(e)}")
             work_total, work_pending, work_completed = 0, 0, 0
 
+        # 获取必学知识点完成状态
+        must_learn_status = {}
+        if cpi:
+            try:
+                must_learn_kids = fetch_must_learn_kids(session, cid, clid)
+                if must_learn_kids:
+                    must_learn_status = fetch_must_learn_completion(
+                        session, cid, clid, cpi, must_learn_kids)
+            except Exception as e:
+                logger.warning(f"获取必学完成状态失败 course_id={cid} error={str(e)}")
+
         cleaned = clean_course_full(
             {"courseId": cid, "classId": clid, "name": c["course_name"]},
             raw_points,
@@ -69,9 +103,17 @@ def scan_chaoxing(session: ChaoxingSession) -> dict:
             work_total=work_total,
             work_pending=work_pending,
             work_completed=work_completed,
+            must_learn_status=must_learn_status,
         )
         # 保留教师信息
         cleaned["teacher"] = c.get("teacher", "")
+        # 附加积分规则
+        cleaned["points_rule"] = {
+            "target": points_rule.target,
+            "daily_limit": points_rule.daily_limit,
+            "video_min": points_rule.video_min,
+            "must_read": points_rule.must_read,
+        }
         courses.append(cleaned)
 
     # 4. 筛选任务

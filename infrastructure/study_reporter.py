@@ -1,15 +1,12 @@
-import threading
+import requests
 import time
+import threading
 from typing import Optional
-
-import httpx
-
 from config import HEADERS
 from infrastructure.captcha import ImageCaptchaSolver, XCaptchaSolver
-from infrastructure.dashboard import DashboardDisplay
 from infrastructure.http_session import safe_json_parse
+from infrastructure.dashboard import DashboardDisplay
 from services.auth_service import login
-
 
 class StudyReporter:
     _relogin_lock = threading.Lock()
@@ -40,7 +37,8 @@ class StudyReporter:
         self.node_id = node_id
         self.video_duration = video_duration
         self.report_interval = report_interval
-        self.session = httpx.Client(timeout=httpx.Timeout(30.0), verify=False)
+        self.session = requests.Session()
+        self.session.verify = False
         self.session.headers.update({
             'User-Agent': HEADERS['User-Agent'],
             'X-Requested-With': 'XMLHttpRequest'
@@ -51,6 +49,7 @@ class StudyReporter:
         self.captcha_url = captcha_url
         self.study_id: int = 0
         self.total_time: int = 0
+        self._start_time: float = 0
         self.last_reported_time: int = 0
         self.viewed_duration: int = viewed_duration
         self.course_name: str = course_name
@@ -98,7 +97,7 @@ class StudyReporter:
                 pwd = StudyReporter._shared_password
                 if not uname or not pwd:
                     self._dash.debug("[relogin] 无共享凭据，使用默认账号")
-                temp_session = httpx.Client(timeout=httpx.Timeout(30.0))
+                temp_session = requests.Session()
                 login(temp_session, username=uname, password=pwd)
                 cookie_str = '; '.join([f"{c.name}={c.value}" for c in temp_session.cookies])
                 StudyReporter._shared_cookie_str = cookie_str
@@ -219,6 +218,22 @@ class StudyReporter:
                 self._dash.debug(f"[report] 未知响应: {result}")
                 return False
 
+    _MIN_RATIO = 2.1  # wall_time / video_duration 安全阈值
+
+    def _wait_for_ratio(self):
+        """等待 wall_time 达到安全比率后再标记完成，防止平台检测并行刷课"""
+        if self.video_duration <= 0:
+            return
+        min_wall = self.video_duration * self._MIN_RATIO
+        elapsed = time.time() - self._start_time
+        if elapsed < min_wall:
+            wait = min_wall - elapsed
+            label = self.video_name or self.course_name or ''
+            self._dash.debug(f"[ratio] {label} 等待 {wait:.0f}s (ratio {elapsed / self.video_duration:.1f}→{self._MIN_RATIO})")
+            deadline = time.time() + wait
+            while self._running and time.time() < deadline:
+                time.sleep(min(5, deadline - time.time()))
+
     def _run_loop(self):
         label = self.video_name or self.course_name or ''
         self._dash.register(self.node_id, label, self.video_duration, self.viewed_duration, self.report_interval)
@@ -231,6 +246,7 @@ class StudyReporter:
                 return
             self._dash.debug(f"[start] {label} 首次上报成功 studyId={self.study_id}")
             time.sleep(0.5)
+        self._start_time = time.time()
         last_report_time = time.time()
         actual_target = self.video_duration - self.viewed_duration
         while self._running:
@@ -243,6 +259,7 @@ class StudyReporter:
                     self._dash.debug(f"[done] {label} 最后上报失败，手动同步total_time={self.total_time}")
                     self._dash.update(self.node_id, self.total_time, self.study_id)
                     self._dash.mark_report_success(self.node_id)
+                self._wait_for_ratio()
                 self._dash.debug(f"[done] {label} 学习完成")
                 break
             current_interval = self._get_current_report_interval()

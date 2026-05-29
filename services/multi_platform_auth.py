@@ -15,7 +15,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from config import DATA_DIR, WEBSITES, get_account_cookies_path
-from infrastructure.http_session import get_dynamic_headers
+from infrastructure.http_session import create_sync_client, get_dynamic_headers
 
 # schoolId 缓存文件（按平台缓存，同一子域名下所有用户共享）
 _SCHOOL_ID_CACHE_FILE = os.path.join(DATA_DIR, "global_config", "school_id_cache.json")
@@ -75,7 +75,7 @@ def login_single_platform(website_id: int, username: str, password: str) -> Tupl
     login_url = f"{base_url}/user/login"
     captcha_url = f"{base_url}/service/code"
 
-    session = httpx.Client(timeout=httpx.Timeout(30.0), verify=False)
+    session = create_sync_client(base_url)
     ocr = _get_ocr()
     max_retries = 10
     retry = 0
@@ -197,14 +197,14 @@ def save_platform_cookie(username: str, website_id: int, session: httpx.Client):
     # 使用config中的统一路径
     cookies_path = get_account_cookies_path(username, website_name)
     
-    # 保存Cookie
+    # 保存Cookie (httpx 0.28+ cookies.items() 返回 (name, value) 元组)
     cookies = []
-    for cookie in session.cookies:
+    for name, value in session.cookies.items():
         cookies.append({
-            "name": cookie.name,
-            "value": cookie.value,
-            "domain": cookie.domain,
-            "path": cookie.path
+            "name": name,
+            "value": value,
+            "domain": "",
+            "path": "/"
         })
     
     with open(cookies_path, 'w', encoding='utf-8') as f:
@@ -369,7 +369,7 @@ def check_platform_cookie_valid(session: httpx.Client, website_id: int) -> bool:
     user_center_url = f"{base_url}/user/index"
     
     try:
-        resp = session.get(user_center_url, follow_redirects=False, timeout=10, verify=False)
+        resp = session.get(user_center_url, follow_redirects=False, timeout=10)
         # 检查是否被重定向到登录页 (302 重定向到 /user/login)
         if resp.status_code == 302:
             location = resp.headers.get('Location', '')
@@ -388,8 +388,8 @@ def get_platform_login_status(username: str) -> Dict[int, bool]:
     """获取账号在所有平台的登录状态"""
     status = {}
 
-    for website_id in WEBSITES.keys():
-        session = httpx.Client(timeout=httpx.Timeout(30.0), verify=False)
+    for website_id, cfg in WEBSITES.items():
+        session = create_sync_client(cfg["base_url"])
         try:
             cookie_ok = load_platform_cookie(username, website_id, session)
             if cookie_ok:

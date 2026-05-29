@@ -9,7 +9,7 @@ def get_actionable_courses(cleaned_courses: List[Dict]) -> List[Dict]:
 
 
 def get_actionable_tasks(cleaned_courses: List[Dict]) -> List[Dict]:
-    """返回所有可操作任务（积分未满或有待完成作业的课程）
+    """返回所有可操作任务（积分未满、必学未完成或有待完成作业的课程）
 
     每项带 task_type 标识：chaoxing_points / chaoxing_work / chaoxing_both
     """
@@ -18,17 +18,21 @@ def get_actionable_tasks(cleaned_courses: List[Dict]) -> List[Dict]:
         has_points = c.get("has_points_system")
         remaining = c.get("points_remaining", 0)
         work_pending = c.get("work_pending", 0)
+        must_learn_done = c.get("must_learn_done", True)
 
         need_points = has_points and remaining > 0
         need_work = work_pending > 0
+        need_must_learn = not must_learn_done
 
-        if not need_points and not need_work:
+        if not need_points and not need_work and not need_must_learn:
             continue
 
         if need_points and need_work:
             task_type = "chaoxing_both"
         elif need_work:
             task_type = "chaoxing_work"
+        elif need_must_learn:
+            task_type = "chaoxing_must_learn"
         else:
             task_type = "chaoxing_points"
 
@@ -45,14 +49,24 @@ def get_actionable_tasks(cleaned_courses: List[Dict]) -> List[Dict]:
             "total_minutes": c.get("total_minutes", 0),
             "work_total": c.get("work_total", 0),
             "work_pending": work_pending,
+            "must_learn_done": must_learn_done,
+            "must_learn_video_done": c.get("must_learn_video_done", 0),
+            "must_learn_video_total": c.get("must_learn_video_total", 0),
+            "must_learn_quiz_done": c.get("must_learn_quiz_done", 0),
+            "must_learn_quiz_total": c.get("must_learn_quiz_total", 0),
+            "must_learn_read_done": c.get("must_learn_read_done", 0),
+            "must_learn_read_total": c.get("must_learn_read_total", 0),
+            "points_rule": c.get("points_rule", {}),
         })
     return tasks
 
 
 def get_done_courses(cleaned_courses: List[Dict]) -> List[Dict]:
-    """返回已完成的课程（有积分系统且积分已满）"""
+    """返回已完成的课程（积分已满 且 必学全部完成）"""
     return [c for c in cleaned_courses
-            if c.get("has_points_system") and c.get("points_remaining", 0) <= 0]
+            if c.get("has_points_system")
+            and c.get("points_remaining", 0) <= 0
+            and c.get("must_learn_done", False)]
 
 
 def get_no_points_courses(cleaned_courses: List[Dict]) -> List[Dict]:

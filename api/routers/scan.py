@@ -1,11 +1,6 @@
-import os
-import sys
-
 from loguru import logger
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from api.auth import get_optional_user
 from api.models import ApiResponse

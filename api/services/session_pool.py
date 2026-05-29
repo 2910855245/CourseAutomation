@@ -11,8 +11,6 @@ from typing import Dict, List, Optional
 import httpx
 from loguru import logger
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
 from config import (
     get_base_url,
     set_current_account,
@@ -41,11 +39,13 @@ def _on_response(response: httpx.Response):
 
 def _create_optimized_session() -> httpx.Client:
     """创建优化的 Session，支持连接池复用、HTTP/2、自动重试和事件钩子"""
-    transport = httpx.HTTPTransport(retries=3, connections=10, max_connections=20)
-    session = httpx.Client(
+    from infrastructure.http_session import create_sync_client
+    transport = httpx.HTTPTransport(retries=3)
+    limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
+    session = create_sync_client(
         timeout=httpx.Timeout(30.0),
-        verify=False,
         transport=transport,
+        limits=limits,
         http2=True,
         event_hooks={
             "request": [_on_request],

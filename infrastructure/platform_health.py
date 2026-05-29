@@ -9,8 +9,6 @@ from typing import Dict, Optional
 
 from loguru import logger
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from config import WEBSITES, get_base_url, set_current_website, update_url_config
 
 
@@ -262,35 +260,41 @@ class HealthMonitorDaemon:
             return
 
         # 优先使用配置的检测账号
-        target_username = ""
-        target_password = ""
-        try:
-            import json
+        def _get_accounts_list():
+            try:
+                import json
+                from api.database import db
+                raw = db.config_get("health_check_accounts")
+                if raw:
+                    return json.loads(raw)
+            except Exception:
+                pass
+            return []
 
-            from api.database import db
-            raw = db.config_get("health_check_accounts")
-            if raw:
-                accounts = json.loads(raw)
-                for a in accounts:
-                    if a.get("active"):
-                        target_username = a.get("username", "")
-                        target_password = a.get("password", "")
-                        break
-        except Exception as e:
-            pass
-
-        checked_websites = set()
-
-        if not target_username or not target_password:
+        accounts = _get_accounts_list()
+        if not accounts:
             logger.warning("未配置健康检测账号，跳过自动检查")
             return
 
-        # 用指定账号检查所有平台，没有 session 则自动登录
+        def _get_account_for_platform(wid):
+            target_type = "chaoxing" if wid == 4 else "school"
+            for a in accounts:
+                if a.get("website_type", "school") == target_type and a.get("active"):
+                    return a
+            return None
+
+        checked_websites = set()
+
         from config import WEBSITES
         for wid in WEBSITES:
             if wid in checked_websites:
                 continue
             checked_websites.add(wid)
+            acct = _get_account_for_platform(wid)
+            if not acct:
+                continue
+            target_username = acct.get("username", "")
+            target_password = acct.get("password", "")
             session_info = self._session_pool.get(target_username, wid)
             if not session_info:
                 try:

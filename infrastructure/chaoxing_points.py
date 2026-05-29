@@ -304,7 +304,11 @@ class PointsExecutor:
         video_needs_more = (
             self.rule.video_min > 0 and video_item.total < self.rule.video_min
         )
-        if remaining > 0 and (video_needs_more or video_item.day < (self.rule.get_item(3).daily_cap if self.rule.get_item(3) else 999)):
+        video_rule = self.rule.get_item(3)
+        video_daily_cap = video_rule.daily_cap if video_rule else 0
+        # daily_cap=0 表示无上限，只要还有 remaining 就应该刷视频
+        video_under_cap = (video_daily_cap == 0) or (video_item.day < video_daily_cap)
+        if remaining > 0 and (video_needs_more or video_under_cap):
             earned = self._play_videos(remaining, status_file, on_progress)
             remaining -= earned
             status = self.get_status()
@@ -476,12 +480,12 @@ class PointsExecutor:
                 break
 
             content = discuss_contents[i % len(discuss_contents)]
-            success = post_discussion(
+            result = post_discussion(
                 self.session, self.course_id, self.class_id,
                 bbsid, content
             )
 
-            if success:
+            if isinstance(result, dict) and result.get('success'):
                 earned += 1
                 logger.info(f"讨论积分 earned={earned}")
 
@@ -532,12 +536,12 @@ class PointsExecutor:
             kp = knowledge_points[i % len(knowledge_points)]
             content = note_contents[i % len(note_contents)]
 
-            success = post_note(
+            result = post_note(
                 self.session, self.course_id, self.class_id,
                 kp['knowledgeId'], content
             )
 
-            if success:
+            if isinstance(result, dict) and result.get('success'):
                 earned += 1
                 logger.info(f"笔记积分 earned={earned}")
 

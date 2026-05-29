@@ -1,1 +1,0 @@
-import{a as c,r}from"./index-DSjDvSCS.js";const t=r({}),o=r(!1);function l(){async function n(){if(!o.value)try{const a=await c.courses.platforms();if(a.success&&a.data){const e={};for(const s of a.data)e[s.id]=s.name;t.value=e,o.value=!0}}catch{}}function u(a){return t.value[a]||"平台"+a}return{platformNames:t,load:n,getName:u}}export{l as u};

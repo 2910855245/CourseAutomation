@@ -1,14 +1,9 @@
 import random
 import string
 
-import httpx
-import urllib3
-
 from config import get_random_user_agent
 from infrastructure.dashboard import DashboardDisplay
-from infrastructure.http_session import safe_json_parse
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from infrastructure.http_session import create_sync_client, safe_json_parse
 
 _ocr_instance = None
 
@@ -21,17 +16,21 @@ def _get_ocr():
 
 class ImageCaptchaSolver:
     """图形验证码解析器"""
-    def __init__(self, base_url: str, cookie_str: str = None, cookie_dict: dict = None):
+    def __init__(self, base_url: str, cookie_str: str = None, cookie_dict: dict = None, session=None):
         """初始化图形验证码解析器
-        
+
         Args:
             base_url: 基础URL
             cookie_str: Cookie字符串（可选）
             cookie_dict: Cookie字典（可选）
+            session: 可选，共享session（用于验证码session与请求session保持一致）
         """
         self.base_url = base_url.rstrip('/')
-        self.session = httpx.Client(timeout=httpx.Timeout(30.0), verify=False)
-        self.session.headers.update({'User-Agent': get_random_user_agent()})  # 设置User-Agent
+        if session is not None:
+            self.session = session
+        else:
+            self.session = create_sync_client(base_url)
+        self.session.headers.update({'User-Agent': get_random_user_agent()})
         if cookie_str:
             self._set_cookie_from_string(cookie_str)  # 从字符串设置Cookie
         elif cookie_dict:
@@ -115,8 +114,8 @@ class XCaptchaSolver:
         self.base_url = base_url
         self.ak = ak
         self.verify = verify
-        self.session = httpx.Client(timeout=httpx.Timeout(30.0), verify=False)
-        self.session.headers.update({'User-Agent': get_random_user_agent()})  # 设置User-Agent
+        self.session = create_sync_client(base_url)
+        self.session.headers.update({'User-Agent': get_random_user_agent()})
         self.ocr = _get_ocr()
         self.key = None  # 验证码key
         self.img_url = None  # 验证码图片URL

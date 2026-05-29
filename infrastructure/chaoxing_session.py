@@ -27,7 +27,11 @@ class CachedResponse:
 
     @property
     def status_code(self):
-        return self._resp.status_code
+        # rnet 返回 StatusCode 类型（非 int），需转换才能与整数比较
+        sc = self._resp.status_code
+        if isinstance(sc, int):
+            return sc
+        return sc.as_int()
 
     @property
     def url(self):
@@ -49,13 +53,12 @@ class CachedResponse:
 
     def json(self):
         if self._json_cache is None:
-            # 如果 text 已经被读过，用缓存的 text 解析
-            if self._text_consumed:
-                self._json_cache = json.loads(self._text_cache)
+            # 始终通过 text() 读取，避免 rnet 原生 json() 消费 body 失败
+            text = self.text()
+            if text:
+                self._json_cache = json.loads(text)
             else:
-                self._json_cache = self._resp.json()
-                self._text_consumed = True
-                self._text_cache = json.dumps(self._json_cache, ensure_ascii=False)
+                self._json_cache = {}
         return self._json_cache
 
 # rnet Impersonate 枚举 → User-Agent 映射
@@ -144,10 +147,16 @@ class ChaoxingSession:
 
             if result.get('result') == 1 or result.get('status') is True:
                 # 登录成功，从 response cookies 构建 cookie 字典
+                # rnet 的 cookies 是 list[Cookie]，需兼容 httpx 的 Cookies 对象
                 cookie_dict = {}
                 try:
-                    for c in resp.cookies:
-                        cookie_dict[c.name] = c.value
+                    cookies = resp.cookies
+                    if hasattr(cookies, 'items'):
+                        for name, value in cookies.items():
+                            cookie_dict[name] = value
+                    else:
+                        for c in cookies:
+                            cookie_dict[c.name] = c.value
                 except Exception:
                     pass
 

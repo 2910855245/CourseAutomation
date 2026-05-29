@@ -129,6 +129,11 @@ export function usePayments() {
     catch (e: any) { store.toast(e.message, 'error') }
   }
 
+  async function deleteQueueJob(id: string) {
+    try { await api.queue.delete(id); loadQueueData(); store.toast('任务已删除', 'success') }
+    catch (e: any) { store.toast(e.message, 'error') }
+  }
+
   async function retryQueueJob(id: string) {
     try { await api.queue.retry(id); loadQueueData(); store.toast('任务已重试', 'success') }
     catch (e: any) { store.toast(e.message, 'error') }
@@ -208,7 +213,7 @@ export function usePayments() {
     // Queue
     queueStats, queueJobs, queueStatusFilter, queueFilter, loadingQueue, queuePausing, maxWorkersInput, serverSpecs,
     loadQueueData, setQueueFilter, pauseQueue, resumeQueue, setMaxWorkers, detectServerSpecs, applyAutoConcurrency,
-    cancelQueueJob, retryQueueJob, clearQueueHistory,
+    cancelQueueJob, deleteQueueJob, retryQueueJob, clearQueueHistory,
     // Pay test
     payTestChecks, payTestLoading, payTestStarted, payTestQrImage, payTestReallyPrice,
     payTestPolling, payTestPaid, payTestExpired, showPayTest, payTestChannelName,

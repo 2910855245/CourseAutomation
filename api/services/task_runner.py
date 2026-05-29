@@ -10,8 +10,6 @@ from typing import Any, Callable, Dict, Optional
 
 from loguru import logger
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
 from config import WEBSITES
 
 

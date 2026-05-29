@@ -157,7 +157,7 @@ class YPayService:
         if not order:
             return None
 
-        if Decimal(str(order["truemoney"])) != Decimal(str(base_price)):
+        if abs(float(order["truemoney"]) - base_price) >= 0.01:
             logger.info("ypay_amount_mismatch pushed={} order={} trade_no={}", base_price, order["truemoney"], order["trade_no"])
             return None
 

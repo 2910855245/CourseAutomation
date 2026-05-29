@@ -30,29 +30,24 @@ def _verify_exam_exists(session, base_url: str, work_id, node_id, course_id) -> 
 
     返回 True 表示存在（或无法确认删除），False 表示明确已删除。
     只有 API 明确返回"已删除"消息时才返回 False。
+
+    注意：不调用 start_work，避免消耗有限的答题机会。
     """
-    from infrastructure.anti_test import TopicFetcher, normalize_base_url
+    from infrastructure.http_session import safe_request
+    from infrastructure.exam_login import normalize_base_url
     base = normalize_base_url(base_url)
-    fetcher = TopicFetcher(session, base)
 
     wid = int(work_id) if str(work_id).isdigit() else work_id
     cid = int(course_id) if str(course_id).isdigit() else 0
     nid = int(node_id) if str(node_id).isdigit() else 0
 
     try:
-        # 1. 尝试 start_work 获取页面
-        start_res = fetcher.start_work(wid, cid, nid)
-        if isinstance(start_res, dict):
-            msg = start_res.get('msg', '')
-            for marker in _DELETED_MARKERS:
-                if marker in msg:
-                    return False
-
-        # 2. 获取考试页面
+        # 直接 GET 页面检测，不调用 start_work（避免消耗答题机会）
         exam_page_url = f"{base}/user/work?workId={wid}&courseId={cid}&nodeId={nid}"
-        resp = session.get(exam_page_url, timeout=15)
-        resp.encoding = 'utf-8'
-        html = resp.text
+        resp = safe_request(session, exam_page_url)
+        if not resp:
+            return True  # 请求失败时保守认为存在
+        html = resp.content.decode('utf-8', errors='replace')
         # 只有明确的删除标记才判定删除
         for marker in _DELETED_MARKERS:
             if marker in html:
@@ -61,7 +56,7 @@ def _verify_exam_exists(session, base_url: str, work_id, node_id, course_id) -> 
         if 'topic-item' in html or 'courseexamcon-main' in html:
             return True
 
-        # 3. 无题目，保守认为存在（避免误删）
+        # 无题目，保守认为存在（避免误删）
         return True
     except Exception as e:
         logger.debug("验证考试存在性异常 work_id={}: {}", work_id, e)
@@ -121,21 +116,26 @@ def scan_course(session, course_id: str, course_name: str,
     raw = get_course_nodes_from_api(session, course_id, course_name)
     cleaned = clean_course_data(raw)
 
-    # 验证 actionable 的考试/作业是否真的存在（检测已删除）
+    # 验证考试/作业是否真的存在（检测已删除）
+    # 包括 actionable 和未交的（避免已删除的被计入 pending）
     base_url = get_base_url()
     for exam in cleaned.get("exams", []):
-        if exam.get("is_actionable"):
+        need_verify = exam.get("is_actionable") or "未交" in exam.get("submit_status", "")
+        if need_verify:
             if not _verify_exam_exists(session, base_url, exam["work_id"], exam["node_id"], course_id):
                 exam["is_deleted"] = True
                 exam["is_actionable"] = False
+                exam["is_done"] = True
                 exam["submit_status"] = "已删除"
                 logger.info("考试已删除: {} (work_id={})", exam.get("name"), exam["work_id"])
 
     for work in cleaned.get("works", []):
-        if work.get("is_actionable"):
+        need_verify = work.get("is_actionable") or "未交" in work.get("submit_status", "")
+        if need_verify:
             if not _verify_exam_exists(session, base_url, work["work_id"], work["node_id"], course_id):
                 work["is_deleted"] = True
                 work["is_actionable"] = False
+                work["is_done"] = True
                 work["submit_status"] = "已删除"
                 logger.info("作业已删除: {} (work_id={})", work.get("name"), work["work_id"])
 

@@ -9,6 +9,16 @@ import threading
 import time
 from datetime import datetime
 
+def _push_event(event_type: str, data: dict):
+    """推送事件到 WebSocket 广播"""
+    try:
+        import httpx
+        payload = {"type": event_type, **data}
+        httpx.post("http://127.0.0.1:8000/api/progress/live/push",
+                   json=payload, timeout=2)
+    except Exception:
+        pass
+
 from loguru import logger
 
 
@@ -31,6 +41,7 @@ def _setup_queue_callbacks(db, queue):
                     db.increment_user_order_stats(order["user_id"], order["price"])
                 db.complete_order(job.order_id)
                 logger.info(f"订单完成 order_id={job.order_id}")
+                _push_event("order_update", {"order_id": job.order_id, "status": "completed"})
                 try:
                     from api.routers.agents import calculate_commission
                     calculate_commission(job.order_id, order["user_id"], order["price"])
@@ -68,11 +79,15 @@ def _setup_queue_callbacks(db, queue):
                         )
                 db.fail_order(job.order_id, error=job.error_message or "任务执行失败")
                 logger.error(f"订单失败 order_id={job.order_id} error={job.error_message}")
+                _push_event("order_update", {"order_id": job.order_id, "status": "failed"})
             else:
                 logger.info("任务失败但有重试任务待执行，暂不标记订单失败",
                            order_id=job.order_id, job_id=job.job_id)
 
-    queue.set_callbacks(on_complete=_on_job_complete, on_fail=_on_job_fail)
+    def _on_job_progress(job_id: str, progress: float, step: int, step_name: str):
+        _push_event("progress", {"job_id": job_id, "progress": progress, "step": step, "step_name": step_name})
+
+    queue.set_callbacks(on_complete=_on_job_complete, on_fail=_on_job_fail, on_progress=_on_job_progress)
 
 
 @logger.catch

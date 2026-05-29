@@ -31,8 +31,8 @@ export function useDashboard() {
 
   const statusLabel: Record<string, string> = { pending: '待审核', active: '活跃', suspended: '已暂停' }
   const statusClass: Record<string, string> = { pending: 'warn', active: 'ok', suspended: 'bad' }
-  const orderStatusLabel: Record<string, string> = { pending: '待处理', accepted: '已接单', running: '执行中', completed: '已完成', failed: '失败', cancelled: '已取消' }
-  const orderStatusClass: Record<string, string> = { pending: 'warn', accepted: 'primary', running: 'primary', completed: 'ok', failed: 'bad', cancelled: 'muted' }
+  const orderStatusLabel: Record<string, string> = { pending: '待处理', accepted: '已接单', running: '执行中', completed: '已完成', failed: '失败', cancelled: '已取消', waiting: '等待明天', paid: '已支付', queued: '排队中', retrying: '重试中' }
+  const orderStatusClass: Record<string, string> = { pending: 'warn', accepted: 'primary', running: 'primary', completed: 'ok', failed: 'bad', cancelled: 'muted', waiting: 'primary', paid: 'ok', queued: 'primary', retrying: 'warn' }
 
   const maxStatusCount = computed(() => {
     if (!dash.value?.status_distribution?.length) return 1
@@ -96,6 +96,7 @@ export function useDashboard() {
       icon: 'M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z',
       children: [
         { key: 'proxy', label: '网络代理', icon: 'M3.05 13H1v-2h2.05C3.5 8.83 5.83 6.5 8 6.05V4h2v2.05c2.17.45 4.5 2.78 4.95 4.95H17v2h-2.05c-.45 2.17-2.78 4.5-4.95 4.95V20H8v-2.05C5.83 17.5 3.5 15.17 3.05 13zM12 9a3 3 0 00-3 3 3 3 0 003 3 3 3 0 003-3 3 3 0 00-3-3z' },
+        { key: 'announcement', label: '系统通告', icon: 'M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0' },
         { key: 'risk', label: '风险监控', icon: 'M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
         { key: 'security', label: '安全中心', icon: 'M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z' },
       ],

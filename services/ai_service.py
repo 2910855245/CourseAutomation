@@ -4,6 +4,33 @@ from typing import Dict
 import httpx
 from loguru import logger
 
+# 配置项缓存（TTL=300s，避免每次请求都查库）
+_config_cache: Dict[str, tuple] = {}
+_CACHE_TTL = 300
+
+
+def _cached_config(key: str, default: str = "") -> str:
+    """从数据库读取配置，带TTL缓存"""
+    now = time.time()
+    if key in _config_cache:
+        val, ts = _config_cache[key]
+        if now - ts < _CACHE_TTL:
+            return val
+    try:
+        from api.database import db
+        val = db.config_get(key) or default
+    except Exception:
+        val = default
+    _config_cache[key] = (val, now)
+    return val
+
+
+def _invalidate_config_cache(key: str = None):
+    """清除配置缓存（配置变更时调用）"""
+    if key:
+        _config_cache.pop(key, None)
+    else:
+        _config_cache.clear()
 
 
 class AIService:
@@ -16,14 +43,8 @@ class AIService:
 
     @property
     def api_key(self) -> str:
-        try:
-            from api.database import db
-            db_key = db.config_get("deepseek_api_key")
-            if db_key:
-                return db_key
-        except Exception as e:
-            pass
-        return self._env_key
+        db_key = _cached_config("deepseek_api_key")
+        return db_key or self._env_key
 
     def solve_exam(self, work_id: str, course_id: str = None,
                    node_id: str = None, auto_submit: bool = True,
@@ -63,25 +84,9 @@ class AIService:
 
             # 根据考试类型选择模型
             if is_final_exam:
-                # 期末考试使用 deepseek-v4-flash
-                exam_model = "deepseek-v4-flash"
-                try:
-                    from api.database import db
-                    m = db.config_get("deepseek_final_exam_model")
-                    if m:
-                        exam_model = m
-                except Exception as e:
-                    pass
+                exam_model = _cached_config("deepseek_final_exam_model", "deepseek-v4-flash")
             else:
-                # 普通作业使用 deepseek-chat
-                exam_model = "deepseek-chat"
-                try:
-                    from api.database import db
-                    m = db.config_get("deepseek_homework_model")
-                    if m:
-                        exam_model = m
-                except Exception as e:
-                    pass
+                exam_model = _cached_config("deepseek_homework_model", "deepseek-v4-flash")
             answerer = AIAnswerer(self.api_key, model=exam_model)
             answers = {}
             for topic in topics:
@@ -133,3 +138,25 @@ class AIService:
             return {"success": False, "error": str(e)}
         finally:
             heartbeat.stop()
+
+    def solve_project_work(self, work_id: int, course_id: int, node_id: int,
+                           question_text: str = "", student_id: str = "",
+                           student_name: str = "") -> Dict:
+        """解决项目提交题（简答+文件上传）"""
+        from infrastructure.project_solver import ProjectSolver
+
+        if not self.api_key:
+            return {"success": False, "error": "DEEPSEEK_API_KEY 未配置"}
+
+        try:
+            solver = ProjectSolver(
+                session=self.session,
+                base_url=self.base_url,
+                api_key=self.api_key,
+                student_id=student_id,
+                student_name=student_name,
+            )
+            return solver.solve(work_id, course_id, node_id, question_text)
+        except Exception as e:
+            logger.error(f"solve_project_work error: work_id={work_id}, error={e}")
+            return {"success": False, "error": str(e)}

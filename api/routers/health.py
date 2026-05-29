@@ -102,8 +102,20 @@ def _get_accounts() -> list:
     return []
 
 
-def _get_active_account() -> dict:
+def _get_active_account(website_id: int = None) -> dict:
+    """获取活跃的检测账号，根据平台类型返回对应的账号"""
     accounts = _get_accounts()
+    if website_id:
+        # 学习通 (website_id=4) 使用 chaoxing 类型账号
+        target_type = "chaoxing" if website_id == 4 else "school"
+        for a in accounts:
+            if a.get("website_type", "school") == target_type and a.get("active"):
+                return a
+        # fallback: 同类型第一个
+        for a in accounts:
+            if a.get("website_type", "school") == target_type:
+                return a
+    # 默认返回任意活跃账号
     for a in accounts:
         if a.get("active"):
             return a
@@ -121,6 +133,7 @@ class AccountItem(BaseModel):
     username: str
     password: str
     active: bool = False
+    website_type: str = "school"  # "school" 或 "chaoxing"
 
 
 class AccountsRequest(BaseModel):
@@ -129,21 +142,24 @@ class AccountsRequest(BaseModel):
 
 @router.put("/account", response_model=ApiResponse)
 async def set_health_account(req: AccountItem, admin=Depends(get_current_admin)):
-    """设置单个健康检测账号（兼容旧接口）"""
+    """设置健康检测账号（学校平台/学习通分开）"""
     accounts = _get_accounts()
+    target_type = req.website_type or "school"
     found = False
     for a in accounts:
-        if a["username"] == req.username:
+        if a.get("website_type", "school") == target_type:
+            a["username"] = req.username
             a["password"] = req.password
             a["active"] = True
             found = True
         else:
-            a["active"] = False
+            a["active"] = a.get("website_type", "school") != target_type
     if not found:
-        accounts.append({"username": req.username, "password": req.password, "active": True})
+        accounts.append({"username": req.username, "password": req.password, "active": True, "website_type": target_type})
     from api.database import db
     db.config_set(CONFIG_HEALTH_ACCOUNTS, json.dumps(accounts, ensure_ascii=False))
-    return ApiResponse(message=f"检测账号已设置为 {req.username}")
+    type_name = "学习通" if target_type == "chaoxing" else "学校平台"
+    return ApiResponse(message=f"{type_name}检测账号已设置为 {req.username}")
 
 
 @router.put("/accounts", response_model=ApiResponse)
@@ -213,13 +229,6 @@ async def run_all_checks(admin=Depends(get_current_admin)):
     from config import WEBSITES
     from infrastructure.platform_health import PlatformHealthChecker
 
-    active = _get_active_account()
-    target_username = active.get("username", "")
-    target_password = active.get("password", "")
-
-    if not target_username or not target_password:
-        raise HTTPException(status_code=400, detail="请先在健康检查设置中配置检测账号")
-
     results = {}
     checked_websites = set()
 
@@ -227,6 +236,14 @@ async def run_all_checks(admin=Depends(get_current_admin)):
         if wid in checked_websites:
             continue
         checked_websites.add(wid)
+        active = _get_active_account(wid)
+        target_username = active.get("username", "")
+        target_password = active.get("password", "")
+
+        if not target_username or not target_password:
+            results[str(wid)] = {"website_id": wid, "error": "未配置检测账号"}
+            continue
+
         session_info, login_error = _get_session_or_login(pool, wid, target_username, target_password)
         if not session_info:
             results[str(wid)] = _save_login_error(wid, target_username, login_error)
@@ -247,12 +264,12 @@ async def run_check(website_id: int, admin=Depends(get_current_admin)):
     if website_id not in WEBSITES:
         raise HTTPException(status_code=404, detail="平台不存在")
 
-    active = _get_active_account()
+    active = _get_active_account(website_id)
     target_username = active.get("username", "")
     target_password = active.get("password", "")
 
     if not target_username or not target_password:
-        raise HTTPException(status_code=400, detail="请先在健康检查设置中配置检测账号")
+        raise HTTPException(status_code=400, detail=f"请先在健康检查设置中配置{'学习通' if website_id == 4 else '学校平台'}检测账号")
 
     session_info, login_error = _get_session_or_login(pool, website_id, target_username, target_password)
     if not session_info:

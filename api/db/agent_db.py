@@ -66,6 +66,15 @@ class AgentDBMixin:
         finally:
             session.close()
 
+    def get_agent_by_subdomain(self, slug: str) -> Optional[Dict[str, Any]]:
+        Agent, Commission, Withdrawal, Channel, UserInvite, SystemConfig, AuditLog, User = _resolve_models()
+        session = self._get_session()
+        try:
+            agent = session.scalars(select(Agent).filter(Agent.subdomain_slug == slug)).first()
+            return self._agent_to_dict(agent) if agent else None
+        finally:
+            session.close()
+
     def get_agent_by_user_id(self, user_id: str) -> Optional[Dict[str, Any]]:
         Agent, Commission, Withdrawal, Channel, UserInvite, SystemConfig, AuditLog, User = _resolve_models()
         session = self._get_session()
@@ -227,7 +236,7 @@ class AgentDBMixin:
         finally:
             session.close()
 
-    def list_commissions(self, agent_id: str = None, status: str = None,
+    def list_commissions(self, agent_id: str = None, agent_ids: list = None, status: str = None,
                          limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
         Agent, Commission, Withdrawal, Channel, UserInvite, SystemConfig, AuditLog, User = _resolve_models()
         session = self._get_session()
@@ -235,6 +244,8 @@ class AgentDBMixin:
             stmt = select(Commission)
             if agent_id:
                 stmt = stmt.where(Commission.agent_id == agent_id)
+            elif agent_ids:
+                stmt = stmt.where(Commission.agent_id.in_(agent_ids))
             if status:
                 stmt = stmt.where(Commission.status == status)
             stmt = stmt.order_by(Commission.created_at.desc()).offset(offset).limit(limit)
@@ -251,13 +262,15 @@ class AgentDBMixin:
         finally:
             session.close()
 
-    def count_commissions(self, agent_id: str = None, status: str = None) -> int:
+    def count_commissions(self, agent_id: str = None, agent_ids: list = None, status: str = None) -> int:
         Agent, Commission, Withdrawal, Channel, UserInvite, SystemConfig, AuditLog, User = _resolve_models()
         session = self._get_session()
         try:
             stmt = select(func.count(Commission.commission_id))
             if agent_id:
                 stmt = stmt.where(Commission.agent_id == agent_id)
+            elif agent_ids:
+                stmt = stmt.where(Commission.agent_id.in_(agent_ids))
             if status:
                 stmt = stmt.where(Commission.status == status)
             return session.scalar(stmt)
@@ -671,7 +684,9 @@ class AgentDBMixin:
         Agent, Commission, Withdrawal, Channel, UserInvite, SystemConfig, AuditLog, User = _resolve_models()
         session = self._get_session()
         try:
-            count = session.execute(delete(Commission))
+            count = session.execute(update(Commission).filter(
+                Commission.deleted_at.is_(None),
+            ).values(deleted_at=datetime.now().isoformat())).rowcount
             session.commit()
             return count
         except Exception as e:
@@ -685,7 +700,9 @@ class AgentDBMixin:
         Agent, Commission, Withdrawal, Channel, UserInvite, SystemConfig, AuditLog, User = _resolve_models()
         session = self._get_session()
         try:
-            count = session.execute(delete(Withdrawal))
+            count = session.execute(update(Withdrawal).filter(
+                Withdrawal.deleted_at.is_(None),
+            ).values(deleted_at=datetime.now().isoformat())).rowcount
             session.commit()
             return count
         except Exception as e:
@@ -730,9 +747,9 @@ class AgentDBMixin:
         finally:
             session.close()
 
-    def get_commissions(self, agent_id: str = None, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+    def get_commissions(self, agent_id: str = None, agent_ids: list = None, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
         """佣金列表（admin_agents 路由调用的名称）"""
-        return self.list_commissions(agent_id=agent_id, limit=limit, offset=offset)
+        return self.list_commissions(agent_id=agent_id, agent_ids=agent_ids, limit=limit, offset=offset)
 
     def get_withdraw_rules(self) -> Dict[str, Any]:
         """获取提现规则配置"""

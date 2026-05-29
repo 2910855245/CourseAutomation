@@ -21,7 +21,8 @@ export function usePlatformNames() {
   }
 
   function getName(id: number): string {
-    return platformNames.value[id] || '平台' + id
+    const fallback: Record<number, string> = { 1: '在线课程', 2: '劳动课程', 3: '公益课程', 4: '学习通' }
+    return platformNames.value[id] || fallback[id] || '平台' + id
   }
 
   return { platformNames, load, getName }

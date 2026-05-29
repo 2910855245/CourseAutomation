@@ -26,6 +26,7 @@ def cleanup_orphan_tmpdirs(max_age_hours: int = 24) -> int:
 
 def cleanup_old_audit_logs(days: int = 30) -> int:
     try:
+        from sqlalchemy import delete
         from api.database import db
         with db._session_scope() as session:
             from api.database import AuditLog
@@ -41,6 +42,7 @@ def cleanup_old_audit_logs(days: int = 30) -> int:
 
 def cleanup_old_orders(days: int = 30) -> int:
     try:
+        from sqlalchemy import delete
         from api.database import db
         with db._session_scope() as session:
             from api.database import Order

@@ -3,9 +3,8 @@ import sys
 import threading
 import time
 import unicodedata
+import os
 from datetime import datetime
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import COURSE_DIR
 from infrastructure.rich_ui import console

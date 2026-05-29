@@ -1,6 +1,5 @@
 """题目获取模块"""
 
-import re
 from typing import Dict, List
 
 import httpx
@@ -70,8 +69,15 @@ class TopicFetcher:
                     'error': msg,
                 }
 
-        url = f"{self.base_url}/user/work?workId={work_id}&courseId={course_id}&nodeId={node_id}"
-        resp = self.session.get(url, timeout=15)
+        # 优先使用 start_work 返回的 URL（考试页面需要用 exam URL）
+        page_url = start_res.get('url', '')
+        if page_url:
+            if page_url.startswith('/'):
+                page_url = f"{self.base_url}{page_url}"
+            resp = self.session.get(page_url, timeout=15)
+        else:
+            url = f"{self.base_url}/user/work?workId={work_id}&courseId={course_id}&nodeId={node_id}"
+            resp = self.session.get(url, timeout=15)
         html = resp.text
 
         # 检测是作业还是考试
@@ -105,9 +111,7 @@ class TopicFetcher:
 
         if not topics:
             # 降级到原有的解析方式
-            topic_items = soup.select('.topic-item, .question-item, .topic, .question')
-            if not topic_items:
-                topic_items = soup.find_all('div', class_=re.compile(r'topic|question'))
+            topic_items = soup.select('.topic-item, .question-item, .topic, .question, div.topic, div.question')
             for idx, item in enumerate(topic_items, 1):
                 topic = self._parse_single_topic(item, idx)
                 if topic:
@@ -127,6 +131,9 @@ class TopicFetcher:
     def _parse_topics_from_forms(self, soup: BeautifulSoup) -> List[Dict]:
         """从 form 元素解析题目（考试页面结构：每题一个 form）"""
         topics = []
+
+        # 检测是否有文件上传按钮（项目提交题型）
+        has_uploader = bool(soup.find('a', class_='uploader-btn'))
 
         # 提取 topic-head 链接中的 data-id（这是真正的 answerId）
         topic_heads = soup.find_all('a', class_='topic-head')
@@ -156,6 +163,14 @@ class TopicFetcher:
             if not question:
                 continue
 
+            # 提取完整题目描述（包含 <p> 标签中的要求）
+            question_parts = [question]
+            for p in form.find_all('p'):
+                p_text = p.get_text(strip=True)
+                if p_text and p_text not in question:
+                    question_parts.append(p_text)
+            full_question = '\n'.join(question_parts)
+
             # 提取选项
             options = []
             list_el = form.find('div', class_='list')
@@ -171,16 +186,26 @@ class TopicFetcher:
             q_type = type_el.get_text(strip=True) if type_el else ''
             is_choice = '单选' in q_type or '多选' in q_type or '判断' in q_type
 
+            # 判断是否为项目提交题（简答 + 文件上传）
+            is_project = has_uploader and ('简答' in q_type or '上传' in full_question or '压缩' in full_question or '提交' in full_question)
+
             # 使用 topic-head 的 data-id 作为 answer_id（服务器需要这个来识别题目）
             answer_id = head_id_map.get(idx, str(number))
+
+            if is_project:
+                topic_type = 'project'
+            elif is_choice:
+                topic_type = 'choice'
+            else:
+                topic_type = 'text'
 
             topics.append({
                 'number': number,
                 'topic_id': answer_id,
                 'answer_id': answer_id,
-                'question': question,
+                'question': full_question,
                 'options': options,
-                'type': 'choice' if is_choice else 'text',
+                'type': topic_type,
                 'q_type': q_type,
             })
 
@@ -189,14 +214,16 @@ class TopicFetcher:
     def _parse_single_topic(self, item, number: int) -> Dict:
         text = item.get_text(separator='\n', strip=True)
 
-        answer_id_el = item.find(attrs={'name': re.compile(r'answerId|topic_id')})
+        answer_id_el = item.select_one('input[name="answerId"], input[name="topic_id"]')
         answer_id = answer_id_el.get('value', '') if answer_id_el else ''
 
-        topic_id_el = item.find(attrs={'name': re.compile(r'topicId|topic_id')})
+        topic_id_el = item.select_one('input[name="topicId"], input[name="topic_id"]')
         topic_id = topic_id_el.get('value', '') if topic_id_el else answer_id
 
         options = []
-        option_els = item.find_all(['label', 'span', 'div'], class_=re.compile(r'option|choice'))
+        option_els = item.select('label.option, label.choice, span.option, span.choice, div.option, div.choice')
+        if not option_els:
+            option_els = item.find_all('label')
         for opt in option_els:
             opt_text = opt.get_text(strip=True)
             if opt_text and len(opt_text) < 200:
@@ -212,20 +239,38 @@ class TopicFetcher:
         }
 
     def _parse_topics_regex(self, html: str) -> List[Dict]:
+        """用 BeautifulSoup 从 hidden input / topic-head 链接中提取题目ID"""
+        soup = BeautifulSoup(html, 'html.parser')
         topics = []
-        pattern = r'topicId["\s:=]+(\d+)'
-        ids = re.findall(pattern, html)
-        if not ids:
-            pattern = r'answerId["\s:=]+(\d+)'
-            ids = re.findall(pattern, html)
+        seen = set()
 
-        for idx, tid in enumerate(ids, 1):
-            topics.append({
-                'number': idx,
-                'topic_id': tid,
-                'answer_id': tid,
-                'question': f'题目{idx}',
-                'options': [],
-                'type': 'choice',
-            })
+        # 从 hidden input 提取 topicId / answerId
+        for inp in soup.find_all('input', type='hidden'):
+            name = inp.get('name', '') or inp.get('id', '')
+            value = inp.get('value', '')
+            if name in ('topicId', 'answerId', 'topic_id') and value and value not in seen:
+                seen.add(value)
+                topics.append({
+                    'number': len(topics) + 1,
+                    'topic_id': value,
+                    'answer_id': value,
+                    'question': f'题目{len(topics)+1}',
+                    'options': [],
+                    'type': 'choice',
+                })
+
+        # 从 topic-head 链接提取 data-id
+        for a in soup.find_all('a', class_='topic-head'):
+            data_id = a.get('data-id', '')
+            if data_id and data_id not in seen:
+                seen.add(data_id)
+                topics.append({
+                    'number': len(topics) + 1,
+                    'topic_id': data_id,
+                    'answer_id': data_id,
+                    'question': a.get_text(strip=True) or f'题目{len(topics)+1}',
+                    'options': [],
+                    'type': 'choice',
+                })
+
         return topics

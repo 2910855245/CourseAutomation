@@ -82,6 +82,18 @@ class UserDBMixin:
         finally:
             session.close()
 
+    def get_user_by_login(self, login_name: str) -> Optional[Dict[str, Any]]:
+        """登录查找：先按 user_id 查，再按 username 查"""
+        User, _, _ = _resolve_models()
+        session = self._get_session()
+        try:
+            user = session.scalars(
+                select(User).filter(or_(User.user_id == login_name, User.username == login_name))
+            ).first()
+            return _user_to_dict(user) if user else None
+        finally:
+            session.close()
+
     def get_user_balance(self, user_id: str) -> float:
         User, _, _ = _resolve_models()
         session = self._get_session()
@@ -106,6 +118,27 @@ class UserDBMixin:
         finally:
             session.close()
 
+    def soft_delete_user(self, user_id: str) -> bool:
+        User, _, _ = _resolve_models()
+        session = self._get_session()
+        try:
+            user = session.scalars(select(User).filter(User.user_id == user_id)).first()
+            if not user or user.deleted_at:
+                return False
+            if user.role == "admin":
+                return False
+            session.execute(update(User).filter(User.user_id == user_id).values(
+                deleted_at=datetime.now().isoformat()
+            ))
+            session.commit()
+            return True
+        except Exception as e:
+            logger.exception("soft_delete_user 失败")
+            session.rollback()
+            return False
+        finally:
+            session.close()
+
     def update_user(self, user_id: str, **fields) -> bool:
         User, _, _ = _resolve_models()
         if not fields:
@@ -122,20 +155,26 @@ class UserDBMixin:
         finally:
             session.close()
 
-    def list_users(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    def list_users(self, limit: int = 100, offset: int = 0, include_deleted: bool = False) -> List[Dict[str, Any]]:
         User, _, _ = _resolve_models()
         session = self._get_session()
         try:
-            users = session.scalars(select(User).order_by(User.created_at.desc()).offset(offset).limit(limit)).all()
+            stmt = select(User).order_by(User.created_at.desc())
+            if not include_deleted:
+                stmt = stmt.where(User.deleted_at.is_(None))
+            users = session.scalars(stmt.offset(offset).limit(limit)).all()
             return [_user_to_dict(u) for u in users]
         finally:
             session.close()
 
-    def count_users(self) -> int:
+    def count_users(self, include_deleted: bool = False) -> int:
         User, _, _ = _resolve_models()
         session = self._get_session()
         try:
-            return session.scalar(select(func.count(User.user_id)))
+            stmt = select(func.count(User.user_id))
+            if not include_deleted:
+                stmt = stmt.where(User.deleted_at.is_(None))
+            return session.scalar(stmt)
         finally:
             session.close()
 
@@ -159,40 +198,47 @@ class UserDBMixin:
             session.close()
 
     def list_users_with_agents(self, role: str = None, agent_status: str = None,
-                               search: str = None, limit: int = 100, offset: int = 0) -> Dict[str, Any]:
+                               search: str = None, limit: int = 100, offset: int = 0,
+                               include_deleted: bool = False, include_admin: bool = False) -> Dict[str, Any]:
         User, Agent, _ = _resolve_models()
         session = self._get_session()
         try:
             # Agent.user_id 存的是 username（历史原因），所以用 username 关联
             query = select(User, Agent).outerjoin(Agent, User.username == Agent.user_id)
-            count_query = session.scalar(select(func.count(User.user_id))).outerjoin(Agent, User.username == Agent.user_id)
+            count_query = select(func.count(User.user_id)).outerjoin(Agent, User.username == Agent.user_id)
+            if not include_deleted:
+                query = query.where(User.deleted_at.is_(None))
+                count_query = count_query.where(User.deleted_at.is_(None))
+            if not include_admin:
+                query = query.where(User.role != "admin")
+                count_query = count_query.where(User.role != "admin")
 
             if role and role != 'all':
                 if role == 'agent':
-                    stmt = stmt.where(Agent.agent_id.isnot(None))
+                    query = query.where(Agent.agent_id.isnot(None))
                     count_query = count_query.where(Agent.agent_id.isnot(None))
                 elif role == 'customer':
-                    stmt = stmt.where(Agent.agent_id.is_(None))
+                    query = query.where(Agent.agent_id.is_(None))
                     count_query = count_query.where(Agent.agent_id.is_(None))
                 else:
-                    stmt = stmt.where(User.role == role)
+                    query = query.where(User.role == role)
                     count_query = count_query.where(User.role == role)
 
             if agent_status and agent_status != 'all':
                 if agent_status == 'none':
-                    stmt = stmt.where(Agent.agent_id.is_(None))
+                    query = query.where(Agent.agent_id.is_(None))
                     count_query = count_query.where(Agent.agent_id.is_(None))
                 else:
-                    stmt = stmt.where(Agent.status == agent_status)
+                    query = query.where(Agent.status == agent_status)
                     count_query = count_query.where(Agent.status == agent_status)
 
             if search:
                 like = f"%{search}%"
-                stmt = stmt.where(or_(User.username.like(like), User.nickname.like(like)))
+                query = query.where(or_(User.username.like(like), User.nickname.like(like)))
                 count_query = count_query.where(or_(User.username.like(like), User.nickname.like(like)))
 
-            total = count_session.scalar(stmt)
-            rows = query.order_by(User.created_at.desc()).offset(offset).limit(limit).all()
+            total = session.scalar(count_query)
+            rows = session.execute(query.order_by(User.created_at.desc()).offset(offset).limit(limit)).all()
 
             items = []
             for user, agent in rows:

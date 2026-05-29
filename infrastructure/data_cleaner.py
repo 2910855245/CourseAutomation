@@ -35,15 +35,17 @@ def classify_video(raw_video: dict) -> dict:
     duration_sec = int(raw_video.get("duration", 0))
     if duration_sec <= 0:
         duration_sec = parse_duration(raw_video.get("videoDuration", "0"))
-    viewed_sec = parse_duration(raw_video.get("viewedDuration", "0"))
     progress = float(raw_video.get("progress", 0))
+    # API的viewedDuration不可靠(部分观看也返完整时长), 用progress*duration推算真实已看秒数
+    viewed_sec = int(duration_sec * progress)
 
     raw_state = clean_html(raw_video.get("state", ""))
+    # 信任API的state字段，仅当state不可用时才用progress推算
     if raw_state and raw_state not in VIDEO_NOT_DONE:
-        status = raw_state
-    elif progress >= 100 or viewed_sec >= duration_sec > 0:
+        status = raw_state  # API明确标记已学
+    elif progress >= 1.0:
         status = "已学"
-    elif viewed_sec > 0:
+    elif progress > 0:
         status = "未学完"
     elif raw_state:
         status = raw_state
@@ -90,7 +92,8 @@ def classify_exam(raw_exam: dict, now: float = None) -> dict:
     """
     submit_status = clean_html(raw_exam.get("state", "")) or "未交"
     time_status = _parse_time_status(raw_exam.get("startTime"), raw_exam.get("endTime"), now)
-    is_actionable = submit_status == "未交" and time_status == "进行中"
+    # 继续做题/在做 = 用户已开始但未提交，可操作
+    is_actionable = (submit_status in ("未交", "继续做题", "在做")) and time_status == "进行中"
 
     final_score = clean_html(raw_exam.get("finalScore", "-"))
 
@@ -103,6 +106,9 @@ def classify_exam(raw_exam: dict, now: float = None) -> dict:
         and float(score_str) > 0
     )
 
+    # 考试已结束且未提交(且不是"继续做题"状态) → 视为已完成（用户无法再操作）
+    is_expired = submit_status == "未交" and time_status == "已结束"
+
     return {
         "course_name": raw_exam.get("course_name", ""),
         "course_id": raw_exam.get("course_id", ""),
@@ -112,7 +118,7 @@ def classify_exam(raw_exam: dict, now: float = None) -> dict:
         "submit_status": submit_status,
         "time_status": time_status,
         "is_actionable": is_actionable,
-        "is_done": submit_status in EXAM_DONE_KEYWORDS or has_valid_score,
+        "is_done": submit_status in EXAM_DONE_KEYWORDS or has_valid_score or is_expired,
         "is_deleted": False,
         "final_score": final_score,
         "start_time": raw_exam.get("startTime", ""),

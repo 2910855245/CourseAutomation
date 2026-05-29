@@ -26,6 +26,7 @@ const {
   payBatchId, payBatchOutTradeNo, showPaySuccess, footerAds, paySuccessAmount, payTimedOut,
   handleOrderSuccess, goToOrders, submitAndPay, onPaySuccessDone, closePay, savePayQr, switchPayMethod,
   danmakuList, earnBtnY, earnPointerDown, earnClick, pct, pctClass, LS_KEY,
+  showAnnouncement, announcementContent, checkAnnouncement, dismissAnnouncement,
 } = useHomeState()
 
 onBeforeUnmount(() => {
@@ -37,6 +38,7 @@ onMounted(async () => {
   detectUserRole()
   document.addEventListener('visibilitychange', handleVisibilityChange)
   loadPlatformNames()
+  checkAnnouncement()
   try {
     const res = await api.pricing.get()
     if (res.data) {
@@ -192,7 +194,7 @@ onMounted(async () => {
                 <input v-model="chaoxingPassword" type="password" placeholder="请输入密码" :disabled="scanning" @keyup.enter="startChaoxingScan" />
               </div>
               <button class="btn btn-primary btn-lg btn-block" :disabled="scanning" @click="startChaoxingScan">
-                <span v-if="!scanning">登录扫描</span>
+                <span v-if="!scanning">登录</span>
                 <span v-else class="btn-loading">
                   <span class="spinner"></span>
                   扫描中...
@@ -206,19 +208,6 @@ onMounted(async () => {
         <div v-if="rescanning" class="rescan-overlay">
           <span class="spinner-lg"></span>
           <p>正在刷新数据...</p>
-        </div>
-        <div v-if="loginError === 'partial'" class="partial-warning">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
-            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-          </svg>
-          <span>以下平台登录失败，已自动跳过：</span>
-          <div v-for="fp in failedPlatforms" :key="fp.name" class="pw-tag-row">
-            <span class="pw-tag">{{ fp.name }}: {{ fp.error }}</span>
-            <button class="btn btn-relogin" @click="openReloginDialog(fp.website_id, fp.name)">
-重新输入密码
-</button>
-          </div>
         </div>
         <div v-if="submittedCourseIds.size > 0" class="submitted-banner">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -400,11 +389,19 @@ AI智能答题考试
               <span class="sb-item">已选 <strong>{{ summary.courses }}</strong> 门课程</span>
             </div>
             <div class="sb-right">
-              <span class="sb-price">¥{{ summary.total.toFixed(2) }}</span>
-              <button class="btn btn-primary btn-lg" :disabled="paying || summary.courses === 0" @click="submitAndPay">
-                <span v-if="!paying">提交并支付</span>
-                <span v-else class="btn-loading"><span class="spinner"></span>提交中</span>
-              </button>
+              <template v-if="isPrivileged">
+                <button class="btn btn-primary btn-lg" :disabled="paying || summary.courses === 0" @click="submitAndPay">
+                  <span v-if="!paying">加入队列</span>
+                  <span v-else class="btn-loading"><span class="spinner"></span>提交中</span>
+                </button>
+              </template>
+              <template v-else>
+                <span class="sb-price">¥{{ summary.total.toFixed(2) }}</span>
+                <button class="btn btn-primary btn-lg" :disabled="paying || summary.courses === 0" @click="submitAndPay">
+                  <span v-if="!paying">提交并支付</span>
+                  <span v-else class="btn-loading"><span class="spinner"></span>提交中</span>
+                </button>
+              </template>
             </div>
           </template>
           <template v-else>
@@ -414,19 +411,27 @@ AI智能答题考试
               <span v-if="summary.exams > 0" class="sb-item"><strong>{{ summary.exams }}</strong> 场考试</span>
             </div>
             <div class="sb-right">
-              <div class="sb-detail">
-                <template v-if="summary.breakdown.length > 0">
-                  <span v-for="(b, i) in summary.breakdown.slice(0, 3)" :key="i" class="sb-detail-item">
-                    {{ b.name.length > 10 ? b.name.slice(0, 10) + '...' : b.name }} ({{ b.videos }}节) ¥{{ b.price.toFixed(2) }}
-                  </span>
-                  <span v-if="summary.breakdown.length > 3" class="sb-detail-item">...共 {{ summary.breakdown.length }} 门课</span>
-                </template>
-                <span class="sb-price">¥{{ summary.total.toFixed(2) }}</span>
-              </div>
-              <button class="btn btn-primary btn-lg" :disabled="paying || summary.courses === 0" @click="submitAndPay">
-                <span v-if="!paying">提交并支付</span>
-                <span v-else class="btn-loading"><span class="spinner"></span>提交中</span>
-              </button>
+              <template v-if="isPrivileged">
+                <button class="btn btn-primary btn-lg" :disabled="paying || summary.courses === 0" @click="submitAndPay">
+                  <span v-if="!paying">加入队列</span>
+                  <span v-else class="btn-loading"><span class="spinner"></span>提交中</span>
+                </button>
+              </template>
+              <template v-else>
+                <div class="sb-detail">
+                  <template v-if="summary.breakdown.length > 0">
+                    <span v-for="(b, i) in summary.breakdown.slice(0, 3)" :key="i" class="sb-detail-item">
+                      {{ b.name.length > 10 ? b.name.slice(0, 10) + '...' : b.name }} ({{ b.videos }}节) ¥{{ b.price.toFixed(2) }}
+                    </span>
+                    <span v-if="summary.breakdown.length > 3" class="sb-detail-item">...共 {{ summary.breakdown.length }} 门课</span>
+                  </template>
+                  <span class="sb-price">¥{{ summary.total.toFixed(2) }}</span>
+                </div>
+                <button class="btn btn-primary btn-lg" :disabled="paying || summary.courses === 0" @click="submitAndPay">
+                  <span v-if="!paying">提交并支付</span>
+                  <span v-else class="btn-loading"><span class="spinner"></span>提交中</span>
+                </button>
+              </template>
             </div>
           </template>
         </div>
@@ -488,6 +493,22 @@ AI智能答题考试
     </div>
 
     <PaymentSuccess :visible="showPaySuccess" :amount="paySuccessAmount" subtitle="订单已提交" @done="onPaySuccessDone" />
+
+    <!-- 系统公告弹窗 -->
+    <Teleport to="body">
+      <div v-if="showAnnouncement" class="announcement-overlay" @click.self="dismissAnnouncement">
+        <div class="announcement-box">
+          <div class="announcement-header">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+            <h3>系统公告</h3>
+          </div>
+          <div class="announcement-body" v-html="announcementContent"></div>
+          <button class="btn btn-primary btn-block announcement-confirm" @click="dismissAnnouncement">
+我知道了
+</button>
+        </div>
+      </div>
+    </Teleport>
 
     <footer class="page-footer" :class="{ 'hide-on-mobile-results': scanDone }">
       <div class="footer-divider-wrap">
@@ -1571,8 +1592,9 @@ AI智能答题考试
   .results {
     display: flex;
     flex-direction: column;
-    padding: 12px 0 0;
+    padding: 12px 0 140px;
     position: relative;
+    min-height: 100vh;
   }
   .results-topbar {
     flex-shrink: 0;
@@ -1638,10 +1660,9 @@ AI智能答题考试
   .sb-price { font-size: 20px; }
   .sb-right .btn-lg { width: 100%; }
 
-  /* 为固定底栏留出空间 */
   .results .plan-select,
-  .results .platform-block:last-child {
-    padding-bottom: 120px;
+  .results .platform-block {
+    margin-bottom: 6px;
   }
 
   .page-footer { padding: 12px 16px 16px; margin-top: 0; }
@@ -1673,5 +1694,63 @@ AI智能答题考试
   .relogin-header { padding: 16px 18px 0; }
   .relogin-body { padding: 12px 18px; }
   .relogin-footer { padding: 10px 18px 16px; }
+}
+
+/* 系统公告弹窗 */
+.announcement-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  background: rgba(0,0,0,.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn .15s ease;
+}
+.announcement-box {
+  background: #fff;
+  border-radius: 16px;
+  width: 420px;
+  max-width: 90vw;
+  box-shadow: 0 20px 60px rgba(0,0,0,.2);
+  overflow: hidden;
+  animation: slideUp .2s ease;
+}
+.announcement-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 24px 24px 0;
+  color: var(--c-primary, #4f6ef7);
+}
+.announcement-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--c-text, #1e293b);
+}
+.announcement-header svg {
+  flex-shrink: 0;
+  color: var(--c-primary, #4f6ef7);
+}
+.announcement-body {
+  padding: 16px 24px 24px;
+  font-size: 14px;
+  color: var(--c-text-secondary, #475569);
+  line-height: 1.7;
+  max-height: 50vh;
+  overflow-y: auto;
+  word-break: break-word;
+}
+.announcement-confirm {
+  margin: 0 24px 24px;
+  width: calc(100% - 48px);
+}
+
+@media (max-width: 768px) {
+  .announcement-box { width: 92vw; }
+  .announcement-header { padding: 18px 18px 0; }
+  .announcement-body { padding: 12px 18px 18px; }
+  .announcement-confirm { margin: 0 18px 18px; width: calc(100% - 36px); }
 }
 </style>

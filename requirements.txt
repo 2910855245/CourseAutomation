@@ -3,8 +3,7 @@ fastapi>=0.100.0
 uvicorn>=0.23.0               # 开发模式（生产用 granian）
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
-granian>=2.0.0                 # Rust ASGI 服务器（生产环境）
-uvloop>=0.19.0                 # Rust 事件循环（granian 配套）
+granian>=1.4.0                 # Rust ASGI 服务器（生产环境）
 
 # --- HTTP 客户端 ---
 httpx[http2]>=0.25.0            # 通用 HTTP + HTTP/2
