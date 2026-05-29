@@ -39,7 +39,9 @@ class JobExecutor:
             if not self._db_claim(job_id):
                 logger.warning(f"任务认领失败（已被其他调度器取走） job_id={job_id}")
                 return
-            self._clear_password(job_id)
+            # 学习通任务不清密码（daily_done后需要保留密码供明天重试）
+            if job.website_id != 4:
+                self._clear_password(job_id)
             logger.info(f"任务开始执行 job_id={job_id} username={job.username}")
 
             from api.services.task_runner import TaskRunner
