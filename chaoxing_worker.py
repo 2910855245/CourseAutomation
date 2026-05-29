@@ -647,6 +647,12 @@ def run_task(params_file, status_file):
                         _api_key = DEEPSEEK_API_KEY
                     except Exception:
                         pass
+                if not _api_key:
+                    try:
+                        from api.database import db
+                        _api_key = db.config_get('deepseek_api_key') or ''
+                    except Exception:
+                        pass
                 if clid:
                     try:
                         s_done, s_fail, s_skip = _study_must_learn(

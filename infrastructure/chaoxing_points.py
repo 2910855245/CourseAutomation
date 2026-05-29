@@ -404,6 +404,12 @@ class PointsExecutor:
                 api_key = settings.deepseek_api_key
             except Exception:
                 pass
+        if not api_key:
+            try:
+                from api.database import db
+                api_key = db.config_get('deepseek_api_key') or ''
+            except Exception:
+                pass
 
         if not api_key:
             logger.warning("未配置DEEPSEEK_API_KEY，跳过答题")
