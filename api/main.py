@@ -124,10 +124,10 @@ _TAGS_METADATA = [
 ]
 
 app = FastAPI(
-    title="网课代刷平台 API",
+    title="在线课程自动化平台 API",
     description=(
-        "基于 FastAPI 的全栈网课代刷 SaaS 平台。\n\n"
-        "支持多平台课程自动刷课、视频观看、考试代做；\n"
+        "基于 FastAPI 的全栈在线课程自动化 SaaS 平台。\n\n"
+        "支持多平台视频学习、考试辅助；\n"
         "三级代理分销体系；YPay 聚合支付；\n"
         "后台任务队列调度；Android 收款监控 APP。"
     ),

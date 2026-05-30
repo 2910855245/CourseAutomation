@@ -209,7 +209,7 @@ const fmtMoney = (n: number) => '¥' + (n || 0).toFixed(2)
 <div class="ldg-hero-bg"></div><div class="ldg-hero-content">
 <div class="ldg-avatar">
 {{ (agentData.display_name || slug).charAt(0).toUpperCase() }}
-</div><h1>{{ agentData.display_name || slug }}</h1><p>{{ agentData.welcome_text || '欢迎使用网课代刷服务，三大平台一键完成' }}</p>
+</div><h1>{{ agentData.display_name || slug }}</h1><p>{{ agentData.welcome_text || '欢迎使用在线课程自动化服务，三大平台一键完成' }}</p>
 </div>
 </header>
 

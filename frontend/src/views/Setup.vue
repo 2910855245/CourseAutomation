@@ -129,7 +129,7 @@ onUnmounted(() => {
                 </div>
               </div>
               <h1 class="welcome-title">
-                网课代刷平台
+                在线课程自动化平台
               </h1>
               <p class="welcome-desc">
                 智能高效 · 一站搞定
@@ -1354,7 +1354,7 @@ onUnmounted(() => {
     </div>
 
     <p class="page-bottom-hint">
-      © 2025 网课代刷平台 · 安装完成后此页面将自动禁用
+      © 2025 在线课程自动化平台 · 安装完成后此页面将自动禁用
     </p>
   </div>
 </template>
