@@ -16,7 +16,7 @@ class AIAnswerer:
         self.model = model
         self._cache: Dict[str, str] = {}
 
-    def ask_one_topic(self, topic: Dict) -> Dict:
+    def ask_one_topic(self, topic: Dict, max_retries: int = 3) -> Dict:
         cache_key = topic.get('question', '')[:100]
         if cache_key in self._cache:
             return {'answer': self._cache[cache_key], 'confidence': 1.0}
@@ -26,20 +26,82 @@ class AIAnswerer:
 
         prompt = self._build_prompt(topic)
         token_limit = 1024
+
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                resp = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    max_tokens=token_limit,
+                    logprobs=True,
+                    top_logprobs=5,
+                    timeout=30,
+                )
+                content = resp.choices[0].message.content.strip()
+                answer = self._extract_answer(content, is_choice=is_choice)
+
+                # 如果答案为空且还有重试机会，继续重试
+                if not answer and attempt < max_retries - 1:
+                    logger.warning(f"AI返回空答案，重试 {attempt + 1}/{max_retries}")
+                    time.sleep(1)
+                    continue
+
+                # 计算置信度
+                confidence = self._calc_confidence(resp, answer, is_choice)
+
+                self._cache[cache_key] = answer
+                return {'answer': answer, 'confidence': confidence, 'raw': content}
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    logger.warning(f"AI调用失败，重试 {attempt + 1}/{max_retries}: {e}")
+                    time.sleep(2)
+                    continue
+
+        logger.error(f"AI回答失败（已重试{max_retries}次）: {last_error}")
+        return {'answer': '', 'confidence': 0, 'error': str(last_error)}
+
+    def _calc_confidence(self, resp, answer: str, is_choice: bool) -> float:
+        """根据 logprobs 和答案质量计算置信度"""
+        import math
+
+        # 如果没有答案，置信度为0
+        if not answer:
+            return 0.0
+
+        # 尝试从 logprobs 计算
         try:
-            resp = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=token_limit,
-            )
-            content = resp.choices[0].message.content.strip()
-            answer = self._extract_answer(content, is_choice=is_choice)
-            self._cache[cache_key] = answer
-            return {'answer': answer, 'confidence': 0.9, 'raw': content}
-        except Exception as e:
-            logger.error(f"AI回答失败: {e}")
-            return {'answer': '', 'confidence': 0, 'error': str(e)}
+            choice = resp.choices[0]
+            if choice.logprobs and choice.logprobs.content:
+                # 计算平均 logprob
+                logprobs = []
+                for token_info in choice.logprobs.content[:5]:  # 只看前5个token
+                    if token_info.logprob is not None:
+                        logprobs.append(token_info.logprob)
+
+                if logprobs:
+                    avg_logprob = sum(logprobs) / len(logprobs)
+                    # 转换为 0-1 的置信度
+                    # logprob 通常是负数，越接近0越自信
+                    # e^(-1) ≈ 0.37, e^(0) = 1.0
+                    confidence = min(1.0, max(0.1, math.exp(avg_logprob)))
+                    return round(confidence, 2)
+        except Exception:
+            pass
+
+        # 降级：基于答案格式的启发式判断
+        if is_choice:
+            # 选择题：答案格式正确就给较高置信度
+            if answer in 'ABCDEFGH' or (len(answer) <= 4 and all(c in 'ABCDEFGH' for c in answer)):
+                return 0.85
+            return 0.6
+        else:
+            # 填空题：有答案就给中等置信度
+            if len(answer) > 0:
+                return 0.75
+            return 0.5
 
     def _build_prompt(self, topic: Dict) -> str:
         question = topic.get('question', '')
@@ -133,8 +195,11 @@ class WorkSubmitter:
             "Accept": "application/json, text/javascript, */*; q=0.01",
             "Referer": self.referer_url,
         }
+        logger.debug(f"提交数据: url={url}, data={data}")
         resp = self.session.post(url, data=data, headers=headers, timeout=15)
-        return self._safe_json(resp)
+        result = self._safe_json(resp)
+        logger.debug(f"提交结果: {result}")
+        return result
 
     def _get_submit_url(self) -> str:
         if self.submit_type == 'exam':
@@ -144,7 +209,16 @@ class WorkSubmitter:
     def _get_id_key(self) -> str:
         return 'examId' if self.submit_type == 'exam' else 'workId'
 
-    def submit_topic(self, answer_id: str, answer: str, q_type: str = '') -> Dict:
+    def submit_topic(self, answer_id: str, answer: str, q_type: str = '',
+                     blank_count: int = 0) -> Dict:
+        """提交单题答案
+
+        Args:
+            answer_id: 题目ID
+            answer: 答案内容
+            q_type: 题型（单选/多选/判断/填空/简答）
+            blank_count: 填空题的空格数量（用于生成 answer_1, answer_2 等字段）
+        """
         url = self._get_submit_url()
         is_choice = '单选' in q_type or '多选' in q_type or '判断' in q_type
 
@@ -165,16 +239,29 @@ class WorkSubmitter:
             }
             resp = self.session.post(url, content=urlencode(pairs).encode(), headers=headers, timeout=15)
             return self._safe_json(resp)
-        elif not is_choice:
-            # 非选择题（填空/简答）
-            data = {
-                'answer': answer,
-                'answerId': answer_id,
-                self._get_id_key(): str(self.work_id),
-            }
+        elif '填空' in q_type and blank_count > 0:
+            # 填空题: 需要 answer_1, answer_2 等格式
+            from urllib.parse import urlencode
+            parts = [p.strip() for p in answer.split(',') if p.strip()]
+            pairs = [('answerId', answer_id), (self._get_id_key(), str(self.work_id))]
+            for i in range(blank_count):
+                val = parts[i] if i < len(parts) else (parts[-1] if parts else answer)
+                pairs.append((f'answer_{i+1}', val))
             if self.submit_type == 'exam' and self.node_id:
-                data['nodeId'] = self.node_id
+                pairs.append(('nodeId', self.node_id))
+            logger.debug(f"填空题提交: answer_id={answer_id}, blank_count={blank_count}, pairs={pairs}")
+            headers = {
+                "X-Requested-With": "XMLHttpRequest",
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "Referer": self.referer_url,
+                "Content-Type": "application/x-www-form-urlencoded",
+            }
+            resp = self.session.post(url, content=urlencode(pairs).encode(), headers=headers, timeout=15)
+            result = self._safe_json(resp)
+            logger.debug(f"填空题结果: {result}")
+            return result
         else:
+            # 单选/判断/简答
             data = {
                 'answer': answer,
                 'answerId': answer_id,
@@ -199,7 +286,16 @@ class WorkSubmitter:
             data['nodeId'] = self.node_id
         return self._post_json(url, data)
 
-    def final_submit(self, answer_id: str = '', answer: str = '') -> Dict:
+    def final_submit(self, answer_id: str = '', answer: str = '',
+                     q_type: str = '', blank_count: int = 0) -> Dict:
+        """交卷提交
+
+        Args:
+            answer_id: 最后一题的ID
+            answer: 最后一题的答案
+            q_type: 最后一题的题型
+            blank_count: 填空题的空格数量
+        """
         url = self._get_submit_url()
         data = {
             self._get_id_key(): str(self.work_id),
@@ -208,9 +304,17 @@ class WorkSubmitter:
         if answer_id:
             data['answerId'] = answer_id
         if answer:
-            data['answer'] = answer
+            # 填空题使用 answer_1 格式
+            if '填空' in q_type and blank_count > 0:
+                parts = [p.strip() for p in answer.split(',') if p.strip()]
+                for i in range(blank_count):
+                    val = parts[i] if i < len(parts) else (parts[-1] if parts else answer)
+                    data[f'answer_{i+1}'] = val
+            else:
+                data['answer'] = answer
         if self.submit_type == 'exam' and self.node_id:
             data['nodeId'] = self.node_id
+        logger.debug(f"交卷数据: {data}")
         return self._post_json(url, data)
 
 

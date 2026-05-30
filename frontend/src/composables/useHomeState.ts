@@ -288,7 +288,7 @@ export function useHomeState() {
     scanning.value = true; submitSuccess.value = false; allDone.value = false
     loginError.value = null; failedPlatforms.value = []; countdown.value = 3; loginErrorCountdown.value = 3
     try {
-      const res = await api.courses.scan({ username: username.value.trim(), password: password.value.trim(), include_records: true })
+      const res = await api.courses.scan({ username: username.value.trim(), password: password.value.trim(), include_records: false })
       scanData.value = res.data.platforms
       const okPlatforms = scanData.value.filter(p => p.status === 'ok')
       const failed = scanData.value.filter(p => p.status !== 'ok')

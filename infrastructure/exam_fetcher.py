@@ -159,7 +159,17 @@ class TopicFetcher:
 
             # 提取题目文本
             name_el = form.find('div', class_='name')
-            question = name_el.get_text(strip=True) if name_el else ''
+            if not name_el:
+                continue
+
+            # 填空题：将 <input> 标签替换为占位符 _____
+            name_html = str(name_el)
+            import re
+            name_html = re.sub(r'<input[^>]*class="exam-input"[^>]*/?>', ' _____ ', name_html)
+            # 移除其他HTML标签，保留文本
+            question = re.sub(r'<[^>]+>', '', name_html)
+            question = re.sub(r'\s+', ' ', question).strip()
+
             if not question:
                 continue
 
@@ -199,6 +209,12 @@ class TopicFetcher:
             else:
                 topic_type = 'text'
 
+            # 统计填空题的空格数量
+            blank_count = 0
+            if '填空' in q_type:
+                blank_inputs = form.find_all('input', class_='exam-input')
+                blank_count = len(blank_inputs) if blank_inputs else 1
+
             topics.append({
                 'number': number,
                 'topic_id': answer_id,
@@ -207,6 +223,7 @@ class TopicFetcher:
                 'options': options,
                 'type': topic_type,
                 'q_type': q_type,
+                'blank_count': blank_count,
             })
 
         return topics

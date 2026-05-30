@@ -200,7 +200,8 @@ def load_course_cache(username: str, website_id: int, course_id: str) -> Optiona
 
 def scan_platform(username: str, password: str, website_id: int,
                   include_records: bool = True,
-                  platform_name: str = None) -> dict:
+                  platform_name: str = None,
+                  force_refresh: bool = False) -> dict:
     """扫描单个平台全部课程
 
     返回: {website_id, name, status, student_name, courses, tasks}
@@ -213,7 +214,14 @@ def scan_platform(username: str, password: str, website_id: int,
     # 学习通使用独立的登录流程
     website_info = WEBSITES.get(website_id, {})
     if website_info.get("type") == "chaoxing":
-        return scan_chaoxing(username, password, account_name=username)
+        return scan_chaoxing(username, password, account_name=username, force_refresh=force_refresh)
+
+    # 检查缓存
+    if not force_refresh:
+        cached = load_scan_cache(username, website_id)
+        if cached:
+            logger.info(f"学校平台扫描命中缓存 username={username} website_id={website_id}")
+            return cached
 
     # 1. 登录
     try:
@@ -366,14 +374,52 @@ def _discover_and_match() -> Dict[int, Dict]:
 
 
 def scan_all_platforms(username: str, password: str,
-                       include_records: bool = True) -> list:
-    """扫描所有平台（先从学校官网发现平台列表）"""
+                       include_records: bool = True,
+                       force_refresh: bool = False) -> list:
+    """扫描所有平台（并行扫描）"""
+    import concurrent.futures
+
     platforms = _discover_and_match()
+
+    # 检查缓存
+    if not force_refresh:
+        all_cached = True
+        cached_results = []
+        for wid in sorted(platforms.keys()):
+            cached = load_scan_cache(username, wid)
+            if cached:
+                cached_results.append(cached)
+            else:
+                all_cached = False
+                break
+        if all_cached and cached_results:
+            logger.info(f"学校平台扫描命中缓存 username={username}")
+            return cached_results
+
+    # 并行扫描所有平台
+    def _scan_one(wid):
+        pinfo = platforms.get(wid, {})
+        return scan_platform(username, password, wid, include_records,
+                             platform_name=pinfo.get("name"), force_refresh=force_refresh)
+
     results = []
-    for wid, pinfo in platforms.items():
-        result = scan_platform(username, password, wid, include_records,
-                               platform_name=pinfo.get("name"))
-        results.append(result)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {pool.submit(_scan_one, wid): wid for wid in platforms.keys()}
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                results.append(future.result())
+            except Exception as e:
+                wid = futures[future]
+                logger.error(f"平台扫描失败 website_id={wid}: {e}")
+                results.append({
+                    "website_id": wid,
+                    "name": platforms.get(wid, {}).get("name", ""),
+                    "status": "error",
+                    "error": str(e),
+                    "courses": [],
+                    "tasks": [],
+                })
+
     results.sort(key=lambda x: x["website_id"])
     return results
 
@@ -394,7 +440,52 @@ def get_actionable_tasks_all(username: str, password: str,
     return all_tasks
 
 
-def scan_chaoxing(username: str, password: str, account_name: str = "") -> dict:
+_chaoxing_cache: Dict[str, dict] = {}  # 内存缓存 {username: {data, ts}}
+_chaoxing_cookies: Dict[str, dict] = {}  # Cookie 缓存 {username: {cookie_str, ts}}
+_CHAOXING_CACHE_TTL = 300  # 内存缓存 5 分钟
+_COOKIE_CACHE_TTL = 1800  # Cookie 缓存 30 分钟
+
+
+def _try_cached_session(username: str, password: str):
+    """尝试用缓存的 cookie 创建会话（跳过登录）"""
+    from infrastructure.chaoxing_session import ChaoxingSession
+
+    # 检查内存 cookie 缓存
+    if username in _chaoxing_cookies:
+        cached = _chaoxing_cookies[username]
+        if time.time() - cached["ts"] < _COOKIE_CACHE_TTL:
+            session = ChaoxingSession(cached["cookie_str"])
+            if session.verify():
+                logger.info(f"学习通cookie缓存有效 username={username}")
+                return session
+            else:
+                logger.info(f"学习通cookie缓存过期 username={username}")
+                del _chaoxing_cookies[username]
+
+    # 检查文件 cookie 缓存
+    from config import get_account_cookies_path
+    cookie_path = get_account_cookies_path(username)
+    if os.path.exists(cookie_path):
+        try:
+            with open(cookie_path, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in data)
+            else:
+                cookie_str = "; ".join(f"{k}={v}" for k, v in data.items())
+            session = ChaoxingSession(cookie_str)
+            if session.verify():
+                logger.info(f"学习通cookie文件有效 username={username}")
+                _chaoxing_cookies[username] = {"cookie_str": cookie_str, "ts": time.time()}
+                return session
+        except Exception:
+            pass
+
+    return None
+
+
+def scan_chaoxing(username: str, password: str, account_name: str = "",
+                   force_refresh: bool = False) -> dict:
     """扫描学习通平台（账号密码登录）
 
     返回: {website_id, name, status, student_name, courses, tasks}
@@ -402,21 +493,47 @@ def scan_chaoxing(username: str, password: str, account_name: str = "") -> dict:
     from infrastructure.chaoxing_session import ChaoxingSession
     from infrastructure.chaoxing.scanner import scan_chaoxing as _scan
 
-    session = ChaoxingSession()
-    if not session.login(username, password):
-        return {
-            "website_id": 4,
-            "name": "学习通",
-            "status": "login_failed",
-            "error": "账号或密码错误",
-            "courses": [],
-            "tasks": [],
-        }
+    cache_key = account_name or username
+
+    # 1. 检查内存缓存
+    if not force_refresh and cache_key in _chaoxing_cache:
+        cached = _chaoxing_cache[cache_key]
+        if time.time() - cached["ts"] < _CHAOXING_CACHE_TTL:
+            logger.info(f"学习通扫描命中内存缓存 username={cache_key}")
+            return cached["data"]
+
+    # 2. 检查文件缓存
+    if not force_refresh:
+        cached = load_scan_cache(cache_key, 4)
+        if cached:
+            logger.info(f"学习通扫描命中文件缓存 username={cache_key}")
+            _chaoxing_cache[cache_key] = {"data": cached, "ts": time.time()}
+            return cached
+
+    # 3. 尝试用缓存 cookie（跳过登录）
+    session = None
+    if not force_refresh:
+        session = _try_cached_session(username, password)
+
+    # 4. Cookie 无效，重新登录
+    if session is None:
+        session = ChaoxingSession()
+        if not session.login(username, password):
+            return {
+                "website_id": 4,
+                "name": "学习通",
+                "status": "login_failed",
+                "error": "账号或密码错误",
+                "courses": [],
+                "tasks": [],
+            }
+        # 缓存 cookie
+        _chaoxing_cookies[username] = {"cookie_str": session.cookie_str, "ts": time.time()}
 
     result = _scan(session)
 
-    # 缓存结果
-    if account_name:
-        save_scan_cache(account_name, 4, result)
+    # 5. 写入缓存
+    _chaoxing_cache[cache_key] = {"data": result, "ts": time.time()}
+    save_scan_cache(cache_key, 4, result)
 
     return result

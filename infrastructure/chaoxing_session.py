@@ -289,3 +289,44 @@ class ChaoxingSession:
                 cookies[parts[5]] = parts[6]
         cookie_str = '; '.join(f'{k}={v}' for k, v in cookies.items())
         return ChaoxingSession(cookie_str)
+
+
+class SessionPool:
+    """线程安全的会话池 — 为并发任务提供独立 session"""
+
+    def __init__(self, username: str, password: str, pool_size: int = 8):
+        import queue
+        self._queue = queue.Queue()
+        self._username = username
+        self._password = password
+        self._pool_size = pool_size
+        self._initialized = False
+
+    def _init_pool(self):
+        """延迟初始化：创建多个 session 并登录"""
+        if self._initialized:
+            return
+        self._initialized = True
+        logger.info(f"初始化会话池 size={self._pool_size}")
+        for i in range(self._pool_size):
+            try:
+                s = ChaoxingSession()
+                if s.login(self._username, self._password):
+                    self._queue.put(s)
+                else:
+                    logger.warning(f"会话池初始化登录失败 index={i}")
+            except Exception as e:
+                logger.warning(f"会话池初始化异常 index={i} error={str(e)}")
+        logger.info(f"会话池初始化完成 actual_size={self._queue.qsize()}")
+
+    def get(self) -> ChaoxingSession:
+        """获取一个 session（阻塞等待）"""
+        self._init_pool()
+        return self._queue.get(timeout=60)
+
+    def put(self, session: ChaoxingSession):
+        """归还 session"""
+        self._queue.put(session)
+
+    def size(self) -> int:
+        return self._queue.qsize()

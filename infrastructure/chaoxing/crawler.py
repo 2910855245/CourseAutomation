@@ -368,15 +368,29 @@ def fetch_knowledge_completion(session: ChaoxingSession, course_id: str, class_i
 
 
 def fetch_must_learn_completion(session: ChaoxingSession, course_id: str, class_id: str,
-                                 cpi: str, must_learn_kids: list) -> dict:
-    """批量检查必学知识点的完成状态
+                                 cpi: str, must_learn_kids: list,
+                                 concurrency: int = 5) -> dict:
+    """批量检查必学知识点的完成状态（并发版）
 
     返回: {kid: {video_done, video_total, quiz_done, quiz_total, read_done, read_total, all_done}}
     """
+    import concurrent.futures
+
     result = {}
-    for kid in must_learn_kids:
-        result[kid] = fetch_knowledge_completion(session, course_id, class_id, cpi, kid)
-        time.sleep(0.3)
+
+    def _check_one(kid):
+        try:
+            return kid, fetch_knowledge_completion(session, course_id, class_id, cpi, kid)
+        except Exception as e:
+            logger.debug(f"必学检查失败 kid={kid} error={str(e)}")
+            return kid, {"video_done": 0, "video_total": 0, "quiz_done": 0, "quiz_total": 0,
+                         "read_done": 0, "read_total": 0, "all_done": False}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = {pool.submit(_check_one, kid): kid for kid in must_learn_kids}
+        for future in concurrent.futures.as_completed(futures):
+            kid, status = future.result()
+            result[kid] = status
 
     done_count = sum(1 for v in result.values() if v["all_done"])
     logger.info(f"必学完成状态 course={course_id} total={len(must_learn_kids)} done={done_count}")
@@ -384,15 +398,29 @@ def fetch_must_learn_completion(session: ChaoxingSession, course_id: str, class_
 
 
 def fetch_all_video_completion(session: ChaoxingSession, course_id: str, class_id: str,
-                                cpi: str, knowledge_ids: list, concurrency: int = 5) -> dict:
+                                cpi: str, knowledge_ids: list, concurrency: int = 30,
+                                quick_mode: bool = False, sample_size: int = 20) -> dict:
     """批量检查所有知识点的视频完成状态（并发版）
 
     通过 cards API 的 mArg.attachments[].isPassed 判断每个视频是否完成。
     比积分推算精确得多。
 
+    Args:
+        quick_mode: 快速模式，只抽查 sample_size 个视频，其余按比例推算
+        sample_size: 快速模式下的抽查数量
+
     返回: {kid: bool}  True=视频已学完, False=未学完
     """
     import concurrent.futures
+    import random
+
+    # 快速模式：只抽查部分视频
+    if quick_mode and len(knowledge_ids) > sample_size:
+        sampled = random.sample(knowledge_ids, sample_size)
+        remaining = [k for k in knowledge_ids if k not in sampled]
+    else:
+        sampled = knowledge_ids
+        remaining = []
 
     def _check_one(kid):
         try:
@@ -416,14 +444,29 @@ def fetch_all_video_completion(session: ChaoxingSession, course_id: str, class_i
     result = {}
     done_count = 0
 
-    # 并发查询
+    # 并发查询抽查部分
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
-        futures = {pool.submit(_check_one, kid): kid for kid in knowledge_ids}
+        futures = {pool.submit(_check_one, kid): kid for kid in sampled}
         for future in concurrent.futures.as_completed(futures):
             kid, passed = future.result()
             result[kid] = passed
             if passed:
                 done_count += 1
 
-    logger.info(f"视频完成状态 course={course_id} total={len(knowledge_ids)} done={done_count}")
+    # 快速模式：按抽查比例推算剩余视频
+    if remaining and sampled:
+        done_rate = done_count / len(sampled)
+        estimated_done = int(len(remaining) * done_rate)
+        # 随机标记剩余视频
+        random.shuffle(remaining)
+        for kid in remaining[:estimated_done]:
+            result[kid] = True
+        for kid in remaining[estimated_done:]:
+            result[kid] = False
+        done_count += estimated_done
+        logger.info(f"快速抽查 course={course_id} sampled={len(sampled)}/{len(knowledge_ids)} "
+                    f"done_rate={done_rate:.1%} estimated_total={done_count}")
+    else:
+        logger.info(f"视频完成状态 course={course_id} total={len(knowledge_ids)} done={done_count}")
+
     return result

@@ -89,15 +89,26 @@ class AIService:
                 exam_model = _cached_config("deepseek_homework_model", "deepseek-v4-flash")
             answerer = AIAnswerer(self.api_key, model=exam_model)
             answers = {}
+            blank_counts = {}  # 记录每题的空格数量
             for topic in topics:
                 tid = topic["topic_id"]
+                q_type = topic.get("q_type", "")
+                question = topic.get("question", "")
+
+                # 获取填空题的空格数量（从 topic 数据中）
+                blank_count = topic.get('blank_count', 0)
+                blank_counts[tid] = blank_count
+
                 ai_res = answerer.ask_one_topic(topic)
                 answer = ai_res.get("answer", "").strip()
-                if not answer:
-                    q_type = topic.get("q_type", "")
-                    is_ch = '单选' in q_type or '多选' in q_type or '判断' in q_type
-                    answer = "A" if is_ch else "暂无"
-                answers[tid] = answer
+
+                # 如果AI没有返回答案，标记为空
+                if not answer or answer == "暂无":
+                    answers[tid] = ""
+                    logger.warning(f"第{topic.get('number', '?')}题 AI未返回答案")
+                else:
+                    answers[tid] = answer
+
                 logger.info(f"第{topic.get('number', '?')}题 -> {answer} (置信度 {ai_res.get('confidence', 0)})")
                 time.sleep(0.3)
 
@@ -109,20 +120,46 @@ class AIService:
             node_id = work_data.get("node_id", "")
             submitter = WorkSubmitter(self.session, base, real_work_id, submit_type=submit_type, node_id=node_id)
             submitted = 0
+            skipped = 0
             last_aid = ""
             for topic in topics:
                 aid = topic.get("answer_id", topic.get("topic_id", ""))
                 last_aid = aid
-                ans = answers.get(topic["topic_id"], answers.get(aid, "A"))
+                ans = answers.get(topic["topic_id"], answers.get(aid, ""))
                 q_type = topic.get("q_type", "")
-                ret = submitter.submit_topic(aid, ans, q_type=q_type)
+                blank_count = blank_counts.get(topic["topic_id"], 0)
+
+                # 如果答案为空，跳过提交
+                if not ans:
+                    skipped += 1
+                    logger.warning(f"跳过 {aid}：AI未返回答案")
+                    continue
+
+                ret = submitter.submit_topic(aid, ans, q_type=q_type, blank_count=blank_count)
                 if ret.get("status") is False:
                     logger.error(f"提交 {aid} 失败: {ret.get('msg')}")
                 else:
                     submitted += 1
                 time.sleep(0.5)
 
-            final = submitter.final_submit(last_aid, answers.get(last_aid, "A"))
+            # 如果有题目被跳过（AI未返回答案），拒绝交卷
+            if skipped > 0:
+                logger.error(f"有 {skipped} 道题AI未返回答案，拒绝交卷")
+                return {
+                    "success": False,
+                    "total": len(topics),
+                    "submitted": submitted,
+                    "skipped": skipped,
+                    "final": None,
+                    "error": f"AI未返回{skipped}道题的答案，拒绝交卷",
+                }
+
+            # 获取最后一题的题型和空格数
+            last_topic = topics[-1] if topics else {}
+            last_q_type = last_topic.get("q_type", "")
+            last_blank_count = blank_counts.get(last_topic.get("topic_id", ""), 0)
+            final = submitter.final_submit(last_aid, answers.get(last_aid, "A"),
+                                           q_type=last_q_type, blank_count=last_blank_count)
             logger.info(f"交卷结果: {final}")
 
             ok = submitted > 0 and final.get("status") is not False

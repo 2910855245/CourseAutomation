@@ -24,6 +24,7 @@ class ScanRequest(BaseModel):
     username: str = Field(..., min_length=1, description="平台学号")
     password: str = Field(..., min_length=1, description="平台密码")
     include_records: bool = Field(default=True, description="是否包含学习记录(较慢)")
+    force_refresh: bool = Field(default=False, description="强制刷新，忽略缓存")
 
 
 class ReloginRequest(BaseModel):
@@ -35,7 +36,8 @@ class ReloginRequest(BaseModel):
 
 @router.post("/scan", response_model=ApiResponse)
 def scan_platforms(req: ScanRequest, current_user: dict = Depends(get_optional_user)):
-    results = scan_all_platforms(req.username, req.password, req.include_records)
+    results = scan_all_platforms(req.username, req.password, req.include_records,
+                                  force_refresh=req.force_refresh)
 
     total_courses = sum(len(r["courses"]) for r in results)
     ok_platforms = sum(1 for r in results if r["status"] == "ok")
@@ -62,6 +64,7 @@ def relogin_platform(req: ReloginRequest, current_user: dict = Depends(get_optio
 class ChaoxingScanRequest(BaseModel):
     username: str = Field(..., min_length=1, description="学习通账号（手机号）")
     password: str = Field(..., min_length=1, description="学习通密码")
+    force_refresh: bool = Field(default=False, description="强制刷新，忽略缓存")
 
 
 @router.post("/scan/chaoxing", response_model=ApiResponse)
@@ -69,7 +72,7 @@ def scan_chaoxing(req: ChaoxingScanRequest, current_user: dict = Depends(get_opt
     """学习通账号密码扫描"""
     from services.scan_service import scan_chaoxing
 
-    result = scan_chaoxing(req.username, req.password)
+    result = scan_chaoxing(req.username, req.password, force_refresh=req.force_refresh)
 
     total_courses = len(result.get("courses", []))
     status = result.get("status", "error")
