@@ -873,7 +873,7 @@ onUnmounted(() => {
           >
             <div class="step-head">
               <h2>AI 答题配置</h2>
-              <p>配置 DeepSeek API Key，AI 将自动完成考试答题（可跳过）</p>
+              <p>配置 DeepSeek API Key，AI 将自动完成考试答题（必填）</p>
             </div>
             <div
               class="pricing-grid"
@@ -908,7 +908,7 @@ onUnmounted(() => {
                     rel="noopener"
                     style="color:#4f6ef7;text-decoration:none"
                   >platform.deepseek.com</a>
-                  &nbsp;·&nbsp; 不配置则考试需手动完成
+                  &nbsp;·&nbsp; 必须配置才能使用AI答题功能
                 </p>
               </div>
             </div>
@@ -926,12 +926,6 @@ onUnmounted(() => {
                 上一步
               </button>
               <div style="display:flex;gap:10px">
-                <button
-                  class="btn-ghost"
-                  @click="skipAiKey"
-                >
-                  跳过
-                </button>
                 <button
                   v-if="completedSteps.has(7)"
                   class="btn-primary btn-lg"
