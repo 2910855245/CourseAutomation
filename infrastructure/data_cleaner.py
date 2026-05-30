@@ -115,6 +115,8 @@ def classify_exam(raw_exam: dict, now: float = None) -> dict:
         "name": raw_exam.get("title", raw_exam.get("name", "")),
         "work_id": raw_exam.get("id", ""),
         "node_id": raw_exam.get("nodeId", ""),
+        "chapter_id": raw_exam.get("chapterId", ""),
+        "exam_url": raw_exam.get("url", ""),
         "submit_status": submit_status,
         "time_status": time_status,
         "is_actionable": is_actionable,

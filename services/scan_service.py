@@ -25,7 +25,7 @@ _config_lock = threading.Lock()
 _DELETED_MARKERS = ["已不存在", "已被删除", "可能已被删除", "信息已不存在"]
 
 
-def _verify_exam_exists(session, base_url: str, work_id, node_id, course_id) -> bool:
+def _verify_exam_exists(session, base_url: str, work_id, node_id, course_id, chapter_id: str = "") -> bool:
     """尝试访问考试/作业页面，确认是否真的存在。
 
     返回 True 表示存在（或无法确认删除），False 表示明确已删除。
@@ -40,10 +40,16 @@ def _verify_exam_exists(session, base_url: str, work_id, node_id, course_id) -> 
     wid = int(work_id) if str(work_id).isdigit() else work_id
     cid = int(course_id) if str(course_id).isdigit() else 0
     nid = int(node_id) if str(node_id).isdigit() else 0
+    chid = int(chapter_id) if chapter_id and str(chapter_id).isdigit() else 0
 
     try:
-        # 直接 GET 页面检测，不调用 start_work（避免消耗答题机会）
-        exam_page_url = f"{base}/user/work?workId={wid}&courseId={cid}&nodeId={nid}"
+        # 优先使用 /user/node/exam URL（正确的考试页面格式）
+        if chid:
+            exam_page_url = f"{base}/user/node/exam?courseId={cid}&chapterId={chid}&nodeId={nid}"
+        else:
+            # 回退到旧格式
+            exam_page_url = f"{base}/user/work?workId={wid}&courseId={cid}&nodeId={nid}"
+
         resp = safe_request(session, exam_page_url)
         if not resp:
             return True  # 请求失败时保守认为存在
@@ -122,7 +128,8 @@ def scan_course(session, course_id: str, course_name: str,
     for exam in cleaned.get("exams", []):
         need_verify = exam.get("is_actionable") or "未交" in exam.get("submit_status", "")
         if need_verify:
-            if not _verify_exam_exists(session, base_url, exam["work_id"], exam["node_id"], course_id):
+            chapter_id = exam.get("chapter_id", "")
+            if not _verify_exam_exists(session, base_url, exam["work_id"], exam["node_id"], course_id, chapter_id):
                 exam["is_deleted"] = True
                 exam["is_actionable"] = False
                 exam["is_done"] = True
@@ -132,7 +139,8 @@ def scan_course(session, course_id: str, course_name: str,
     for work in cleaned.get("works", []):
         need_verify = work.get("is_actionable") or "未交" in work.get("submit_status", "")
         if need_verify:
-            if not _verify_exam_exists(session, base_url, work["work_id"], work["node_id"], course_id):
+            chapter_id = work.get("chapter_id", "")
+            if not _verify_exam_exists(session, base_url, work["work_id"], work["node_id"], course_id, chapter_id):
                 work["is_deleted"] = True
                 work["is_actionable"] = False
                 work["is_done"] = True
