@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount } from 'vue'
+import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { api, type CourseItem } from '@/api'
 import { usePlatformNames } from '@/composables/usePlatformNames'
@@ -29,7 +29,27 @@ const {
   showAnnouncement, announcementContent, checkAnnouncement, dismissAnnouncement,
 } = useHomeState()
 
+// 所有任务进行中时，3秒后自动跳转订单页
+const autoRedirectCountdown = ref(3)
+let autoRedirectTimer: ReturnType<typeof setInterval> | null = null
+
+watch(allInProgress, (val) => {
+  if (val) {
+    autoRedirectCountdown.value = 3
+    autoRedirectTimer = setInterval(() => {
+      autoRedirectCountdown.value--
+      if (autoRedirectCountdown.value <= 0) {
+        if (autoRedirectTimer) { clearInterval(autoRedirectTimer); autoRedirectTimer = null }
+        goToOrders()
+      }
+    }, 1000)
+  } else {
+    if (autoRedirectTimer) { clearInterval(autoRedirectTimer); autoRedirectTimer = null }
+  }
+})
+
 onBeforeUnmount(() => {
+  if (autoRedirectTimer) { clearInterval(autoRedirectTimer); autoRedirectTimer = null }
   if (payPollTimer.value) { clearTimeout(payPollTimer.value); payPollTimer.value = null }
   document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
@@ -89,9 +109,6 @@ onMounted(async () => {
           <div class="countdown">
 {{ countdown }} 秒后返回登录页面
 </div>
-          <button class="btn btn-primary" :disabled="isLeaving" @click="resetScan">
-立即返回
-</button>
         </div>
       </div>
 
@@ -105,14 +122,7 @@ onMounted(async () => {
           </div>
           <h1>所有任务正在进行中</h1>
           <p>所有课程已提交下单，系统正在自动刷课处理中，请耐心等待</p>
-          <div style="display:flex;gap:12px;justify-content:center;margin-top:8px">
-            <button class="btn btn-primary" @click="goToOrders">
-查看订单进度
-</button>
-            <button class="btn btn-outline" :disabled="isLeaving" @click="resetScan">
-返回主页
-</button>
-          </div>
+          <p style="margin-top:12px;font-size:14px;color:var(--c-text-secondary)">{{ autoRedirectCountdown }}秒后自动跳转到订单页面...</p>
         </div>
       </div>
 

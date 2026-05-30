@@ -771,7 +771,12 @@ def solve_quiz(session: ChaoxingSession, work_url: str,
         return {'success': True, 'total': len(questions), 'cached': cached is not None, 'submitted': False}
 
     status, result = submit_answers(session, form_params, questions, answers)
+    logger.info(f"提交响应 status={status} body={result[:200]}")
     if status == 200:
+        # 检查响应体是否包含错误
+        if any(kw in result for kw in ['已截止', '已提交', '失败', '错误', 'error', '"code":-1']):
+            logger.warning(f"提交返回200但内容异常: {result[:200]}")
+            return {'success': False, 'total': len(questions), 'error': f'提交异常: {result[:100]}'}
         logger.info("提交成功")
         return {'success': True, 'total': len(questions), 'cached': cached is not None, 'submitted': True}
     else:

@@ -32,3 +32,6 @@ start_mysql.py
 
 # Sensitive credentials (NEVER commit)
 .env.local
+
+# Large files
+*.pkl
