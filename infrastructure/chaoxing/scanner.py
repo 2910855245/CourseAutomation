@@ -196,12 +196,12 @@ def scan_chaoxing(session: ChaoxingSession, quick_mode: bool = True) -> dict:
                 no_points=len(no_points),
                 ended_skipped=ended_count)
 
-    # 6. 汇总积分
+    # 6. 汇总积分（取所有课程中积分最高的，因为积分是账号级别的不是课程级别的）
     total_points = 0
     for c in courses:
-        pts = c.get('points', {})
-        if pts and pts.get('total') is not None:
-            total_points = max(total_points, pts['total'])
+        pts = c.get('points_total', 0)
+        if pts:
+            total_points = max(total_points, pts)
 
     return {
         "website_id": 4,
