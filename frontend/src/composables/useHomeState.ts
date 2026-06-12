@@ -132,11 +132,12 @@ export function useHomeState() {
   const checkedCourseIds = ref(new Set<string>(savedData.value?.checkedIds || []))
 
   function isCourseDone(c: CourseItem): boolean {
-    // 学习通：积分达标 且 无待完成作业
+    // 学习通：积分达标 且 无待完成作业 且 无待完成视频
     if (c.has_points_system !== undefined) {
       const pointsOk = !c.has_points_system || ((c.points_remaining ?? 0) <= 0)
       const workOk = (c.work_pending ?? 0) <= 0
-      return pointsOk && workOk
+      const videoOk = (c.video_pending ?? 0) <= 0
+      return pointsOk && workOk && videoOk
     }
     // 学校平台：视频完成 且 考试完成
     return c.video_pending === 0 && (c.exam_total === 0 || c.exam_done >= c.exam_total)
@@ -288,7 +289,7 @@ export function useHomeState() {
     scanning.value = true; submitSuccess.value = false; allDone.value = false
     loginError.value = null; failedPlatforms.value = []; countdown.value = 3; loginErrorCountdown.value = 3
     try {
-      const res = await api.courses.scan({ username: username.value.trim(), password: password.value.trim(), include_records: false })
+      const res = await api.courses.scan({ username: username.value.trim(), password: password.value.trim(), include_records: true })
       scanData.value = res.data.platforms
       const okPlatforms = scanData.value.filter(p => p.status === 'ok')
       const failed = scanData.value.filter(p => p.status !== 'ok')
@@ -303,8 +304,7 @@ export function useHomeState() {
         failedPlatforms.value = failed.map(p => ({ website_id: p.website_id, name: p.name, error: p.error || '登录失败' }))
         const failMsg = failed.map(p => `${p.name}: ${p.error || '登录失败'}`).join('\n')
         store.toast(`以下平台登录失败，已自动跳过：\n${failMsg}`, 'warning')
-        setTimeout(() => { resetScan() }, 2000)
-        return
+        // 不再 resetScan，继续显示成功平台的课程列表
       }
       const pendingCount = scanData.value.reduce((sum, p) => sum + p.courses.filter(c => !isCourseDone(c)).length, 0)
       if (pendingCount === 0) {

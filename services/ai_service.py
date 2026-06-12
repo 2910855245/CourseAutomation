@@ -121,6 +121,7 @@ class AIService:
             submitter = WorkSubmitter(self.session, base, real_work_id, submit_type=submit_type, node_id=node_id)
             submitted = 0
             skipped = 0
+            failed_topics = []  # 记录提交失败的题目
             last_aid = ""
             for topic in topics:
                 aid = topic.get("answer_id", topic.get("topic_id", ""))
@@ -135,12 +136,50 @@ class AIService:
                     logger.warning(f"跳过 {aid}：AI未返回答案")
                     continue
 
-                ret = submitter.submit_topic(aid, ans, q_type=q_type, blank_count=blank_count)
-                if ret.get("status") is False:
-                    logger.error(f"提交 {aid} 失败: {ret.get('msg')}")
-                else:
+                # 提交 + 重试
+                ok = False
+                for attempt in range(3):
+                    ret = submitter.submit_topic(aid, ans, q_type=q_type, blank_count=blank_count)
+                    if ret.get("status") is not False:
+                        ok = True
+                        break
+                    logger.warning(f"提交 {aid} 失败(第{attempt+1}次): {ret.get('msg')}")
+                    time.sleep(1)
+
+                if ok:
                     submitted += 1
+                else:
+                    logger.error(f"提交 {aid} 最终失败")
+                    failed_topics.append(topic)
                 time.sleep(0.5)
+
+            # 验证提交结果：重新获取题目，检查答案是否记录
+            if submitted > 0:
+                logger.info(f"提交完成 {submitted}/{len(topics)}，开始验证...")
+                verify_data = fetcher.fetch(wid, cid, nid)
+                verify_topics = verify_data.get("topics", [])
+                missing = []
+                for vt in verify_topics:
+                    vid = vt.get("answer_id", vt.get("topic_id", ""))
+                    # 找到对应原始题目
+                    orig = next((t for t in topics if t.get("answer_id") == vid), None)
+                    if orig:
+                        orig_ans = answers.get(orig["topic_id"], answers.get(vid, ""))
+                        if orig_ans and vid in [ft.get("answer_id", "") for ft in failed_topics]:
+                            missing.append((vid, orig_ans))
+
+                # 重试失败的题目
+                for aid, ans in missing:
+                    logger.info(f"重试提交 {aid} -> {ans}")
+                    q_type = next((t.get("q_type", "") for t in topics if t.get("answer_id") == aid), "")
+                    blank_count = blank_counts.get(aid, 0)
+                    for attempt in range(3):
+                        ret = submitter.submit_topic(aid, ans, q_type=q_type, blank_count=blank_count)
+                        if ret.get("status") is not False:
+                            submitted += 1
+                            failed_topics = [t for t in failed_topics if t.get("answer_id") != aid]
+                            break
+                        time.sleep(1)
 
             # 如果有题目被跳过（AI未返回答案），拒绝交卷
             if skipped > 0:

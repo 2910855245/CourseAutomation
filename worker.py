@@ -204,10 +204,12 @@ def run_task(params_file, status_file):
 
         # 优先用课程缓存（下单前扫描的详细结果，30分钟内有效）
         cached = load_course_cache(username, website_id, cid)
+        videos_from_cache = False
         if cached:
             send_status(status_file, phase="crawl", message=f"缓存命中 {i+1}/{len(courses)}: {cname}")
             logger.info("课程缓存命中: {} (id={})", cname, cid)
             all_videos.extend(cached.get("videos", []))
+            videos_from_cache = True
             cached_exams = cached.get("exams", []) + cached.get("works", [])
             non_done_exams = [e for e in cached_exams if not e.get("is_done") and not e.get("is_deleted") and e.get("time_status", "进行中") == "进行中"]
             skipped = len([e for e in cached_exams if not e.get("is_done") and not e.get("is_deleted")]) - len(non_done_exams)
@@ -216,7 +218,7 @@ def run_task(params_file, status_file):
                 logger.info("  缓存考试: {} 个可考, {} 个未到/已过期", len(non_done_exams), skipped)
             else:
                 logger.info("  缓存无可用考试数据，将实时获取")
-                cached = None  # 回退到实时扫描
+                cached = None  # 回退到实时扫描（仅重新获取考试，视频已从缓存加载）
 
         if not cached:
             send_status(status_file, phase="crawl", message=f"解析课程 {i+1}/{len(courses)}: {cname}")
@@ -224,7 +226,8 @@ def run_task(params_file, status_file):
 
             try:
                 result = scan_course(session, cid, cname)
-                all_videos.extend(result.get("videos", []))
+                if not videos_from_cache:
+                    all_videos.extend(result.get("videos", []))
                 fresh_exams = result.get("exams", []) + result.get("works", [])
                 non_done = [e for e in fresh_exams if not e.get("is_done") and not e.get("is_deleted") and e.get("time_status", "进行中") == "进行中"]
                 skipped = len([e for e in fresh_exams if not e.get("is_done") and not e.get("is_deleted")]) - len(non_done)

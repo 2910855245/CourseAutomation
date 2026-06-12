@@ -348,7 +348,7 @@ def _study_must_learn(session, cid, clid, cname, status_file, api_key=''):
                 result = process_knowledge_videos(
                     session, cid, kid, clid,
                     knowledge_name=kname,
-                    speed='normal',
+                    speed='fast',
                     dry_run=False,
                     on_progress=lambda pct: send_status(
                         status_file,
@@ -511,6 +511,33 @@ def send_status(status_file, **kwargs):
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp_file, status_file)
+    # 推送进度到 API（WebSocket 实时更新）
+    _push_ws_update(status_file, data)
+
+
+def _push_ws_update(status_file, data):
+    """通过 HTTP POST 推送进度更新到 API，触发 WebSocket 广播"""
+    try:
+        import urllib.request
+        payload = json.dumps({
+            "type": "progress",
+            "job_id": os.path.basename(os.path.dirname(status_file)),
+            "phase": data.get("phase", ""),
+            "progress": data.get("progress", 0),
+            "step_name": data.get("step_name", ""),
+            "course_name": data.get("course_name", ""),
+            "done": data.get("done", False),
+            "success": data.get("success", False),
+        }, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            "http://127.0.0.1:8000/api/progress/live/push",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=2)
+    except Exception:
+        pass
 
 
 def run_task(params_file, status_file):
@@ -531,10 +558,22 @@ def run_task(params_file, status_file):
 
     from infrastructure.chaoxing_session import ChaoxingSession
 
-    session = ChaoxingSession()
-    if not session.login(cx_username, cx_password):
-        send_status(status_file, phase="error", message="学习通登录失败，请检查账号密码", done=True, success=False)
-        return
+    # 先尝试用缓存的 Cookie（跳过登录）
+    session = None
+    try:
+        from services.scan_service import _try_cached_session
+        session = _try_cached_session(cx_username, cx_password)
+        if session:
+            logger.info(f"使用缓存Cookie登录 username={cx_username}")
+    except Exception as e:
+        logger.debug(f"尝试缓存Cookie失败: {e}")
+
+    # 缓存无效，重新登录
+    if session is None:
+        session = ChaoxingSession()
+        if not session.login(cx_username, cx_password):
+            send_status(status_file, phase="error", message="学习通登录失败，请检查账号密码", done=True, success=False)
+            return
 
     user_info = session.get_user_info()
     student_name = user_info.get('name', '未知')
@@ -628,7 +667,8 @@ def run_task(params_file, status_file):
                         course_name=cname,
                         message=f"[{cname}] 积分 {total}/{rule.target} 今日+{today_total}")
 
-            if executor.check_done(status):
+            points_done = executor.check_done(status)
+            if points_done:
                 logger.info(f"课程积分达标 course={cname}")
                 # 标记 heavy_done，让 TaskRunner 启动 monitor_study 追踪后续进度
                 send_status(status_file,
@@ -653,22 +693,38 @@ def run_task(params_file, status_file):
                         _api_key = db.config_get('deepseek_api_key') or ''
                     except Exception:
                         pass
+
+                must_learn_done = True
+                work_done = True
+
                 if clid:
                     try:
                         s_done, s_fail, s_skip = _study_must_learn(
                             session, cid, clid, cname, status_file, api_key=_api_key)
                         if s_done or s_fail:
                             logger.info(f"必学视频汇总 course={cname} done={s_done} failed={s_fail} skipped={s_skip}")
+                        if s_fail > 0:
+                            must_learn_done = False
                     except Exception as e:
                         logger.warning(f"必学视频阶段异常 course={cname} error={str(e)}")
+                        must_learn_done = False
+
                 if _api_key and clid:
                     try:
                         q_done, q_fail, q_skip = _solve_course_quizzes(
                             session, cid, clid, cname, status_file, _api_key)
                         if q_done or q_fail:
                             logger.info(f"答题汇总 course={cname} done={q_done} failed={q_fail} skipped={q_skip}")
+                        if q_fail > 0:
+                            work_done = False
                     except Exception as e:
                         logger.warning(f"答题阶段异常 course={cname} error={str(e)}")
+                        work_done = False
+
+                # 多维度判断：积分 + 必学 + 作业 全部完成才算 done
+                if not must_learn_done or not work_done:
+                    all_done = False
+                    logger.info(f"课程未全部完成 course={cname} points_done={points_done} must_learn_done={must_learn_done} work_done={work_done}")
                 continue
 
             all_done = False

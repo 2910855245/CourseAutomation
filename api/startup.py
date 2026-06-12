@@ -268,6 +268,13 @@ def run_startup(settings):
 
     _init_prices(db)
 
+    # 启动 Redis WebSocket 订阅线程（解决 granian 多进程广播问题）
+    try:
+        from api.routers.progress import _start_redis_subscriber
+        _start_redis_subscriber()
+    except Exception as e:
+        logger.warning("Redis WebSocket 订阅启动失败: {}", str(e))
+
     # 迁移旧表数据（如果有）
     migrate_old_queue_table()
 

@@ -63,7 +63,7 @@ async function startScan() {
   if (!username.value.trim() || !password.value.trim()) return
   scanning.value = true; scanDone.value = false
   try {
-    const res = await api.courses.scan({ username: username.value.trim(), password: password.value.trim(), include_records: false })
+    const res = await api.courses.scan({ username: username.value.trim(), password: password.value.trim(), include_records: true })
     scanData.value = res.data.platforms; scanDone.value = true
   } catch {}
   finally { scanning.value = false }

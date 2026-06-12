@@ -110,12 +110,20 @@ class AIAnswerer:
         is_choice = '单选' in q_type or '多选' in q_type or '判断' in q_type
         opt_text = '\n'.join(options) if options else ''
 
+        # 检测是否为编程题
+        lang_keywords = ['C语言', 'c语言', 'C++', 'c++', 'Python', 'python', 'Java', 'java',
+                         'JavaScript', 'javascript', 'Go', 'golang', 'Rust', 'rust',
+                         '编程', '代码', '程序', '算法', '函数', '循环', '数组']
+        is_programming = any(kw in question for kw in lang_keywords)
+
         if '多选' in q_type:
             type_hint = '这是一道多选题，有多个正确答案。请仔细分析每个选项，返回所有正确选项的字母（如 ABC、ABD），不要解释。注意：多选少选均不得分。'
         elif '判断' in q_type:
             type_hint = '这是一道判断题，A表示正确，B表示错误，只返回一个字母。请仔细分析题干中的关键词。'
         elif is_choice:
             type_hint = '这是一道单选题，请仔细分析所有选项后返回最准确的答案字母（如 A/B/C/D），不要解释。'
+        elif is_programming:
+            type_hint = '这是一道编程题，请直接返回完整的代码实现（包含必要的注释），不要只给答案。代码要能直接运行。'
         else:
             type_hint = '这是一道填空/简答题，请直接返回答案内容（不要返回选项字母），简洁作答，不要解释。'
 
@@ -446,34 +454,53 @@ class AIWorkRunner:
                 ans = 'A'
                 submit_ok = 0
                 submit_fail = 0
+                failed_aids = []
                 for topic in work_data['topics']:
                     aid = topic.get('answer_id', topic.get('topic_id', ''))
                     last_aid = aid
                     ans = answers.get(topic['topic_id'], answers.get(aid, 'A'))
                     q_type = topic.get('q_type', '')
-                    # 最多重试 2 次
+                    # 最多重试 3 次
+                    ok = False
                     for attempt in range(3):
                         try:
                             ret = submitter.submit_topic(aid, ans, q_type=q_type)
                         except Exception as e:
-                            logger.warning(f"提交异常(网络波动)，重试 {attempt+1}/2: {e}")
-                            if attempt < 2:
-                                time.sleep(1)
-                                continue
-                            submit_fail += 1
-                            break
+                            logger.warning(f"提交异常(网络波动)，重试 {attempt+1}/3: {e}")
+                            time.sleep(1)
+                            continue
                         if ret.get('status') is False:
-                            if attempt < 2:
-                                logger.warning(f"答案保存异常(网络波动)，重试 {attempt+1}/2")
-                                time.sleep(1)
-                                continue
-                            logger.error(f"答案保存失败(网络超时/服务器繁忙)：{aid}")
-                            submit_fail += 1
-                        else:
-                            submit_ok += 1
-                            logger.info(f"已提交 {aid} -> {ans}")
+                            logger.warning(f"答案保存异常，重试 {attempt+1}/3")
+                            time.sleep(1)
+                            continue
+                        ok = True
                         break
+                    if ok:
+                        submit_ok += 1
+                        logger.info(f"已提交 {aid} -> {ans}")
+                    else:
+                        submit_fail += 1
+                        failed_aids.append((aid, ans, q_type))
+                        logger.error(f"答案保存失败：{aid}")
                     time.sleep(0.5)
+
+                # 验证并重试失败的题目
+                if failed_aids:
+                    logger.info(f"验证提交结果，{len(failed_aids)} 题需重试...")
+                    verify_data = fetcher.fetch(work_id, course_id, node_id)
+                    for aid, ans, q_type in failed_aids:
+                        logger.info(f"重试提交 {aid} -> {ans}")
+                        for attempt in range(3):
+                            try:
+                                ret = submitter.submit_topic(aid, ans, q_type=q_type)
+                                if ret.get('status') is not False:
+                                    submit_ok += 1
+                                    submit_fail -= 1
+                                    break
+                            except Exception:
+                                pass
+                            time.sleep(1)
+
                 # 有题目提交失败则不交卷
                 if submit_fail > 0:
                     logger.error(f"有 {submit_fail} 道题因网络波动保存失败（成功 {submit_ok}），跳过交卷")

@@ -354,7 +354,56 @@ def _ensure_website_id(domain: str, name: str = "") -> int:
     mapping[domain] = new_id
     _save_website_map(mapping)
     logger.info(f"平台检测: 自动分配 website_id domain={domain} name={name} id={new_id}")
+
+    # 自动更新 config.py 中的 WEBSITES
+    _update_config_py_websites(new_id, name, f"https://{domain}")
+
     return new_id
+
+
+def _update_config_py_websites(website_id: int, name: str, base_url: str):
+    """自动更新 config.py 中的 WEBSITES 配置"""
+    import os
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "config.py")
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # 检查是否已存在
+        if base_url in content:
+            logger.info(f"config.py 已包含 {base_url}，跳过更新")
+            return
+
+        # 找到 WEBSITES 字典的开始位置
+        start_marker = "WEBSITES = {"
+        start_idx = content.find(start_marker)
+        if start_idx == -1:
+            logger.warning("config.py 中未找到 WEBSITES 字典")
+            return
+
+        # 找到匹配的结束大括号（处理嵌套）
+        depth = 0
+        end_idx = start_idx
+        for i in range(start_idx + len(start_marker) - 1, len(content)):
+            if content[i] == '{':
+                depth += 1
+            elif content[i] == '}':
+                depth -= 1
+                if depth == 0:
+                    end_idx = i
+                    break
+
+        # 在最后一个条目后、结束大括号前插入新条目
+        new_entry = f'\n    {website_id}: {{"name": "{name}", "base_url": "{base_url}"}},'
+        new_content = content[:end_idx] + new_entry + '\n' + content[end_idx:]
+
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+
+        logger.info(f"config.py 已更新: 添加 website_id={website_id} name={name} url={base_url}")
+    except Exception as e:
+        logger.error(f"更新 config.py 失败: {e}")
 
 
 def get_active_platforms() -> Dict[int, dict]:
@@ -456,7 +505,7 @@ def check_once() -> dict:
         resp = httpx.get(SCHOOL_URL, timeout=15, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         })
-        resp.encoding = resp.apparent_encoding
+        # httpx 自动检测编码，无需手动设置
         resp.raise_for_status()
     except Exception as e:
         result["errors"].append(f"访问学校官网失败: {e}")

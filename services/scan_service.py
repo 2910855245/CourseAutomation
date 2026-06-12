@@ -364,13 +364,14 @@ def _discover_and_match() -> Dict[int, Dict]:
     """从 domain_monitor 获取活跃平台列表（统一数据源）
 
     返回: {website_id: {name, base_url}, ...}
+    排除学习通（website_id=4），学习通使用单独的扫描函数
     """
     from api.services.domain_monitor import get_active_platforms
     platforms = get_active_platforms()
     if not platforms:
         logger.warning("平台发现失败，使用默认配置")
-        return dict(WEBSITES)
-    return {wid: {"name": p["name"], "base_url": p["base_url"]} for wid, p in platforms.items()}
+        return {wid: v for wid, v in WEBSITES.items() if wid != 4}
+    return {wid: {"name": p["name"], "base_url": p["base_url"]} for wid, p in platforms.items() if wid != 4}
 
 
 def scan_all_platforms(username: str, password: str,

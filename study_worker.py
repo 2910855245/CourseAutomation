@@ -35,6 +35,33 @@ def send_status(status_file, **kwargs):
             json.dump(data, f, ensure_ascii=False)
     except Exception:
         pass
+    # 推送进度到 API（WebSocket 实时更新）
+    _push_ws_update(status_file, data)
+
+
+def _push_ws_update(status_file, data):
+    """通过 HTTP POST 推送进度更新到 API，触发 WebSocket 广播"""
+    try:
+        import urllib.request
+        payload = json.dumps({
+            "type": "progress",
+            "job_id": os.path.basename(os.path.dirname(status_file)),
+            "phase": data.get("phase", ""),
+            "progress": data.get("progress", 0),
+            "step_name": data.get("step_name", ""),
+            "course_name": data.get("course_name", ""),
+            "done": data.get("done", False),
+            "success": data.get("success", False),
+        }, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            "http://127.0.0.1:8000/api/progress/live/push",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=2)
+    except Exception:
+        pass
 
 
 class LightStudyReporter:
@@ -312,6 +339,7 @@ class LightStudyReporter:
         actual_target = self.video_duration - self.viewed_duration
         # 视频已看完，等待 ratio 达标后标记完成
         if actual_target <= 0:
+            self.total_time = self.video_duration  # 修复：设置已观看时间
             self._wait_for_ratio()
             self.completed = True
             logger.info("[done] %s 已看完 (viewed=%d >= duration=%d)", self.video_name, self.viewed_duration, self.video_duration)
@@ -513,6 +541,10 @@ def _verify_platform_progress(base_url, session, videos):
         logger.info("[verify] 考试记录: %d/%d 有分数", exam_with_score, exam_total)
 
     if total_dur <= 0:
+        # 没有获取到任何视频数据，可能是会话过期
+        if not node_progress:
+            logger.warning("[verify] 未获取到任何视频进度数据，可能会话已过期")
+            return -1
         return 100
     return min(100, int(total_viewed / total_dur * 100))
 
@@ -553,15 +585,31 @@ def run(params_file, status_file, videos_file):
     LightStudyReporter._shared_password = password
     LightStudyReporter._shared_cookie_str = cookie_str
 
-    # 断点续传：加载检查点，过滤已完成的视频
+    # 断点续传：加载检查点，只跳过真正刷完的视频
     checkpoint_file = os.path.join(os.path.dirname(status_file), "checkpoint.json")
     checkpoint = _load_checkpoint(checkpoint_file)
-    completed_nodes = set(checkpoint.get("completed_nodes", []))
+    node_details = checkpoint.get("node_details", {})
+    completed_nodes = set()
 
-    if completed_nodes:
-        original_count = len(videos)
-        videos = [v for v in videos if v.get("node_id") not in completed_nodes]
-        logger.info(f"[checkpoint] 已跳过 {original_count - len(videos)} 个已完成视频，剩余 {len(videos)} 个")
+    # 只跳过 confirmed 完成的视频（有详细记录且 completed=True）
+    skip_count = 0
+    filtered_videos = []
+    for v in videos:
+        nid = v.get("node_id", "")
+        detail = node_details.get(nid)
+        if detail and detail.get("completed"):
+            skip_count += 1
+            completed_nodes.add(nid)
+        else:
+            filtered_videos.append(v)
+    if skip_count:
+        videos = filtered_videos
+        logger.info(f"[checkpoint] 已跳过 {skip_count} 个确认完成的视频，剩余 {len(videos)} 个")
+    if not videos:
+        logger.info("[checkpoint] 所有视频已完成，无需处理")
+        send_status(status_file, phase="done", done=True, success=True, video_pct=100,
+                    message="所有视频已完成（断点续传）")
+        return
 
     if not videos:
         logger.info("[checkpoint] 所有视频已完成，无需处理")
@@ -721,13 +769,22 @@ def run(params_file, status_file, videos_file):
             done = sum(1 for r in all_reporters if not r.is_alive)
             total_study = sum(min(r.total_time, r.video_duration) for r in all_reporters)
             total_dur = sum(r.video_duration for r in all_reporters)
-            # 收集已完成的视频节点ID
-            newly_completed = [r.node_id for r in all_reporters if r.completed and r.node_id not in completed_nodes]
 
         # 每60秒保存一次检查点
-        if time.time() - last_checkpoint_save > 60 or newly_completed:
-            if newly_completed:
-                completed_nodes.update(newly_completed)
+        if time.time() - last_checkpoint_save > 60:
+            node_details = checkpoint.get("node_details", {})
+            for r in all_reporters:
+                nid = r.node_id
+                if not nid:
+                    continue
+                node_details[nid] = {
+                    "duration": r.video_duration,
+                    "watched": min(r.total_time, r.video_duration),
+                    "completed": r.completed,
+                }
+                if r.completed:
+                    completed_nodes.add(nid)
+            checkpoint["node_details"] = node_details
             checkpoint["completed_nodes"] = list(completed_nodes)
             checkpoint["progress"] = {
                 "done": done,
@@ -764,7 +821,12 @@ def run(params_file, status_file, videos_file):
     actual_pct = _verify_platform_progress(base_url, _verify_session, videos)
     logger.info("平台实际进度: %d%%", actual_pct)
 
-    if actual_pct >= 100:
+    if actual_pct < 0:
+        # 会话过期，无法验证，标记失败让任务重试
+        send_status(status_file, phase="done", done=True, success=False, video_pct=0,
+                    message="会话已过期，无法验证平台进度，请重试")
+        logger.error("会话过期，无法验证平台进度")
+    elif actual_pct >= 100:
         send_status(status_file, phase="done", done=True, success=True, video_pct=100,
                     message="任务完成")
         logger.info("所有视频学习完成")

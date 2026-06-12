@@ -78,7 +78,7 @@ os.makedirs(GLOBAL_CONFIG_DIR, exist_ok=True)
 # ==================== 多网站配置 ====================
 WEBSITES = {
     1: {"name": "在线课程测评考试平台", "base_url": "https://cdcas.suwankj.com"},
-    2: {"name": "劳动课程测评考试平台", "base_url": "https://cdcas.taiskeji.com"},
+    2: {"name": "劳动课程测评考试平台", "base_url": "https://cdcas.duxingkej.com"},
     3: {"name": "公益课程平台", "base_url": "https://cdcas.chaoxiankeji.com"},
     4: {"name": "学习通", "base_url": "https://mooc1.chaoxing.com", "type": "chaoxing"},
 }
@@ -86,7 +86,7 @@ WEBSITES = {
 # 学习通配置
 CHAOXING_CONFIG = {
     "score_target": 200,        # 积分目标
-    "daily_limit": 50,          # 每日积分上限
+    "daily_limit": 200,         # 每日积分上限（改为200，一天完成）
     "video_weight": 180,        # 视频积分上限
     "login_weight": 10,         # 登录积分上限
     "discussion_weight": 10,    # 讨论积分上限

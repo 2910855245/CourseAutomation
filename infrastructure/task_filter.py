@@ -7,10 +7,10 @@ def get_actionable_videos(cleaned_data: dict) -> List[dict]:
 
 
 def get_actionable_exams(cleaned_data: dict) -> List[dict]:
-    """返回可操作的考试/作业列表（未交 + 进行中）"""
+    """返回可操作的考试/作业列表（未交 + 进行中），排除未开始的"""
     result = []
     for item in cleaned_data.get("exams", []) + cleaned_data.get("works", []):
-        if item.get("is_actionable"):
+        if item.get("is_actionable") and not item.get("is_pending"):
             result.append(item)
     return result
 
@@ -25,10 +25,10 @@ def get_missed_exams(cleaned_data: dict) -> List[dict]:
 
 
 def get_pending_exams(cleaned_data: dict) -> List[dict]:
-    """返回待开放的考试/作业列表（未交 + 未开始）"""
+    """返回待开放的考试/作业列表（未开始）— 仅用于显示，不计入任务"""
     result = []
     for item in cleaned_data.get("exams", []) + cleaned_data.get("works", []):
-        if item.get("submit_status") == "未交" and item.get("time_status") == "未开始":
+        if item.get("is_pending"):
             result.append(item)
     return result
 

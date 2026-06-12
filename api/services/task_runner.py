@@ -42,7 +42,7 @@ class TaskRunner:
         self._status_file: Optional[str] = None
         self._tmpdir: Optional[str] = None
 
-    def run(self, job_type: str = "full", course_ids: list = None) -> Dict[str, Any]:
+    def run(self, job_type: str = "full", course_ids: list = None, order_id: str = None) -> Dict[str, Any]:
         course_ids = course_ids or []
         self._running = True
 
@@ -56,6 +56,8 @@ class TaskRunner:
             "course_ids": course_ids,
             "concurrency": 8,
         }
+        if order_id:
+            params["order_id"] = order_id
 
         self._tmpdir = tempfile.mkdtemp(prefix="task_")
         self._params_file = os.path.join(self._tmpdir, "params.json")
@@ -67,8 +69,8 @@ class TaskRunner:
 
         python_exe = sys.executable
 
-        # 学习通积分任务使用专用worker
-        if job_type == "chaoxing_points":
+        # 学习通任务（website_id=4）或学习通积分任务使用专用worker
+        if self.website_id == 4 or job_type == "chaoxing_points":
             cmd = [python_exe, CHAOXING_WORKER_SCRIPT, self._params_file, self._status_file]
         else:
             cmd = [python_exe, WORKER_SCRIPT, self._params_file, self._status_file]

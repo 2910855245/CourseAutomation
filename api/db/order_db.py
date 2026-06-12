@@ -271,8 +271,9 @@ class OrderDBMixin:
 
     def complete_order(self, order_id: str) -> bool:
         Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        # 也允许 cancelled 状态的订单恢复为 completed（任务完成后自动恢复）
         return self._update_order_if_status(
-            order_id, ("pending", "running", "paid"),
+            order_id, ("pending", "running", "paid", "cancelled", "accepted"),
             status="completed",
             finished_at=datetime.now().isoformat(),
         )
@@ -280,7 +281,7 @@ class OrderDBMixin:
     def fail_order(self, order_id: str, error: str = "") -> bool:
         Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
         return self._update_order_if_status(
-            order_id, ("pending", "running", "paid"),
+            order_id, ("pending", "running", "paid", "cancelled", "accepted"),
             status="failed",
             finished_at=datetime.now().isoformat(),
             admin_note=error,
@@ -351,15 +352,22 @@ class OrderDBMixin:
                 return False
             if order.paid:
                 return True
+            now = datetime.now().isoformat()
+            # user_id 为空时（管理员/匿名下单），直接标记已付，不扣余额
             if not order.user_id:
-                return False
+                order.paid = True
+                order.status = "paid"
+                order.payment_channel = "admin_free"
+                order.payment_time = now
+                order.updated_at = now
+                session.commit()
+                return True
             user = session.scalars(select(User).filter(User.user_id == order.user_id).with_for_update()).first()
             if not user:
                 return False
             is_vip = user.role in ("admin", "sub_admin")
             if not is_vip and user.balance < order.price:
                 return False
-            now = datetime.now().isoformat()
             if not is_vip:
                 user.balance -= order.price
                 session.add(WalletTransaction(

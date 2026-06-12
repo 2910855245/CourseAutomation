@@ -212,7 +212,7 @@ def create_batch_orders(
                 req.orders[0].price = round(req.orders[0].price + diff, 2)
         total_price = computed_total
 
-    free_order = total_price == 0 and is_privileged
+    free_order = is_privileged
 
     created = []
     for item in req.orders:

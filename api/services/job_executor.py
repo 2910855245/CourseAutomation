@@ -15,6 +15,10 @@ from sqlalchemy import select
 class JobExecutor:
     """负责单个任务的执行和 study 阶段监控"""
 
+    # 模块级：跟踪活跃的 monitor_study 线程 {job_id: last_heartbeat_time}
+    _active_monitors: dict = {}
+    _monitors_lock = threading.Lock()
+
     def __init__(self, *, db_update_fn: Callable, db_get_fn: Callable,
                  db_claim_fn: Callable, clear_password_fn: Callable,
                  on_complete: Optional[Callable] = None,
@@ -51,7 +55,7 @@ class JobExecutor:
                 website_id=job.website_id,
                 on_progress=lambda p, s, n: self._on_job_progress(job_id, p, s, n),
             )
-            result = runner.run(job_type=job.job_type, course_ids=job.course_ids)
+            result = runner.run(job_type=job.job_type, course_ids=job.course_ids, order_id=job.order_id)
 
             if isinstance(result, dict) and not result.get("success", True):
                 raise Exception(result.get("message", "任务失败"))
@@ -132,80 +136,6 @@ class JobExecutor:
         except Exception as e:
             err_str = str(e)
             logger.error(f"任务执行失败 job_id={job_id} error={err_str}")
-            # 登录失败 → 尝试从订单恢复密码后重试
-            is_login_err = any(kw in err_str for kw in ("登录", "密码"))
-            if is_login_err and job.order_id:
-                try:
-                    from api.database import db
-                    order = db.get_order(job.order_id)
-                    if order and order.get("password"):
-                        logger.info(f"登录失败，恢复密码后重试 job_id={job_id}")
-                        job.password = order["password"]
-                        self._db_update(job_id, password=order["password"], retry_count=1)
-                        if runner:
-                            runner.cleanup()
-                            runner = None
-                        # 直接重跑TaskRunner，不走execute()（避免_db_claim失败）
-                        from api.services.task_runner import TaskRunner
-                        runner = TaskRunner(
-                            username=job.username,
-                            password=job.password,
-                            website_id=job.website_id,
-                            on_progress=lambda p, s, n: self._on_job_progress(job_id, p, s, n),
-                        )
-                        result = runner.run(job_type=job.job_type, course_ids=job.course_ids)
-                        if isinstance(result, dict) and result.get("heavy_done"):
-                            status_file = result.get("status_file")
-                            if status_file:
-                                if release_worker_fn:
-                                    release_worker_fn(job_id)
-                                semaphore = self._get_study_semaphore()
-                                acquired = semaphore.acquire(blocking=False)
-                                if not acquired:
-                                    acquired = semaphore.acquire(blocking=True, timeout=3600)
-                                if acquired:
-                                    mon_thread = threading.Thread(
-                                        target=self.monitor_study,
-                                        args=(job_id, status_file),
-                                        daemon=True, name=f"monitor-{job_id}",
-                                    )
-                                    mon_thread.start()
-                                    runner = None
-                                    return
-                                else:
-                                    raise Exception("study 并发排队超时（1小时）")
-                            return
-                        elif isinstance(result, dict) and result.get("daily_done"):
-                            # 重试时今日积分已满，标记等待
-                            progress = 0.0
-                            sf = result.get("status_file")
-                            if sf:
-                                try:
-                                    with open(sf) as f2:
-                                        sd2 = json.load(f2)
-                                    pt2 = sd2.get("points_total", 0)
-                                    tgt2 = sd2.get("points_target", 200)
-                                    if tgt2 > 0:
-                                        progress = min(100.0, pt2 / tgt2 * 100)
-                                except Exception:
-                                    pass
-                            self._db_update(job_id,
-                                            status=QueueJobStatus.WAITING,
-                                            progress=progress,
-                                            current_step_name="等待明天继续",
-                                            error_message="",
-                                            finished_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
-                            return
-                        elif isinstance(result, dict) and not result.get("success", True):
-                            raise Exception(result.get("message", "任务失败"))
-                        else:
-                            self._db_update(job_id, status=QueueJobStatus.COMPLETED,
-                                            progress=100.0, finished_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
-                            self._clear_password(job_id)
-                            return
-                except Exception as retry_err:
-                    logger.error(f"重试登录仍然失败 job_id={job_id} error={str(retry_err)}")
-                    err_str = str(retry_err)
             enhanced_err = self._enhance_error_message(str(e))
             if job.retry_count < job.max_retries:
                 # 恢复密码以便下次重试
@@ -245,6 +175,10 @@ class JobExecutor:
         """监控 study 阶段的进度文件"""
         from api.services.task_queue import QueueJobStatus
 
+        # 注册活跃监控线程，防止 recover_stuck_jobs 误重置
+        with JobExecutor._monitors_lock:
+            JobExecutor._active_monitors[job_id] = time.time()
+
         tmpdir = os.path.dirname(status_file)
         max_wait = 7200
         elapsed = 0
@@ -256,6 +190,9 @@ class JobExecutor:
                 time.sleep(10)
                 elapsed += 10
                 stale_seconds += 10
+                # 更新心跳
+                with JobExecutor._monitors_lock:
+                    JobExecutor._active_monitors[job_id] = time.time()
                 try:
                     current_mtime = os.path.getmtime(status_file)
                     if current_mtime != last_mtime:
@@ -339,6 +276,9 @@ class JobExecutor:
                 job.error_message = str(e)
                 self._on_fail(job)
         finally:
+            # 注销活跃监控线程
+            with JobExecutor._monitors_lock:
+                JobExecutor._active_monitors.pop(job_id, None)
             semaphore.release()
             if tmpdir and os.path.exists(tmpdir):
                 try:
@@ -354,6 +294,7 @@ class JobExecutor:
     def _start_verification(self, job_id: str, job):
         """启动后台线程核查任务是否真正在平台上完成"""
         def _verify():
+            from api.services.task_queue import QueueJobStatus
             try:
                 from api.services.task_verifier import verify_task_completion
                 result = verify_task_completion(
@@ -366,9 +307,22 @@ class JobExecutor:
                     self._db_update(job_id, verified=True)
                     logger.info("任务核查通过 job_id={} detail={}", job_id, result.get("detail"))
                 else:
-                    logger.warning("任务核查未通过 job_id={} detail={}", job_id, result.get("detail"))
+                    detail = result.get("detail", "核查未通过")
+                    logger.warning("任务核查未通过 job_id={} detail={}", job_id, detail)
+                    self._db_update(job_id, status=QueueJobStatus.FAILED,
+                                    error_message=f"核查未通过: {detail}")
+                    if self._on_fail:
+                        j = self._db_get(job_id)
+                        if j:
+                            self._on_fail(j)
             except Exception as e:
                 logger.warning(f"任务核查异常 job_id={job_id} error={str(e)}")
+                self._db_update(job_id, status=QueueJobStatus.FAILED,
+                                error_message=f"核查异常: {e}")
+                if self._on_fail:
+                    j = self._db_get(job_id)
+                    if j:
+                        self._on_fail(j)
 
         t = threading.Thread(target=_verify, daemon=True, name=f"verify-{job_id}")
         t.start()
@@ -394,6 +348,13 @@ class JobExecutor:
             running_jobs = session.scalars(select(db_model).filter(db_model.status == "running")).all()
             reset_count = 0
             for job in running_jobs:
+                # 检查是否有活跃的 monitor_study 线程
+                with JobExecutor._monitors_lock:
+                    monitor_heartbeat = JobExecutor._active_monitors.get(job.job_id)
+                if monitor_heartbeat and (time.time() - monitor_heartbeat) < 120:
+                    logger.info(f"恢复跳过-监控线程活跃 job_id={job.job_id}")
+                    continue
+
                 alive = False
                 try:
                     import psutil

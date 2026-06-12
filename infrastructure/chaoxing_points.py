@@ -368,7 +368,7 @@ class PointsExecutor:
 
             result = process_knowledge_videos(
                 self.session, self.course_id, kid, self.class_id,
-                knowledge_name=name, speed='normal',
+                knowledge_name=name, speed='fast',
                 on_progress=_on_progress
             )
 

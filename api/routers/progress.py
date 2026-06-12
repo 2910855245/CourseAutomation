@@ -3,6 +3,7 @@ import glob
 import json
 import os
 import sys
+import threading
 from typing import List
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -17,6 +18,9 @@ router = APIRouter(prefix="/api/progress", tags=["学习进度"])
 # WebSocket 连接管理
 _ws_clients: List[WebSocket] = []
 _MAX_WS_CLIENTS = 50
+
+# Redis Pub/Sub 频道
+_WS_CHANNEL = "ws:live:broadcast"
 
 
 @router.websocket("/ws/live")
@@ -46,19 +50,77 @@ async def websocket_progress(websocket: WebSocket):
         logger.bind(ws_count=len(_ws_clients)).debug("WebSocket 客户端断开")
 
 
-async def broadcast_progress(data: dict):
-    """向所有 WebSocket 客户端广播进度更新"""
+async def _local_broadcast(message: str):
+    """向本进程的 WebSocket 客户端广播"""
     if not _ws_clients:
         return
-    message = json.dumps(data, ensure_ascii=False)
     disconnected = []
     for client in _ws_clients:
         try:
             await client.send_text(message)
-        except Exception as e:
+        except Exception:
             disconnected.append(client)
     for client in disconnected:
         _ws_clients.remove(client)
+
+
+async def broadcast_progress(data: dict):
+    """向所有 WebSocket 客户端广播进度更新（通过 Redis Pub/Sub 解决多进程问题）"""
+    message = json.dumps(data, ensure_ascii=False)
+    # 先广播本进程
+    await _local_broadcast(message)
+    # 再通过 Redis 发布给其他进程
+    try:
+        from api.redis_client import redis_client
+        if redis_client.available:
+            redis_client.client.publish(_WS_CHANNEL, message)
+    except Exception:
+        pass
+
+
+def _start_redis_subscriber():
+    """后台线程：订阅 Redis 频道，将消息广播到本进程的 WebSocket 客户端"""
+    import time as _time
+    from api.redis_client import redis_client
+
+    if not redis_client.available:
+        logger.info("Redis 不可用，跳过 WebSocket 订阅线程")
+        return
+
+    def _subscriber():
+        while True:
+            try:
+                if not redis_client.available:
+                    _time.sleep(5)
+                    redis_client._maybe_reconnect()
+                    continue
+                pubsub = redis_client.client.pubsub(ignore_subscribe_messages=True)
+                pubsub.subscribe(_WS_CHANNEL)
+                logger.info("Redis WebSocket 订阅已启动 channel={}", _WS_CHANNEL)
+                while True:
+                    message = pubsub.get_message(timeout=1.0)
+                    if message is None:
+                        continue
+                    if message["type"] != "message":
+                        continue
+                    data = message["data"]
+                    if isinstance(data, bytes):
+                        data = data.decode("utf-8", errors="replace")
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            asyncio.run_coroutine_threadsafe(_local_broadcast(data), loop)
+                        else:
+                            loop.run_until_complete(_local_broadcast(data))
+                    except RuntimeError:
+                        pass
+            except Exception as e:
+                logger.warning("Redis WebSocket 订阅异常: {}", str(e))
+                _time.sleep(3)
+
+    t = threading.Thread(target=_subscriber, daemon=True, name="ws-redis-sub")
+    t.start()
+    logger.info("Redis WebSocket 订阅线程已启动")
 
 
 def get_task_status_from_files() -> dict:

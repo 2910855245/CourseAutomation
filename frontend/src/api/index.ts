@@ -19,6 +19,8 @@ async function request<T = any>(method: string, path: string, body?: any): Promi
     headers['Authorization'] = `Bearer ${adminToken}`
   } else if (userToken) {
     headers['Authorization'] = `Bearer ${userToken}`
+  } else if (adminToken) {
+    headers['Authorization'] = `Bearer ${adminToken}`
   }
   const opts: RequestInit = { method, headers }
   if (body && method !== 'GET') opts.body = JSON.stringify(body)

@@ -109,6 +109,9 @@ def classify_exam(raw_exam: dict, now: float = None) -> dict:
     # 考试已结束且未提交(且不是"继续做题"状态) → 视为已完成（用户无法再操作）
     is_expired = submit_status == "未交" and time_status == "已结束"
 
+    # 考试未开始 → 直接视为已完成，不计入任何可操作列表
+    is_not_started = time_status == "未开始"
+
     return {
         "course_name": raw_exam.get("course_name", ""),
         "course_id": raw_exam.get("course_id", ""),
@@ -119,9 +122,10 @@ def classify_exam(raw_exam: dict, now: float = None) -> dict:
         "exam_url": raw_exam.get("url", ""),
         "submit_status": submit_status,
         "time_status": time_status,
-        "is_actionable": is_actionable,
-        "is_done": submit_status in EXAM_DONE_KEYWORDS or has_valid_score or is_expired,
+        "is_actionable": False if is_not_started else is_actionable,
+        "is_done": True if is_not_started else (submit_status in EXAM_DONE_KEYWORDS or has_valid_score or is_expired),
         "is_deleted": False,
+        "is_pending": is_not_started,
         "final_score": final_score,
         "start_time": raw_exam.get("startTime", ""),
         "end_time": raw_exam.get("endTime", ""),

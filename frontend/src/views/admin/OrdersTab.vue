@@ -98,14 +98,14 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
             <td>
               <div class="action-group">
                 <button
-                  v-if="o.status === 'pending'"
+                  v-if="o.status === 'pending' || o.status === 'cancelled'"
                   class="btn btn-xs btn-success"
                   @click="acceptOrder(o.order_id)"
                 >
                   接单
                 </button>
                 <button
-                  v-if="(o.status === 'pending' || o.status === 'accepted') && currentRole === 'admin'"
+                  v-if="(o.status === 'pending' || o.status === 'accepted' || o.status === 'cancelled') && currentRole === 'admin'"
                   class="btn btn-xs btn-primary"
                   @click="executeOrder(o.order_id)"
                 >
@@ -117,6 +117,14 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
                   @click="enqueueOrder(o.order_id)"
                 >
                   入队
+                </button>
+                <button
+                  v-if="o.status === 'cancelled' && currentRole === 'admin'"
+                  class="btn btn-xs"
+                  style="background:#f59e0b;color:#fff;"
+                  @click="enqueueOrder(o.order_id)"
+                >
+                  重新入队
                 </button>
                 <button
                   v-if="o.status === 'running'"
