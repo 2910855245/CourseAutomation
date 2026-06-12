@@ -129,7 +129,7 @@ def _fetch_cpi_map(session: ChaoxingSession) -> dict:
     return cpi_map
 
 
-def scan_chaoxing(session: ChaoxingSession, quick_mode: bool = True) -> dict:
+def scan_chaoxing(session: ChaoxingSession, quick_mode: bool = False) -> dict:
     """扫描学习通全部课程
 
     流程: 并行抓取课程列表+CPI → 排除已结束 → 并行爬取知识点+积分 → 清洗 → 筛选任务
