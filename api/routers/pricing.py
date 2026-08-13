@@ -44,14 +44,6 @@ def get_pricing():
     }
 
 
-class MarketInput(BaseModel):
-    avg_price: float          # 市场平均价
-    max_price: float          # 市场最高价
-    min_price: Optional[float] = None  # 市场最低价（可选）
-    my_cost_per_course: Optional[float] = 0.5  # 你的单课边际成本
-    extra_info: Optional[str] = ""  # 其他市场信息（可选）
-
-
 class CourseItem(BaseModel):
     course_id: str
     video_total: int = 0
@@ -186,18 +178,6 @@ def _package_label(video_total: int, video_completed: int) -> str:
         tier = "大课"
     progress = round(video_completed / video_total * 100) if video_total > 0 else 0
     return f"{tier} {video_total}视频 {progress}%进度"
-
-
-@router.post("/recommend")
-def recommend_pricing(market: MarketInput):
-    """调用 DeepSeek AI 根据市场行情推荐定价方案"""
-    from api.services.pricing_service import recommend_pricing as _recommend
-    avg = market.avg_price
-    mx = market.max_price
-    mn = market.min_price or avg * 0.5
-    cost = market.my_cost_per_course
-    extra = market.extra_info or ""
-    return _recommend(avg, mx, mn, cost, extra)
 
 
 @router.post("/apply-package")

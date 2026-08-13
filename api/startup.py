@@ -311,11 +311,6 @@ def run_startup(settings):
     start_domain_monitor()
 
     from api.services.session_pool import pool as session_pool
-    from infrastructure.platform_health import HealthMonitorDaemon
-
     _restore_sessions(session_pool)
-
-    _health_monitor = HealthMonitorDaemon(session_pool=session_pool)
-    _health_monitor.start()
 
     logger.info(f"API 服务启动 host={settings.host} port={settings.port}")

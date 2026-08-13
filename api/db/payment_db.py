@@ -14,10 +14,9 @@ _VmqSetting = _VmqPayOrder = _TmpPrice = _YpaySetting = _YpayTmpPrice = _YpayOrd
 
 
 def _resolve_models():
-    global _VmqSetting, _VmqPayOrder, _TmpPrice, _YpaySetting, _YpayTmpPrice, _YpayOrder, _YpayAccount, _Ad
+    global _VmqSetting, _VmqPayOrder, _TmpPrice, _YpaySetting, _YpayTmpPrice, _YpayOrder, _YpayAccount
     if _VmqSetting is None:
         from api.db.models import (
-            Ad,
             TmpPrice,
             VmqPayOrder,
             VmqSetting,
@@ -26,15 +25,15 @@ def _resolve_models():
             YpaySetting,
             YpayTmpPrice,
         )
-        _VmqSetting, _VmqPayOrder, _TmpPrice, _YpaySetting, _YpayTmpPrice, _YpayOrder, _YpayAccount, _Ad = VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad
-    return _VmqSetting, _VmqPayOrder, _TmpPrice, _YpaySetting, _YpayTmpPrice, _YpayOrder, _YpayAccount, _Ad
+        _VmqSetting, _VmqPayOrder, _TmpPrice, _YpaySetting, _YpayTmpPrice, _YpayOrder, _YpayAccount = VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount
+    return _VmqSetting, _VmqPayOrder, _TmpPrice, _YpaySetting, _YpayTmpPrice, _YpayOrder, _YpayAccount
 
 
 class PaymentDBMixin:
     # ── VMQ 支付 ──
 
     def vmq_setting_get(self, key: str, default: str = "") -> str:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             s = session.scalars(select(VmqSetting).filter(VmqSetting.key == key)).first()
@@ -43,7 +42,7 @@ class PaymentDBMixin:
             session.close()
 
     def vmq_setting_set(self, key: str, value: str):
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         value = (value or "").strip()
         session = self._get_session()
         try:
@@ -56,7 +55,7 @@ class PaymentDBMixin:
             session.close()
 
     def vmq_setting_all(self) -> Dict[str, str]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             return {s.key: s.value for s in session.scalars(select(VmqSetting)).all()}
@@ -64,7 +63,7 @@ class PaymentDBMixin:
             session.close()
 
     def vmq_close_expired_orders(self) -> int:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             close_minutes = int(self.vmq_setting_get(VmqSetting.CLOSE_TIME, "5"))
@@ -89,7 +88,7 @@ class PaymentDBMixin:
             session.close()
 
     def vmq_lock_price(self, price: float, oid: str) -> Optional[float]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             now = datetime.now().isoformat()
@@ -111,7 +110,7 @@ class PaymentDBMixin:
     def vmq_create_payment(self, *, pay_id: str, param: str = "",
                            pay_type: int = 1, price: float,
                            notify_url: str = "") -> Optional[Dict[str, Any]]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             existing = session.scalars(select(VmqPayOrder).filter(
@@ -161,7 +160,7 @@ class PaymentDBMixin:
             session.close()
 
     def vmq_get_order(self, pay_id: str) -> Optional[Dict[str, Any]]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             o = session.scalars(select(VmqPayOrder).filter(VmqPayOrder.pay_id == pay_id)).first()
@@ -179,7 +178,7 @@ class PaymentDBMixin:
             session.close()
 
     def vmq_get_order_by_price(self, price: float, pay_type: int) -> Optional[Dict[str, Any]]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             o = session.scalars(select(VmqPayOrder).filter(
@@ -201,7 +200,7 @@ class PaymentDBMixin:
             session.close()
 
     def vmq_mark_paid(self, pay_id: str) -> bool:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             now = datetime.now().isoformat()
@@ -221,7 +220,7 @@ class PaymentDBMixin:
             session.close()
 
     def vmq_list_orders(self, limit: int = 50, offset: int = 0, state: int = None) -> List[Dict[str, Any]]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             stmt = select(VmqPayOrder)
@@ -243,7 +242,7 @@ class PaymentDBMixin:
             session.close()
 
     def vmq_count_orders(self, state: int = None) -> int:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             q = select(func.count(VmqPayOrder.id))
@@ -256,7 +255,7 @@ class PaymentDBMixin:
     # ── YPay 支付 ──
 
     def ypay_setting_get(self, key: str, default: str = "") -> str:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             s = session.scalars(select(YpaySetting).filter(YpaySetting.key == key)).first()
@@ -265,7 +264,7 @@ class PaymentDBMixin:
             session.close()
 
     def ypay_setting_set(self, key: str, value: str):
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         value = (value or "").strip()
         session = self._get_session()
         try:
@@ -278,7 +277,7 @@ class PaymentDBMixin:
             session.close()
 
     def ypay_setting_all(self) -> Dict[str, str]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             return {s.key: s.value for s in session.scalars(select(YpaySetting)).all()}
@@ -286,7 +285,7 @@ class PaymentDBMixin:
             session.close()
 
     def ypay_lock_price(self, price: float, oid: str) -> Optional[float]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             from sqlalchemy.exc import IntegrityError
@@ -310,7 +309,7 @@ class PaymentDBMixin:
             session.close()
 
     def ypay_release_price(self, price: float):
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             session.execute(delete(YpayTmpPrice).filter(YpayTmpPrice.price == price)).rowcount
@@ -322,7 +321,7 @@ class PaymentDBMixin:
             session.close()
 
     def ypay_get_active_prices(self, account_id: int) -> List[float]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             now = datetime.now().isoformat()
@@ -337,7 +336,7 @@ class PaymentDBMixin:
 
     def ypay_find_pending_by_price(self, price: float, pay_type: int) -> Optional[Dict[str, Any]]:
         from sqlalchemy import func as sqlfunc
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         type_str = {1: "wxpay", 2: "alipay", 3: "lkl"}.get(pay_type, "wxpay")
         session = self._get_session()
         try:
@@ -353,7 +352,7 @@ class PaymentDBMixin:
             session.close()
 
     def ypay_pick_channel(self, pay_type: int) -> Optional[Dict[str, Any]]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         from api.db_engine import USE_MYSQL
         session = self._get_session()
         try:
@@ -399,7 +398,7 @@ class PaymentDBMixin:
                           money: float, truemoney: float, account_id: int,
                           qrcode: str, h5_qrurl: str, notify_url: str,
                           return_url: str, ip: str, out_time: str) -> Optional[Dict[str, Any]]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             now = datetime.now().isoformat()
@@ -450,7 +449,7 @@ class PaymentDBMixin:
             session.close()
 
     def ypay_get_order(self, trade_no: str) -> Optional[Dict[str, Any]]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             o = session.scalars(select(YpayOrder).filter(YpayOrder.trade_no == trade_no)).first()
@@ -461,7 +460,7 @@ class PaymentDBMixin:
             session.close()
 
     def ypay_get_order_by_out_trade_no(self, out_trade_no: str) -> Optional[Dict[str, Any]]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             o = session.scalars(select(YpayOrder).filter(YpayOrder.out_trade_no == out_trade_no)).first()
@@ -495,7 +494,7 @@ class PaymentDBMixin:
         }
 
     def ypay_mark_paid(self, trade_no: str) -> bool:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             now = datetime.now().isoformat()
@@ -515,7 +514,7 @@ class PaymentDBMixin:
             session.close()
 
     def ypay_close_expired_orders(self) -> int:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             now = datetime.now().isoformat()
@@ -539,7 +538,7 @@ class PaymentDBMixin:
             session.close()
 
     def clear_ypay_orders(self) -> int:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             from datetime import datetime
@@ -557,7 +556,7 @@ class PaymentDBMixin:
             session.close()
 
     def ypay_list_accounts(self) -> List[Dict[str, Any]]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             accounts = session.scalars(select(YpayAccount).order_by(YpayAccount.create_time.desc())).all()
@@ -587,7 +586,7 @@ class PaymentDBMixin:
                          channel_mode: int = 1,
                          app_public_cert: str = "", alipay_public_cert: str = "",
                          alipay_root_cert: str = "") -> Optional[Dict[str, Any]]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             now = datetime.now().isoformat()
@@ -621,7 +620,7 @@ class PaymentDBMixin:
             session.close()
 
     def ypay_update_account(self, account_id: int, **fields) -> bool:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             count = session.execute(update(YpayAccount).filter(YpayAccount.id == account_id).values(fields)).rowcount
@@ -635,7 +634,7 @@ class PaymentDBMixin:
             session.close()
 
     def ypay_delete_account(self, account_id: int) -> bool:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             from datetime import datetime
@@ -653,7 +652,7 @@ class PaymentDBMixin:
             session.close()
 
     def ypay_list_orders(self, limit: int = 50, offset: int = 0, status: int = None) -> List[Dict[str, Any]]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             q = select(YpayOrder).order_by(YpayOrder.create_time.desc())
@@ -665,99 +664,12 @@ class PaymentDBMixin:
             session.close()
 
     def ypay_count_orders(self, status: int = None) -> int:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
+        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
         session = self._get_session()
         try:
             q = select(func.count(YpayOrder.id))
             if status is not None:
                 q = q.where(YpayOrder.status == status)
             return session.scalar(q) or 0
-        finally:
-            session.close()
-
-    # ── 广告管理 ──
-
-    MAX_ADS = 5
-
-    def list_ads(self) -> List[Dict[str, Any]]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
-        session = self._get_session()
-        try:
-            ads = session.scalars(select(Ad).order_by(Ad.slot)).all()
-            return [{"id": a.id, "slot": a.slot, "name": a.name, "html_content": a.html_content, "is_active": a.is_active, "create_time": a.create_time} for a in ads]
-        finally:
-            session.close()
-
-    def list_active_ads(self) -> List[Dict[str, Any]]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
-        session = self._get_session()
-        try:
-            ads = session.scalars(select(Ad).filter(Ad.is_active == 1).order_by(Ad.slot)).all()
-            return [{"id": a.id, "slot": a.slot, "name": a.name} for a in ads]
-        finally:
-            session.close()
-
-    def get_ad(self, ad_id: int) -> Optional[Dict[str, Any]]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
-        session = self._get_session()
-        try:
-            a = session.scalars(select(Ad).filter(Ad.id == ad_id)).first()
-            if not a:
-                return None
-            return {"id": a.id, "slot": a.slot, "name": a.name, "html_content": a.html_content, "is_active": a.is_active, "create_time": a.create_time}
-        finally:
-            session.close()
-
-    def create_ad(self, slot: int, name: str, html_content: str) -> Optional[Dict[str, Any]]:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
-        if slot < 1 or slot > self.MAX_ADS:
-            return None
-        session = self._get_session()
-        try:
-            existing = session.scalars(select(Ad).filter(Ad.slot == slot)).first()
-            if existing:
-                return None
-            ad = Ad(slot=slot, name=name, html_content=html_content, is_active=1, create_time=datetime.now().isoformat())
-            session.add(ad)
-            session.commit()
-            return {"id": ad.id, "slot": ad.slot, "name": ad.name, "html_content": ad.html_content, "is_active": ad.is_active, "create_time": ad.create_time}
-        except Exception as e:
-            logger.exception("create_ad 失败")
-            session.rollback()
-            return None
-        finally:
-            session.close()
-
-    def update_ad(self, ad_id: int, **fields) -> bool:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
-        if not fields:
-            return False
-        session = self._get_session()
-        try:
-            cnt = session.execute(update(Ad).filter(Ad.id == ad_id).values(fields)).rowcount
-            session.commit()
-            return cnt > 0
-        except Exception as e:
-            logger.exception("update_ad 失败")
-            session.rollback()
-            return False
-        finally:
-            session.close()
-
-    def delete_ad(self, ad_id: int) -> bool:
-        VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount, Ad = _resolve_models()
-        session = self._get_session()
-        try:
-            from datetime import datetime
-            cnt = session.execute(update(Ad).filter(
-                Ad.id == ad_id,
-                Ad.deleted_at.is_(None),
-            ).values(deleted_at=datetime.now().isoformat())).rowcount
-            session.commit()
-            return cnt > 0
-        except Exception as e:
-            logger.exception("delete_ad 失败")
-            session.rollback()
-            return False
         finally:
             session.close()
