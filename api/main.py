@@ -62,6 +62,7 @@ from api.routers import (
     admin,
     captcha,
     config_admin,
+    internal,
     orders,
     payment,
     pricing,
@@ -202,6 +203,7 @@ async def no_cache_middleware(request: Request, call_next):
 
 
 app.include_router(scan.router)
+app.include_router(internal.router)
 app.include_router(progress.router)
 app.include_router(orders.router)
 app.include_router(admin.router)

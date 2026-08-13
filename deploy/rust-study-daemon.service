@@ -1,0 +1,15 @@
+[Unit]
+Description=Rust Study Daemon (rust_worker)
+After=network.target anti-course.service
+
+[Service]
+Type=simple
+ExecStart=/opt/anti-course/rust_worker/rust_worker
+Environment=RUST_DAEMON_PORT=17017
+Environment=RUST_DAEMON_PUSH_URL=http://127.0.0.1:8000/api/progress/live/push
+Environment=RUST_DAEMON_PUSH_TOKEN=change-me-worker-token
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

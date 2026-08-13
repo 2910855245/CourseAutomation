@@ -81,6 +81,18 @@ server {
 - 微信店员版 / 云端 / 经营码
 - Android 收款监控 APP（实时监听通知）
 
+## Rust 刷课守护进程（内存优化）
+
+刷视频阶段由 Rust 单进程多并发执行（tokio），每任务 ~1-2MB 内存（对比 Python 每任务 ~100MB 子进程）。Python worker 完成登录/爬取/考试后把任务交给守护进程，不可达时自动回退 Python 子进程。
+
+```bash
+# 构建（需要 Rust 1.97+）
+cd rust_worker && cargo build --release
+# 二进制在 D:/dev/rust-target/release/rust_worker.exe（本地）/ target/release/rust_worker（Linux）
+# Linux 部署：拷贝到服务器后 systemd 常驻
+sudo cp deploy/rust-study-daemon.service /etc/systemd/system/ && sudo systemctl enable --now rust-study-daemon
+```
+
 ## 项目结构
 
 ```

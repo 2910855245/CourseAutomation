@@ -19,7 +19,7 @@ use dashmap::DashMap;
 use serde::Deserialize;
 use serde_json::json;
 
-type TaskMap = Arc<DashMap<String, tokio::task::AbortHandle>>;
+type TaskMap = Arc<DashMap<String, tokio::task::JoinHandle<()>>>;
 
 #[derive(Clone)]
 struct DaemonState {
@@ -28,33 +28,7 @@ struct DaemonState {
     push_token: String,
 }
 
-#[derive(Deserialize)]
-struct SubmitTask {
-    order_id: String,
-    username: String,
-    password: String,
-    base_url: String,
-    cookies: Vec<CookieKV>,
-    videos: Vec<study::Video>,
-    status_file: String,
-    #[serde(default = "default_concurrency")]
-    concurrency: usize,
-    #[serde(default = "default_true")]
-    push_ws: bool,
-    #[serde(default)]
-    ocr_url: String,
-    #[serde(default)]
-    relogin_url: String,
-}
-
-#[derive(Deserialize)]
-struct CookieKV {
-    name: String,
-    value: String,
-}
-
-fn default_concurrency() -> usize { 8 }
-fn default_true() -> bool { true }
+type SubmitTask = study::TaskInput;
 
 fn env_or(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_string())
@@ -141,14 +115,16 @@ async fn submit(
     let tasks = state.tasks.clone();
     let order_id = task.order_id.clone();
 
+    let oid_for_task = task.order_id.clone();
+    let oid_resp = task.order_id.clone();
     let handle = tokio::spawn(async move {
         let result = study::run_study(&task, &push_url, &push_token).await;
         if let Err(e) = result {
-            eprintln!("[rust_worker] task {} failed: {e}", task.order_id);
+            eprintln!("[rust_worker] task {} failed: {e}", oid_for_task);
         }
-        tasks.remove(&order_id);
+        tasks.remove(&oid_for_task);
     });
 
-    state.tasks.insert(order_id.clone(), handle);
-    Json(json!({"ok": true, "order_id": order_id}))
+    state.tasks.insert(oid_resp.clone(), handle);
+    Json(json!({"ok": true, "order_id": oid_resp}))
 }

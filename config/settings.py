@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     vmqpay_key: str = Field(default="", alias="VMQPAY_KEY")
     cors_origins: str = Field(default="http://localhost:5173", alias="CORS_ORIGINS")
     worker_token: str = Field(default="", alias="WORKER_TOKEN")
+    rust_daemon_url: str = Field(default="http://127.0.0.1:17017", alias="RUST_DAEMON_URL")
     captcha_ak: str = Field(default="", alias="CAPTCHA_AK")
     captcha_url: str = Field(default="", alias="CAPTCHA_URL")
 

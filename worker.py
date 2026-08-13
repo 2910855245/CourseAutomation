@@ -244,30 +244,82 @@ def run_task(params_file, status_file):
         study_worker_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "study_worker.py")
         cmd = [sys.executable, study_worker_script, params_file, status_file, videos_file]
 
-        study_log = os.path.join(task_dir, "study_worker.log")
-        log_fh = open(study_log, "w", encoding="utf-8")
-
         current_pid = os.getpid()
         send_status(status_file, phase="study_running", heavy_done=True, study_pid=current_pid,
                     video_done=0, video_total=len(all_videos),
                     message=f"开始刷视频 (共{len(all_videos)}个)")
 
-        logger.info("启动视频刷课子进程...")
-        os.chdir(os.path.dirname(os.path.abspath(__file__)))
-        try:
-            proc = subprocess.Popen(cmd, stdout=log_fh, stderr=subprocess.STDOUT,
-                                    cwd=os.path.dirname(os.path.abspath(__file__)))
-            send_status(status_file, study_pid=proc.pid)
-            proc.wait()
-            logger.info("视频刷课子进程退出，returncode={}", proc.returncode)
-            if proc.returncode != 0:
+        # ── 优先走 Rust 刷课守护进程（单进程多并发，内存 ~1-2MB/任务）──
+        daemon_ok = False
+        from config import settings
+        if settings.rust_daemon_url:
+            try:
+                import urllib.request
+                cookies_list = [{"name": k.strip(), "value": v.strip()}
+                                for pair in cookie_str.split(";") if "=" in pair
+                                for k, v in [pair.split("=", 1)]]
+                payload = json.dumps({
+                    "order_id": params.get("order_id", os.path.basename(task_dir)),
+                    "username": username,
+                    "password": password,
+                    "base_url": base_url,
+                    "cookies": cookies_list,
+                    "videos": all_videos,
+                    "status_file": status_file,
+                    "push_ws": True,
+                    "ocr_url": f"{settings.site_url.rstrip('/')}/api/internal/ocr",
+                    "relogin_url": f"{settings.site_url.rstrip('/')}/api/internal/relogin",
+                }).encode("utf-8")
+                req = urllib.request.Request(
+                    f"{settings.rust_daemon_url}/submit", data=payload,
+                    headers={"Content-Type": "application/json"}, method="POST")
+                resp = json.loads(urllib.request.urlopen(req, timeout=5).read())
+                if resp.get("ok"):
+                    daemon_ok = True
+                    send_status(status_file, study_pid=0)
+                    logger.info("Rust 守护进程接手刷课 order_id={}", params.get("order_id", ""))
+                    # 等待 daemon 写完终态（视频完成后 worker 才进入考试阶段）
+                    total_dur = sum(v.get("duration", 0) for v in all_videos)
+                    timeout_sec = max(600, total_dur * 2.5 + 120)
+                    waited = 0
+                    while waited < timeout_sec:
+                        time.sleep(3)
+                        waited += 3
+                        try:
+                            with open(status_file, encoding="utf-8") as f:
+                                st = json.load(f)
+                            if st.get("done"):
+                                video_success = st.get("success", False)
+                                if not video_success:
+                                    logger.warning("Rust daemon 刷课失败: {}", st.get("message", ""))
+                                break
+                        except Exception:
+                            continue
+                    else:
+                        video_success = False
+                        logger.error("Rust daemon 刷课超时")
+            except Exception as e:
+                logger.warning("Rust 守护进程不可用，回退 Python 子进程: {}", e)
+
+        if not daemon_ok:
+            study_log = os.path.join(task_dir, "study_worker.log")
+            log_fh = open(study_log, "w", encoding="utf-8")
+            logger.info("启动视频刷课子进程...")
+            os.chdir(os.path.dirname(os.path.abspath(__file__)))
+            try:
+                proc = subprocess.Popen(cmd, stdout=log_fh, stderr=subprocess.STDOUT,
+                                        cwd=os.path.dirname(os.path.abspath(__file__)))
+                send_status(status_file, study_pid=proc.pid)
+                proc.wait()
+                logger.info("视频刷课子进程退出，returncode={}", proc.returncode)
+                if proc.returncode != 0:
+                    video_success = False
+                    logger.warning("视频刷课子进程异常退出")
+            except Exception as e:
+                logger.error("视频刷课子进程启动失败: {}", e)
                 video_success = False
-                logger.warning("视频刷课子进程异常退出")
-        except Exception as e:
-            logger.error("视频刷课子进程启动失败: {}", e)
-            video_success = False
-        finally:
-            log_fh.close()
+            finally:
+                log_fh.close()
 
     # ── 第二阶段：考试/作业（视频完成后再执行） ──
     # 重新扫描考试列表（平台可能在刷视频期间更换了考试）
