@@ -28,4 +28,5 @@ else:
     with engine.connect() as conn:
         conn.execute(text("PRAGMA journal_mode=WAL"))
         conn.execute(text("PRAGMA foreign_keys=ON"))
+        conn.execute(text("PRAGMA busy_timeout=5000"))
         conn.commit()

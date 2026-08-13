@@ -199,17 +199,31 @@ class UserDBMixin:
     def update_user_balance(self, user_id: str, amount: float,
                             tx_type: str, note: str = "",
                             order_id: str = None) -> bool:
+        """原子余额变更：条件 UPDATE（SQLite 下 with_for_update 无效，RMW 有竞态）"""
         User, WalletTransaction = _resolve_models()
         session = self._get_session()
         try:
-            user = session.scalars(select(User).filter(User.user_id == user_id).with_for_update()).first()
-            if not user:
-                return False
-            user.balance += amount
+            # 负数变更需校验余额充足（如扣款），正数无条件累加
+            if amount < 0:
+                updated = session.execute(update(User).filter(
+                    User.user_id == user_id,
+                    User.balance >= -amount,
+                ).values(balance=User.balance + amount)).rowcount
+                if not updated:
+                    session.rollback()
+                    return False
+            else:
+                updated = session.execute(update(User).filter(
+                    User.user_id == user_id,
+                ).values(balance=User.balance + amount)).rowcount
+                if not updated:
+                    session.rollback()
+                    return False
+            balance_after = session.scalar(select(User.balance).filter(User.user_id == user_id))
             tx_id = f"TX-{uuid.uuid4().hex[:8].upper()}"
             tx = WalletTransaction(
                 tx_id=tx_id, user_id=user_id, amount=amount, tx_type=tx_type,
-                balance_after=user.balance, note=note, order_id=order_id,
+                balance_after=balance_after, note=note, order_id=order_id,
                 created_at=datetime.now().isoformat(),
             )
             session.add(tx)

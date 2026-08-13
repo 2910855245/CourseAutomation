@@ -94,6 +94,10 @@ class TaskRunner:
             raise
         self._log_fh = log_fh
 
+        # 重阶段（登录/爬取）整体超时：防止网络卡死永久占用 worker 槽位
+        HEAVY_PHASE_TIMEOUT = 30 * 60
+        deadline = time.monotonic() + HEAVY_PHASE_TIMEOUT
+        heavy_timed_out = False
         try:
             while self._running and self._process.poll() is None:
                 time.sleep(3)
@@ -101,12 +105,24 @@ class TaskRunner:
                 if status_data.get("heavy_done") or status_data.get("phase") == "study_running":
                     logger.info("重阶段完成，刷课进程已在后台运行")
                     break
+                if time.monotonic() > deadline:
+                    logger.error("重阶段超时，终止子进程 timeout={}s", HEAVY_PHASE_TIMEOUT)
+                    heavy_timed_out = True
+                    self.cancel()
+                    break
         finally:
             if hasattr(self, '_log_fh') and self._log_fh:
                 try:
                     self._log_fh.close()
                 except Exception:
                     pass
+
+        if heavy_timed_out:
+            return {
+                "platform": platform_name,
+                "success": False,
+                "message": f"重阶段超时（>{HEAVY_PHASE_TIMEOUT // 60}分钟），已终止子进程",
+            }
 
         status_data = self._read_status()
 

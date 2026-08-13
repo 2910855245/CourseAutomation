@@ -282,6 +282,7 @@ def run_startup(settings):
     from api.services.task_queue import school_queue, chaoxing_queue, migrate_old_queue_table
 
     _ensure_default_admin(db)
+    db.recover_stuck_paid_processing()
     _init_prices(db)
 
     # 启动 Redis WebSocket 订阅线程（解决 granian 多进程广播问题）

@@ -348,17 +348,23 @@ class OrderDBMixin:
                 order.updated_at = now
                 session.commit()
                 return True
-            user = session.scalars(select(User).filter(User.user_id == order.user_id).with_for_update()).first()
+            user = session.scalars(select(User).filter(User.user_id == order.user_id)).first()
             if not user:
                 return False
             is_vip = user.role == "admin"
-            if not is_vip and user.balance < order.price:
-                return False
             if not is_vip:
-                user.balance -= order.price
+                # 原子扣款：SQLite 下 with_for_update 无效，用条件 UPDATE 防超扣
+                updated = session.execute(update(User).filter(
+                    User.user_id == order.user_id,
+                    User.balance >= order.price,
+                ).values(balance=User.balance - order.price)).rowcount
+                if not updated:
+                    session.rollback()
+                    return False
                 session.add(WalletTransaction(
                     tx_id=f"TX-{uuid.uuid4().hex[:8].upper()}", user_id=order.user_id, amount=-order.price,
-                    tx_type="order_payment", balance_after=user.balance,
+                    tx_type="order_payment",
+                    balance_after=session.scalar(select(User.balance).filter(User.user_id == order.user_id)),
                     note=f"订单 {order_id} 支付", order_id=order_id, created_at=now,
                 ))
             order.paid = True
@@ -646,3 +652,28 @@ class OrderDBMixin:
     def mark_payment_processed(self, order_id: str) -> bool:
         Order, User, WalletTransaction, YpayOrder = _resolve_models()
         return self.update_order(order_id, paid_processed="processed")
+
+    def recover_stuck_paid_processing(self, minutes: int = 10) -> int:
+        """启动时回收卡死的支付处理状态：claim 后进程崩溃会永久停在 processing。
+
+        只回收"未支付成功且超过 N 分钟未更新"的订单，避免误伤处理中的回调。
+        """
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        cutoff = (datetime.now() - timedelta(minutes=minutes)).isoformat()
+        session = self._get_session()
+        try:
+            updated = session.execute(update(Order).filter(
+                Order.paid_processed == "processing",
+                Order.status.notin_(["paid", "running", "completed"]),
+                or_(Order.updated_at.is_(None), Order.updated_at < cutoff),
+            ).values(paid_processed="unprocessed")).rowcount
+            session.commit()
+            if updated:
+                logger.warning(f"回收卡死的支付处理状态 count={updated}")
+            return updated
+        except Exception as e:
+            logger.exception("recover_stuck_paid_processing 失败")
+            session.rollback()
+            return 0
+        finally:
+            session.close()

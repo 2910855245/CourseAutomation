@@ -225,6 +225,16 @@ def check_payment(out_trade_no: str, order_id: str = Query("")):
 
         # Fallback: process payment if notify callback missed it
         if not db.claim_payment_processing(actual_order_id):
+            # claim 失败：要么并发处理中，要么卡在 processing（进程崩溃）。已支付则自愈收尾。
+            stale = db.get_order(actual_order_id)
+            if stale and stale.get("paid_processed") == "processing" and stale.get("paid"):
+                from api.services.task_queue import school_queue, chaoxing_queue
+                if not (school_queue.get_job_by_order_id(actual_order_id)
+                        or chaoxing_queue.get_job_by_order_id(actual_order_id)):
+                    db.confirm_payment(actual_order_id, payment_trade_no=trade_no, payment_channel="ypay")
+                    db.mark_payment_processed(actual_order_id)
+                    from api.services.order_service import enqueue_paid_orders
+                    enqueue_paid_orders([actual_order_id])
             return _paid_response(actual_order_id)
 
         from api.services.task_queue import school_queue, chaoxing_queue

@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import threading
 import time
 from typing import Callable, Optional
@@ -72,6 +73,11 @@ class JobExecutor:
                         acquired = semaphore.acquire(blocking=True, timeout=3600)
                         if not acquired:
                             logger.error(f"study 排队超时 job_id={job_id}")
+                            # 排队超时：终止子进程，防止孤儿 worker 继续刷课
+                            try:
+                                runner.cancel()
+                            except Exception:
+                                pass
                             self._db_update(job_id, status=QueueJobStatus.FAILED,
                                             error_message="study 并发排队超时（1小时）",
                                             finished_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
@@ -267,9 +273,19 @@ class JobExecutor:
             raise Exception("刷课超时")
         except Exception as e:
             logger.error(f"监控线程异常 job_id={job_id} error={str(e)}")
-            self._db_update(job_id, status=QueueJobStatus.FAILED,
-                            error_message=str(e),
-                            finished_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
+            # FAILED 更新带重试：SQLite 瞬时锁（database is locked）不视为失败传播，避免抖动误触发退款链
+            from sqlalchemy.exc import OperationalError
+            for attempt in range(4):
+                try:
+                    self._db_update(job_id, status=QueueJobStatus.FAILED,
+                                    error_message=str(e),
+                                    finished_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
+                    break
+                except OperationalError:
+                    if attempt == 3:
+                        logger.warning(f"数据库锁重试耗尽，FAILED 更新放弃 job_id={job_id}")
+                    else:
+                        time.sleep(1 + attempt)
             self._clear_password(job_id)
             job = self._db_get(job_id)
             if job and self._on_fail:
@@ -341,6 +357,48 @@ class JobExecutor:
         return f"步骤中断: {err_msg}（worker进程异常退出，请查看worker日志）"
 
     @staticmethod
+    def _find_live_worker_dir_for_order(order_id: str) -> bool:
+        """判断该订单是否仍有存活的工作进程。
+
+        子进程 cmdline 形如 [python, worker.py, /tmp/task_X/params.json, /tmp/task_X/status.json]，
+        params.json 内含有 order_id —— 以此匹配（cmdline 匹配 order_id 恒为 False 是历史 bug）。
+        """
+        if not order_id:
+            return False
+        try:
+            import psutil
+            for proc in psutil.process_iter(["cmdline"]):
+                cmdline = proc.info.get("cmdline") or []
+                for arg in cmdline:
+                    if arg.endswith("params.json") and "task_" in arg:
+                        try:
+                            with open(arg, encoding="utf-8") as f:
+                                params = json.load(f)
+                            if params.get("order_id") == order_id:
+                                return True
+                        except Exception:
+                            continue
+        except ImportError:
+            pass
+        # 无 psutil：枚举临时目录的 task_* 状态文件，用 mtime 新鲜度近似存活
+        try:
+            import glob as _glob
+            tmp_root = tempfile.gettempdir()
+            for params_file in _glob.glob(os.path.join(tmp_root, "task_*", "params.json")):
+                try:
+                    with open(params_file, encoding="utf-8") as f:
+                        params = json.load(f)
+                    if params.get("order_id") == order_id:
+                        status_file = params_file.replace("params.json", "status.json")
+                        if time.time() - os.path.getmtime(status_file) < 600:
+                            return True
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
     def recover_stuck_jobs(db_session_factory, db_model):
         """重启后将遗留的 running 任务重置为 pending，但跳过仍有活跃子进程的任务"""
         session = db_session_factory()
@@ -355,29 +413,7 @@ class JobExecutor:
                     logger.info(f"恢复跳过-监控线程活跃 job_id={job.job_id}")
                     continue
 
-                alive = False
-                try:
-                    import psutil
-                    for proc in psutil.process_iter(["cmdline"]):
-                        cmdline = proc.info.get("cmdline") or []
-                        cmdline_str = " ".join(cmdline)
-                        if ("study_worker" in cmdline_str or "chaoxing_worker" in cmdline_str) and job.order_id and job.order_id in cmdline_str:
-                            alive = True
-                            break
-                except ImportError:
-                    import subprocess as sp
-                    try:
-                        if sys.platform == "win32":
-                            r = sp.run(["tasklist", "/FI", "IMAGENAME eq python.exe", "/FO", "CSV"],
-                                       capture_output=True, text=True, timeout=5)
-                            alive = job.order_id in r.stdout if r.stdout else False
-                        else:
-                            r = sp.run(["pgrep", "-f", f"(study_worker|chaoxing_worker).*{job.order_id}"],
-                                       capture_output=True, text=True, timeout=5)
-                            alive = bool(r.stdout.strip())
-                    except Exception as e:
-                        pass
-                if alive:
+                if JobExecutor._find_live_worker_dir_for_order(job.order_id):
                     logger.info(f"恢复跳过-子进程存活 job_id={job.job_id} order_id={job.order_id}")
                     continue
                 # 密码为空时从订单恢复
