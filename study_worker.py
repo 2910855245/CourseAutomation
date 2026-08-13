@@ -8,6 +8,8 @@ import signal
 import traceback
 from loguru import logger
 
+from config import validate_settings
+
 
 _ocr_instance = None
 
@@ -840,6 +842,7 @@ def run(params_file, status_file, videos_file):
 
 
 if __name__ == "__main__":
+    validate_settings()
     if len(sys.argv) < 4:
         print("用法: python study_worker.py <params_file> <status_file> <videos_file>")
         sys.exit(1)

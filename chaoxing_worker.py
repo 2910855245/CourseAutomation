@@ -20,6 +20,8 @@ sys.path.insert(0, os.getcwd())
 
 from loguru import logger
 
+from config import validate_settings
+
 
 _shutdown_requested = False
 
@@ -833,6 +835,7 @@ def run_task(params_file, status_file):
 
 
 if __name__ == "__main__":
+    validate_settings()
     if len(sys.argv) < 3:
         print("用法: python chaoxing_worker.py <params_file> <status_file>")
         sys.exit(1)

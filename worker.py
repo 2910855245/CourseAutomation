@@ -8,6 +8,8 @@ import traceback
 
 from loguru import logger
 
+from config import validate_settings
+
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.getcwd())
 
@@ -384,6 +386,7 @@ def run_task(params_file, status_file):
 
 
 if __name__ == "__main__":
+    validate_settings()
     if len(sys.argv) < 3:
         print("用法: python worker.py <params_file> <status_file>")
         sys.exit(1)

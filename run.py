@@ -23,6 +23,7 @@ sys.path.insert(0, os.getcwd())
 from api.main import app  # noqa: E402
 
 if __name__ == "__main__":
+    validate_settings()
     import uvicorn
     print("=" * 60)
     print("         刷课系统 Web 服务器启动（开发模式）")

@@ -184,6 +184,7 @@ def show_menu():
     console.print()
 
 def main():
+    validate_settings()
     while True:
         show_menu()
         choice = Prompt.ask("选择", choices=["1","2","3","4","5","q"], default="5")
