@@ -16,7 +16,6 @@ _SSL_SKIP_DOMAINS = {
     "cdcass.taiskeji.com",
     "cdcas.duxingkej.com",
     "cdcas.chaoxiankeji.com",
-    "cdcas.fanruikji.com",
 }
 
 

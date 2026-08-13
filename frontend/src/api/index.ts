@@ -111,9 +111,9 @@ export interface AdPublicItem { id: number; slot: number; name: string }
 export const api = {
   courses: {
     platforms: () => get<ApiResponse<{ id: number; name: string; base_url: string }[]>>('/api/courses/platforms'),
-    scan: (d: { username: string; password: string; include_records: boolean; role?: string }) => post<ApiResponse<{ platforms: PlatformResult[] }>>('/api/courses/scan', d),
+    scan: (d: { username: string; password: string; include_records: boolean }) => post<ApiResponse<{ platforms: PlatformResult[] }>>('/api/courses/scan', d),
     scanChaoxing: (d: { username: string; password: string }) => post<ApiResponse<{ platform: PlatformResult }>>('/api/courses/scan/chaoxing', d),
-    relogin: (d: { username: string; password: string; website_id: number; include_records: boolean; role?: string }) => post<ApiResponse<{ platform: PlatformResult }>>('/api/courses/relogin', d),
+    relogin: (d: { username: string; password: string; website_id: number; include_records: boolean }) => post<ApiResponse<{ platform: PlatformResult }>>('/api/courses/relogin', d),
   },
   orders: {
     batch: (d: { username: string; password: string; orders: any[]; inviter_code?: string }) => post<ApiResponse<any>>('/api/orders/batch', d),

@@ -13,7 +13,7 @@ const { load: loadPlatformNames, getName: getPlatformName } = usePlatformNames()
 const {
   userRole, isPrivileged, isRegularUser, showUpgradeBanner, dismissUpgradeBanner, detectUserRole, handleVisibilityChange,
   username, password, scanning, rescanning, scanDone, allDone, isLeaving, scanData, countdown,
-  activeTab, loginRole, chaoxingUsername, chaoxingPassword, startChaoxingScan,
+  activeTab, chaoxingUsername, chaoxingPassword, startChaoxingScan,
   loginError, failedPlatforms, reloginDialog, reloginPassword, reloginLoading, loginErrorCountdown,
   packagePricing, submittedCourseIds, allInProgress, pendingOrderedCourseIds, checkedCourseIds,
   loadingPrices, backendPrices,
@@ -174,19 +174,9 @@ onMounted(async () => {
             </div>
 
             <template v-if="activeTab === 'school'">
-              <div class="role-switcher">
-                <button :class="['role-btn', { active: loginRole === 'student' }]" @click="loginRole = 'student'">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>
-                  学生端
-                </button>
-                <button :class="['role-btn', { active: loginRole === 'teacher' }]" @click="loginRole = 'teacher'">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
-                  教师端
-                </button>
-              </div>
               <div class="field">
-                <label>{{ loginRole === 'teacher' ? '教师账号' : '学号' }}</label>
-                <input v-model="username" :placeholder="loginRole === 'teacher' ? '请输入教师账号' : '请输入学号'" :disabled="scanning" />
+                <label>学号</label>
+                <input v-model="username" placeholder="请输入学号" :disabled="scanning" />
               </div>
               <div class="field">
                 <label>密码</label>
@@ -774,37 +764,6 @@ AI智能答题考试
   box-shadow: 0 1px 3px rgba(0,0,0,.08);
 }
 .tab-btn:hover:not(.active) { color: var(--c-text); }
-
-.role-switcher {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 18px;
-}
-.role-btn {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px 12px;
-  border: 1.5px solid var(--c-border);
-  background: var(--c-bg);
-  border-radius: var(--radius);
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--c-text-secondary);
-  cursor: pointer;
-  transition: all .2s;
-}
-.role-btn.active {
-  border-color: var(--c-primary);
-  background: var(--c-primary-bg);
-  color: var(--c-primary);
-}
-.role-btn:hover:not(.active) {
-  border-color: var(--c-text-muted);
-  color: var(--c-text);
-}
 
 .lc-header h2 { font-size: 20px; font-weight: 700; margin-bottom: 6px; color: var(--c-text); }
 .lc-header p { font-size: 13px; color: var(--c-text-muted); }

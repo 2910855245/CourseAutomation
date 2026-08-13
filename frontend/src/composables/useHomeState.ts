@@ -81,7 +81,6 @@ export function useHomeState() {
   const password = ref(savedData.value?.password || '')
   const scanning = ref(false)
   const activeTab = ref<'school' | 'chaoxing'>('school')
-  const loginRole = ref<'student' | 'teacher'>('student')
   const chaoxingUsername = ref('')
   const chaoxingPassword = ref('')
   const rescanning = ref(false)
@@ -290,7 +289,7 @@ export function useHomeState() {
     scanning.value = true; submitSuccess.value = false; allDone.value = false
     loginError.value = null; failedPlatforms.value = []; countdown.value = 3; loginErrorCountdown.value = 3
     try {
-      const res = await api.courses.scan({ username: username.value.trim(), password: password.value.trim(), include_records: true, role: loginRole.value })
+      const res = await api.courses.scan({ username: username.value.trim(), password: password.value.trim(), include_records: true })
       scanData.value = res.data.platforms
       const okPlatforms = scanData.value.filter(p => p.status === 'ok')
       const failed = scanData.value.filter(p => p.status !== 'ok')
@@ -583,7 +582,7 @@ export function useHomeState() {
     userRole, isPrivileged, isRegularUser, showUpgradeBanner, dismissUpgradeBanner, detectUserRole, handleVisibilityChange,
     // Scan
     username, password, scanning, rescanning, scanDone, allDone, isLeaving, scanData, countdown,
-    activeTab, loginRole, chaoxingUsername, chaoxingPassword, startChaoxingScan,
+    activeTab, chaoxingUsername, chaoxingPassword, startChaoxingScan,
     loginError, failedPlatforms, reloginDialog, reloginPassword, reloginLoading, loginErrorCountdown,
     packagePricing, submittedCourseIds, allInProgress, pendingOrderedCourseIds, checkedCourseIds,
     savedData, loadingPrices, backendPrices,

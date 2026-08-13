@@ -29,7 +29,7 @@ SCHOOL_DOMAIN_SUFFIXES = (
 # 非课程平台域名，直接排除
 EXCLUDED_DOMAINS = {
     "scnucas.com",          # 校长信箱
-    "cdcas.fanruikji.com",  # 教师在线学习
+    "cdcas.fanruikji.com",  # 教师平台（非学生课程平台）
 }
 
 # config keys

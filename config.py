@@ -81,7 +81,6 @@ WEBSITES = {
     2: {"name": "劳动课程测评考试平台", "base_url": "https://cdcas.duxingkej.com"},
     3: {"name": "公益课程平台", "base_url": "https://cdcas.chaoxiankeji.com"},
     4: {"name": "学习通", "base_url": "https://mooc1.chaoxing.com", "type": "chaoxing"},
-    5: {"name": "成都文理学院", "base_url": "https://cdcas.fanruikji.com"},
 }
 
 # 学习通配置

@@ -201,12 +201,10 @@ def load_course_cache(username: str, website_id: int, course_id: str) -> Optiona
 def scan_platform(username: str, password: str, website_id: int,
                   include_records: bool = True,
                   platform_name: str = None,
-                  force_refresh: bool = False,
-                  role: str = "student") -> dict:
+                  force_refresh: bool = False) -> dict:
     """扫描单个平台全部课程
 
     返回: {website_id, name, status, student_name, courses, tasks}
-    role: "student" 或 "teacher"
     """
     from api.services.session_pool import pool as session_pool
 
@@ -225,7 +223,7 @@ def scan_platform(username: str, password: str, website_id: int,
             logger.info(f"学校平台扫描命中缓存 username={username} website_id={website_id}")
             return cached
 
-    # 1. 登录（教师端和学生端都用同一个登录接口）
+    # 1. 登录
     try:
         info = session_pool.get_or_login(username, password, website_id)
         session = info.session
@@ -378,27 +376,11 @@ def _discover_and_match() -> Dict[int, Dict]:
 
 def scan_all_platforms(username: str, password: str,
                        include_records: bool = True,
-                       force_refresh: bool = False,
-                       role: str = "student") -> list:
-    """扫描所有平台（并行扫描）
-
-    role: "student" 扫描平台 1,2,3; "teacher" 只扫描平台 5
-    """
+                       force_refresh: bool = False) -> list:
+    """扫描所有平台（并行扫描）"""
     import concurrent.futures
 
     platforms = _discover_and_match()
-
-    # 根据角色过滤平台
-    with open("debug_scan.log", "a", encoding="utf-8") as f:
-        f.write(f"过滤前平台: {list(platforms.keys())}, role={role}\n")
-    if role == "teacher":
-        # 教师端只扫描成都文理学院
-        platforms = {wid: p for wid, p in platforms.items() if wid == 5}
-    else:
-        # 学生端排除教师平台
-        platforms = {wid: p for wid, p in platforms.items() if wid != 5}
-    with open("debug_scan.log", "a", encoding="utf-8") as f:
-        f.write(f"过滤后平台: {list(platforms.keys())}\n")
 
     # 检查缓存
     if not force_refresh:
@@ -419,8 +401,7 @@ def scan_all_platforms(username: str, password: str,
     def _scan_one(wid):
         pinfo = platforms.get(wid, {})
         return scan_platform(username, password, wid, include_records,
-                             platform_name=pinfo.get("name"), force_refresh=force_refresh,
-                             role=role)
+                             platform_name=pinfo.get("name"), force_refresh=force_refresh)
 
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
