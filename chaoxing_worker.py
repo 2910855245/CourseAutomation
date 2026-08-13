@@ -493,53 +493,7 @@ def _solve_course_quizzes(session, cid, clid, cname, status_file, api_key):
     return done, failed, skipped
 
 
-def send_status(status_file, **kwargs):
-    data = {}
-    if os.path.exists(status_file):
-        try:
-            with open(status_file) as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            pass
-    # 清除终态标记，防止进度更新时保留旧的 done/success 导致 TaskRunner 误判
-    if not kwargs.get("done"):
-        data.pop("done", None)
-        data.pop("success", None)
-    data.update(kwargs)
-    data["updated_at"] = time.time()
-    tmp_file = status_file + ".tmp"
-    with open(tmp_file, "w") as f:
-        json.dump(data, f, ensure_ascii=False)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_file, status_file)
-    # 推送进度到 API（WebSocket 实时更新）
-    _push_ws_update(status_file, data)
-
-
-def _push_ws_update(status_file, data):
-    """通过 HTTP POST 推送进度更新到 API，触发 WebSocket 广播"""
-    try:
-        import urllib.request
-        payload = json.dumps({
-            "type": "progress",
-            "job_id": os.path.basename(os.path.dirname(status_file)),
-            "phase": data.get("phase", ""),
-            "progress": data.get("progress", 0),
-            "step_name": data.get("step_name", ""),
-            "course_name": data.get("course_name", ""),
-            "done": data.get("done", False),
-            "success": data.get("success", False),
-        }, ensure_ascii=False).encode("utf-8")
-        req = urllib.request.Request(
-            "http://127.0.0.1:8000/api/progress/live/push",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=2)
-    except Exception:
-        pass
+from worker_common import ensure_terminal_status, push_ws_update, send_status
 
 
 def run_task(params_file, status_file):
@@ -556,10 +510,10 @@ def run_task(params_file, status_file):
     # course_ids 格式: ["courseId:classId", ...] 或 [{"courseId": ..., "classId": ..., "course_name": ...}]
 
     if not cx_username or not cx_password:
-        send_status(status_file, phase="error", message="未提供学习通账号密码", done=True, success=False)
+        send_status(status_file, push_ws=True, phase="error", message="未提供学习通账号密码", done=True, success=False)
         return
 
-    send_status(status_file, phase="login", message="正在登录学习通...")
+    send_status(status_file, push_ws=True, phase="login", message="正在登录学习通...")
 
     from infrastructure.chaoxing.session import ChaoxingSession
 
@@ -577,7 +531,7 @@ def run_task(params_file, status_file):
     if session is None:
         session = ChaoxingSession()
         if not session.login(cx_username, cx_password):
-            send_status(status_file, phase="error", message="学习通登录失败，请检查账号密码", done=True, success=False)
+            send_status(status_file, push_ws=True, phase="error", message="学习通登录失败，请检查账号密码", done=True, success=False)
             return
 
     user_info = session.get_user_info()
@@ -609,7 +563,7 @@ def run_task(params_file, status_file):
         courses = [c for c in courses if not c.get("ended")]
 
     if not courses:
-        send_status(status_file, phase="error", message="未找到课程", done=True, success=False)
+        send_status(status_file, push_ws=True, phase="error", message="未找到课程", done=True, success=False)
         return
 
     logger.info(f"课程数量 count={len(courses)}")
@@ -834,7 +788,7 @@ def run_task(params_file, status_file):
         sys.exit(42)
 
     if _shutdown_requested:
-        send_status(status_file, phase="error", message="收到退出信号", done=True, success=False)
+        send_status(status_file, push_ws=True, phase="error", message="收到退出信号", done=True, success=False)
 
 
 if __name__ == "__main__":
@@ -861,12 +815,4 @@ if __name__ == "__main__":
             pass
         sys.exit(1)
     finally:
-        try:
-            sf = sys.argv[2]
-            if os.path.exists(sf):
-                with open(sf) as f:
-                    data = json.load(f)
-                if not data.get("done") and data.get("phase") != "error":
-                    send_status(sf, phase="error", message="进程异常退出", done=True, success=False)
-        except Exception:
-            pass
+        ensure_terminal_status(sys.argv[2])
