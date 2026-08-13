@@ -56,19 +56,15 @@ class JobExecutor:
                 website_id=job.website_id,
                 on_progress=lambda p, s, n: self._on_job_progress(job_id, p, s, n),
             )
-            # 阶段拆分：爬取后即退出（学习由 Rust daemon 承载、主进程监控），
+            # 阶段拆分（固定）：爬取后即退出（扫描+学习由 Rust daemon 承载、主进程监控），
             # 学习完成后再起独立考试/答题子进程——学习期（数小时）无 Python 子进程空转占内存
-            from config import settings as _cfg
             phase = "full"
             if job.website_id == 4:
-                # 学习通：crawl 阶段提交视频计划给 daemon（WORKER_PHASE_SPLIT_CX 灰度开关）
-                if _cfg.worker_phase_split_cx:
-                    phase = "crawl"
-            elif _cfg.worker_phase_split:
-                if job.job_type in ("video", "full", "all"):
-                    phase = "crawl"
-                elif job.job_type == "exam":
-                    phase = "exam"
+                phase = "crawl"
+            elif job.job_type in ("video", "full", "all"):
+                phase = "crawl"
+            elif job.job_type == "exam":
+                phase = "exam"
             result = runner.run(job_type=job.job_type, course_ids=job.course_ids,
                                 order_id=job.order_id, phase=phase)
 
@@ -267,12 +263,11 @@ class JobExecutor:
                     need_spawn = False
                     spawn_phase = "exam"
                     if job:
-                        from config import settings as _cfg
                         if job.website_id == 4:
-                            need_spawn = _cfg.worker_phase_split_cx
+                            need_spawn = True
                             spawn_phase = "quiz"
                         elif (job.job_type or "") in ("exam", "full", "all"):
-                            need_spawn = _cfg.worker_phase_split
+                            need_spawn = True
                     if need_spawn and job:
                         logger.info(f"学习完成，启动{spawn_phase}阶段 job_id={job_id}")
                         exam_result = self._run_exam_phase(job, status_file, phase=spawn_phase)

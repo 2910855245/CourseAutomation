@@ -113,7 +113,7 @@ def run_task(params_file, status_file):
     concurrency = params.get("concurrency", 8)
     # 阶段模式：full（完整流程）/ crawl（爬取+提交 daemon 后立即退出，主进程监控学习）/
     # exam（独立考试阶段：重登 + 重扫 + 考试）
-    phase = params.get("phase", "full")
+    phase = params.get("phase", "crawl")  # 完整流程已删除，仅 crawl/exam 两阶段
 
     send_status(status_file, phase="login", message="正在登录...")
 
@@ -126,47 +126,51 @@ def run_task(params_file, status_file):
     send_status(status_file, phase="crawl", message="正在获取课程...")
 
     from infrastructure.school.course_crawler import get_courses_with_diag
-    from services.scan_service import load_course_cache, scan_course
+    from services.scan_service import scan_course
 
-    # WORKER_RUST_SCAN：扫描+刷课全链 Rust（daemon /submit_full），本进程仅登录后提交
+    # ── crawl 阶段：扫描+刷课全链 Rust（/submit_full），本进程仅登录后提交 ──
     if phase == "crawl":
+        import urllib.request as _ur
         from config import settings as _rust_cfg
-        if getattr(_rust_cfg, "worker_rust_scan", False):
-            import urllib.request as _ur
-            _cids = []
-            for _c in course_ids:
-                if isinstance(_c, dict):
-                    _cids.append(str(_c.get("course_id") or _c.get("courseId") or ""))
-                else:
-                    _cids.append(str(_c))
-            _cids = [c for c in _cids if c]
-            _payload = json.dumps({
-                "order_id": params.get("order_id", os.path.basename(os.path.dirname(status_file))),
-                "username": username,
-                "password": password,
-                "base_url": base_url,
-                "cookie_str": "; ".join([f"{k}={v}" for k, v in session.cookies.items()]),
-                "course_ids": _cids,
-                "status_file": status_file,
-                "push_ws": True,
-                "ocr_url": f"{_rust_cfg.site_url.rstrip('/')}/api/internal/ocr",
-                "relogin_url": f"{_rust_cfg.site_url.rstrip('/')}/api/internal/relogin",
-            }).encode("utf-8")
-            try:
-                _req = _ur.Request(f"{_rust_cfg.rust_daemon_url}/submit_full", data=_payload,
-                                   headers={"Content-Type": "application/json"}, method="POST")
-                _resp = json.loads(_ur.urlopen(_req, timeout=5).read())
-                if _resp.get("ok"):
-                    send_status(status_file, phase="study_running", heavy_done=True,
-                                video_done=0, video_total=0,
-                                message="扫描+刷课已提交 Rust daemon")
-                    logger.info("Rust daemon 接手扫描+刷课 order_id={}", params.get("order_id", ""))
-                    return
-                logger.warning("daemon 拒绝任务，回退本地扫描: {}", _resp.get("message"))
-            except Exception as e:
-                logger.warning("daemon 不可用，回退本地扫描: {}", e)
+        _cids = []
+        for _c in course_ids:
+            if isinstance(_c, dict):
+                _cids.append(str(_c.get("course_id") or _c.get("courseId") or ""))
+            else:
+                _cids.append(str(_c))
+        _cids = [c for c in _cids if c]
+        _payload = json.dumps({
+            "order_id": params.get("order_id", os.path.basename(os.path.dirname(status_file))),
+            "username": username,
+            "password": password,
+            "base_url": base_url,
+            "cookie_str": "; ".join([f"{k}={v}" for k, v in session.cookies.items()]),
+            "course_ids": _cids,
+            "status_file": status_file,
+            "push_ws": True,
+            "ocr_url": f"{_rust_cfg.site_url.rstrip('/')}/api/internal/ocr",
+            "relogin_url": f"{_rust_cfg.site_url.rstrip('/')}/api/internal/relogin",
+        }).encode("utf-8")
+        try:
+            _req = _ur.Request(f"{_rust_cfg.rust_daemon_url}/submit_full", data=_payload,
+                               headers={"Content-Type": "application/json"}, method="POST")
+            _resp = json.loads(_ur.urlopen(_req, timeout=5).read())
+            if _resp.get("ok"):
+                send_status(status_file, phase="study_running", heavy_done=True,
+                            video_done=0, video_total=0,
+                            message="扫描+刷课已提交 Rust daemon")
+                logger.info("Rust daemon 接手扫描+刷课 order_id={}", params.get("order_id", ""))
+                return
+            send_status(status_file, phase="error",
+                        message=f"Rust daemon 拒绝任务: {_resp.get('message')}",
+                        done=True, success=False)
+            return
+        except Exception as e:
+            send_status(status_file, phase="error",
+                        message=f"Rust daemon 不可用: {e}", done=True, success=False)
+            return
 
-    # exam 模式：跳过爬取/视频阶段，重拉课程列表后直接进入考试
+    # ── exam 阶段：daemon 完成视频后由主进程再起本进程，重登（cookie 缓存）+ 考试 ──
     if phase == "exam":
         diag = get_courses_with_diag(session)
         courses = diag["courses"]
@@ -174,216 +178,10 @@ def run_task(params_file, status_file):
             send_status(status_file, phase="error",
                         message=diag.get("error") or "获取课程列表失败", done=True, success=False)
             return
+        video_success = True  # 视频阶段由 daemon 完成，考试阶段只看考试结果
         all_videos = []
         all_exams = []
         cookie_str = "; ".join([f"{k}={v}" for k, v in session.cookies.items()])
-    else:
-        # full / crawl 模式：爬取课程
-        diag = get_courses_with_diag(session)
-        courses = diag["courses"]
-        logger.info("获取到 {} 门课程 (http={}, err={})", len(courses), diag.get("http_code"), diag.get("error"))
-
-        # Cookie 过期 → 删除缓存，重新登录，验证 session 有效才继续
-        if not courses and diag.get("error") and ("失效" in diag["error"] or "登录" in diag["error"]):
-            logger.info("Cookie 过期，尝试重新登录...")
-            send_status(status_file, phase="crawl", message="Cookie过期，重新登录中...")
-            try:
-                from config import get_account_cookies_path, WEBSITES
-                from services.multi_platform_auth import login_single_platform, save_platform_cookie
-                cookie_file = get_account_cookies_path(username, WEBSITES.get(website_id, {}).get("name"))
-                if os.path.exists(cookie_file):
-                    os.remove(cookie_file)
-
-                # 直接调用登录，不用 load_session（避免用了坏缓存）
-                wid, ok, new_session, msg = login_single_platform(website_id, username, password)
-                if not ok:
-                    logger.error("重新登录失败: {}", msg)
-                    diag["error"] = f"重新登录失败: {msg}"
-                else:
-                    # 立即验证新 session 能否获取课程
-                    diag2 = get_courses_with_diag(new_session)
-                    if diag2["courses"]:
-                        # 新 session 有效，保存 cookie 并继续
-                        session = new_session
-                        courses = diag2["courses"]
-                        save_platform_cookie(username, website_id, session)
-                        logger.info("重新登录成功，获取到 {} 门课程", len(courses))
-                    else:
-                        # 新 session 也不能用，报告具体原因
-                        logger.error("重新登录后仍无法获取课程: {}", diag2.get("error"))
-                        diag["error"] = diag2.get("error") or "重新登录后仍无法获取课程"
-            except Exception as e:
-                logger.error("重新登录异常: {}", e)
-
-        if not courses:
-            err_msg = diag.get("error") or "未知原因"
-            send_status(status_file, phase="error", message=err_msg, done=True, success=False)
-            return
-
-        all_videos = []
-        all_exams = []
-
-        # 并发扫描：课程间相互独立，串行扫描是爬取阶段的主要耗时（IO 等待）
-        # httpx.Client 线程安全，session 可跨线程复用；SCAN_CONCURRENCY 可调
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        from config import settings as _scan_cfg
-        scan_concurrency = max(1, int(getattr(_scan_cfg, "scan_concurrency", 4) or 4))
-
-        def _scan_one(course, idx):
-            """扫描单门课程：返回 (videos, exams, skipped, info)。缓存优先。"""
-            cid = course.get("course_id", "")
-            if course_ids and cid not in course_ids:
-                return None
-            cname = course.get("name", "")
-            info = {"idx": idx, "cname": cname, "cid": cid}
-
-            # 优先用课程缓存（下单前扫描的详细结果，30分钟内有效）
-            cached = load_course_cache(username, website_id, cid)
-            if cached:
-                info["cache_hit"] = True
-                videos = list(cached.get("videos", []))
-                cached_exams = cached.get("exams", []) + cached.get("works", [])
-                non_done_exams = [e for e in cached_exams if not e.get("is_done") and not e.get("is_deleted") and e.get("time_status", "进行中") == "进行中"]
-                if non_done_exams:
-                    return videos, non_done_exams, len(cached_exams) - len(non_done_exams), info
-                # 缓存无可用考试数据 → 实时扫描（视频已从缓存加载）
-                try:
-                    result = scan_course(session, cid, cname)
-                    fresh = result.get("exams", []) + result.get("works", [])
-                    non_done = [e for e in fresh if not e.get("is_done") and not e.get("is_deleted") and e.get("time_status", "进行中") == "进行中"]
-                    info["fresh_counts"] = (len(result.get("videos", [])),
-                                            len(result.get("exams", [])),
-                                            len(result.get("works", [])))
-                    return videos, non_done, len(fresh) - len(non_done), info
-                except Exception as e:
-                    logger.error("处理课程 {} 失败: {}", cname, e)
-                    return videos, [], 0, info
-
-            send_status(status_file, phase="crawl", message=f"解析课程 {idx+1}/{len(courses)}: {cname}")
-            logger.info("处理课程: {} (id={})", cname, cid)
-            try:
-                result = scan_course(session, cid, cname)
-                fresh = result.get("exams", []) + result.get("works", [])
-                non_done = [e for e in fresh if not e.get("is_done") and not e.get("is_deleted") and e.get("time_status", "进行中") == "进行中"]
-                info["fresh_counts"] = (len(result.get("videos", [])),
-                                        len(result.get("exams", [])),
-                                        len(result.get("works", [])))
-                return list(result.get("videos", [])), non_done, len(fresh) - len(non_done), info
-            except Exception as e:
-                logger.error("处理课程 {} 失败: {}", cname, e)
-                return [], [], 0, info
-
-        with ThreadPoolExecutor(max_workers=scan_concurrency) as pool:
-            futures = [pool.submit(_scan_one, c, i) for i, c in enumerate(courses)]
-            for fut in as_completed(futures):
-                res = fut.result()
-                if res is None:
-                    continue
-                videos, exams, skipped, info = res
-                cname = info["cname"]
-                if info.get("cache_hit"):
-                    logger.info("课程缓存命中: {} (id={}) 可考={} 跳过={}",
-                                cname, info["cid"], len(exams), skipped)
-                if info.get("fresh_counts"):
-                    v, e, w = info["fresh_counts"]
-                    logger.info("  视频={} 考试={} 作业={} 可考={} 跳过={}",
-                                v, e, w, len(exams), skipped)
-                all_videos.extend(videos)
-                all_exams.extend(exams)
-
-        logger.info("汇总: 视频={}, 考试/作业={}", len(all_videos), len(all_exams))
-
-        if not all_videos and not all_exams:
-            send_status(status_file, phase="error", message="未找到任何视频或考试", done=True, success=False)
-            return
-
-        cookie_str = "; ".join([f"{k}={v}" for k, v in session.cookies.items()])
-
-    # ── 第一阶段：刷视频（必须在考试之前完成） ──
-    video_success = True
-    if job_type in ("video", "full", "all") and all_videos:
-        task_dir = os.path.dirname(status_file)
-
-        study_params = {
-            "base_url": base_url,
-            "cookie_str": cookie_str,
-            "username": username,
-            "password": password,
-        }
-        params.update(study_params)
-        with open(params_file, "w", encoding="utf-8") as f:
-            json.dump(params, f, ensure_ascii=False)
-
-        current_pid = os.getpid()
-        send_status(status_file, phase="study_running", heavy_done=True, study_pid=current_pid,
-                    video_done=0, video_total=len(all_videos),
-                    message=f"开始刷视频 (共{len(all_videos)}个)")
-
-        # ── 优先走 Rust 刷课守护进程（单进程多并发，内存 ~1-2MB/任务）──
-        daemon_ok = False
-        from config import settings
-        if settings.rust_daemon_url:
-            try:
-                import urllib.request
-                cookies_list = [{"name": k.strip(), "value": v.strip()}
-                                for pair in cookie_str.split(";") if "=" in pair
-                                for k, v in [pair.split("=", 1)]]
-                payload = json.dumps({
-                    "order_id": params.get("order_id", os.path.basename(task_dir)),
-                    "username": username,
-                    "password": password,
-                    "base_url": base_url,
-                    "cookies": cookies_list,
-                    "videos": all_videos,
-                    "status_file": status_file,
-                    "push_ws": True,
-                    "ocr_url": f"{settings.site_url.rstrip('/')}/api/internal/ocr",
-                    "relogin_url": f"{settings.site_url.rstrip('/')}/api/internal/relogin",
-                }).encode("utf-8")
-                req = urllib.request.Request(
-                    f"{settings.rust_daemon_url}/submit", data=payload,
-                    headers={"Content-Type": "application/json"}, method="POST")
-                resp = json.loads(urllib.request.urlopen(req, timeout=5).read())
-                if resp.get("ok"):
-                    daemon_ok = True
-                    send_status(status_file, study_pid=0)
-                    logger.info("Rust 守护进程接手刷课 order_id={}", params.get("order_id", ""))
-                    if phase == "crawl":
-                        # 阶段拆分：子进程立即退出（省去数小时空转内存），
-                        # 主进程 monitor_study 等待学习完成后再起考试阶段子进程
-                        logger.info("crawl 阶段完成，退出并由主进程监控学习进度")
-                        return
-                    # 等待 daemon 写完终态（视频完成后 worker 才进入考试阶段）
-                    total_dur = sum(v.get("duration", 0) for v in all_videos)
-                    timeout_sec = max(600, total_dur * 2.5 + 120)
-                    waited = 0
-                    while waited < timeout_sec:
-                        time.sleep(3)
-                        waited += 3
-                        try:
-                            with open(status_file, encoding="utf-8") as f:
-                                st = json.load(f)
-                            if st.get("done"):
-                                video_success = st.get("success", False)
-                                if not video_success:
-                                    logger.warning("Rust daemon 刷课失败: {}", st.get("message", ""))
-                                break
-                        except Exception:
-                            continue
-                    else:
-                        video_success = False
-                        logger.error("Rust daemon 刷课超时")
-            except Exception as e:
-                logger.warning("Rust 守护进程不可用，回退 Python 子进程: {}", e)
-
-        if not daemon_ok:
-            # 无 Python 回退：daemon 不可用则视频阶段明确失败（考试阶段仍继续）
-            video_success = False
-            send_status(status_file, phase="video",
-                        message="Rust 刷课守护进程不可用，视频阶段失败",
-                        video_pct=0)
-            logger.error("Rust 刷课守护进程不可用，视频阶段失败（无 Python 回退）")
-
     # ── 第二阶段：考试/作业（视频完成后再执行） ──
     # 重新扫描考试列表（平台可能在刷视频期间更换了考试）
     if job_type in ("exam", "full", "all"):

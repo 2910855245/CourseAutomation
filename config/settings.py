@@ -31,12 +31,8 @@ class Settings(BaseSettings):
     worker_token: str = Field(default="", alias="WORKER_TOKEN")
     rust_daemon_url: str = Field(default="http://127.0.0.1:17017", alias="RUST_DAEMON_URL")
     ocr_service_url: str = Field(default="http://127.0.0.1:17018", alias="OCR_SERVICE_URL")
-    worker_phase_split: bool = Field(default=True, alias="WORKER_PHASE_SPLIT")
-    worker_phase_split_cx: bool = Field(default=False, alias="WORKER_PHASE_SPLIT_CX")
     worker_pool_enabled: bool = Field(default=False, alias="WORKER_POOL_ENABLED")
     worker_pool_port: int = Field(default=17019, alias="WORKER_POOL_PORT")
-    scan_concurrency: int = Field(default=4, alias="SCAN_CONCURRENCY")
-    worker_rust_scan: bool = Field(default=False, alias="WORKER_RUST_SCAN")
     captcha_ak: str = Field(default="", alias="CAPTCHA_AK")
     captcha_url: str = Field(default="", alias="CAPTCHA_URL")
 

@@ -85,56 +85,6 @@ def _add_columns_if_missing(table_name: str, columns: dict):
             logger.warning(f"迁移失败 table={table_name} column={col} error={str(e)}")
 
 
-def _migrate_legacy_encrypted_passwords():
-    """一次性迁移：把历史 ENC:/ENC2: 加密的订单密码解密为明文。
-
-    密码已改为明文存储，此迁移只为兼容旧库数据；迁移完成后不再有加解密逻辑。
-    依赖旧的 PASSWORD_ENCRYPTION_KEY 环境变量（若历史 .env 仍保留该键）。
-    """
-    import base64
-    import hashlib
-
-    _key_env = os.environ.get("PASSWORD_ENCRYPTION_KEY", "")
-    if not _key_env:
-        return
-    try:
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    except ImportError:
-        return
-    derived = hashlib.sha256(_key_env.encode()).digest()
-
-    def _decrypt_legacy(stored: str) -> str:
-        if stored.startswith("ENC2:"):
-            raw = base64.b64decode(stored[len("ENC2:"):])
-            nonce, ct = raw[:12], raw[12:]
-            return AESGCM(derived).decrypt(nonce, ct, None).decode("utf-8")
-        if stored.startswith("ENC:"):
-            raw = base64.b64decode(stored[len("ENC:"):])
-            return bytes(b ^ derived[i % len(derived)] for i, b in enumerate(raw)).decode("utf-8")
-        return stored
-
-    try:
-        session = SessionLocal()
-        try:
-            rows = session.scalars(
-                select(Order).filter(
-                    Order.password.like("ENC:%") | Order.password.like("ENC2:%")
-                )
-            ).all()
-            for o in rows:
-                try:
-                    o.password = _decrypt_legacy(o.password)
-                except Exception:
-                    continue  # 解不开的旧行保持原样，不阻塞启动
-            session.commit()
-            if rows:
-                logger.info(f"迁移: 旧加密订单密码已转明文 count={len(rows)}")
-        finally:
-            session.close()
-    except Exception as e:
-        logger.warning(f"迁移失败 旧密码转明文 error={str(e)}")
-
-
 def _rebuild_legacy_table(table_model, legacy_cols):
     """旧库表残留已废弃的 NOT NULL 列（模型已不再写入），重建表以去除。
 
@@ -166,7 +116,6 @@ def _rebuild_legacy_table(table_model, legacy_cols):
 def init_db():
     Base.metadata.create_all(bind=engine)
 
-    _migrate_legacy_encrypted_passwords()
 
     _add_columns_if_missing("ypay_account", {
         "alipay_appid": "VARCHAR(255) DEFAULT ''",
