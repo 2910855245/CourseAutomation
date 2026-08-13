@@ -10,7 +10,7 @@ except (ImportError, OSError, FileNotFoundError):
 from fastapi import APIRouter, Request
 from fastapi.responses import PlainTextResponse
 
-from api.compat import to_thread_impl
+
 from api.database import db
 from services.ypay_service import ypay
 
@@ -44,7 +44,7 @@ async def vmq_heart(request: Request):
     if not t or not sign:
         return "fail"
 
-    return await to_thread_impl(_vmq_heart_sync, t, sign, request)
+    return await asyncio.to_thread(_vmq_heart_sync, t, sign, request)
 
 
 @router.post("/vmq/push", response_class=PlainTextResponse)
@@ -68,7 +68,7 @@ async def vmq_push(request: Request):
     if not ptype or not price:
         return "fail"
 
-    return await to_thread_impl(_vmq_push_sync, ptype, price, t, sign)
+    return await asyncio.to_thread(_vmq_push_sync, ptype, price, t, sign)
 
 
 def _vmq_heart_sync(t: str, sign: str, request: Request) -> str:

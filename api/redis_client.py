@@ -176,54 +176,6 @@ class RedisClient:
             self._maybe_reconnect()
             return False
 
-    def zadd(self, key: str, mapping: dict) -> Optional[int]:
-        if not self._available:
-            self._maybe_reconnect()
-            return None
-        try:
-            return self._redis.zadd(key, mapping)
-        except Exception as e:
-            logger.warning(f"Redis zadd 失败 key={key}")
-            self._available = False
-            self._maybe_reconnect()
-            return None
-
-    def zrangebyscore(self, key: str, min_score: float, max_score: float):
-        if not self._available:
-            self._maybe_reconnect()
-            return None
-        try:
-            return self._redis.zrangebyscore(key, min_score, max_score)
-        except Exception as e:
-            logger.warning(f"Redis zrangebyscore 失败 key={key}")
-            self._available = False
-            self._maybe_reconnect()
-            return None
-
-    def zremrangebyscore(self, key: str, min_score: float, max_score: float):
-        if not self._available:
-            self._maybe_reconnect()
-            return None
-        try:
-            return self._redis.zremrangebyscore(key, min_score, max_score)
-        except Exception as e:
-            logger.warning(f"Redis zremrangebyscore 失败 key={key}")
-            self._available = False
-            self._maybe_reconnect()
-            return None
-
-    def zcard(self, key: str) -> Optional[int]:
-        if not self._available:
-            self._maybe_reconnect()
-            return None
-        try:
-            return self._redis.zcard(key)
-        except Exception as e:
-            logger.warning(f"Redis zcard 失败 key={key}")
-            self._available = False
-            self._maybe_reconnect()
-            return None
-
     def scan_keys(self, pattern: str, count: int = 1000) -> list:
         """扫描匹配 pattern 的 key，返回 [(key, value), ...]"""
         if not self._available:
@@ -257,21 +209,6 @@ class RedisClient:
             return self._redis.publish(channel, message)
         except Exception as e:
             logger.warning(f"Redis publish 失败 channel={channel}")
-            self._available = False
-            self._maybe_reconnect()
-            return None
-
-    def subscribe(self, *channels: str):
-        """订阅频道，返回 pubsub 对象"""
-        if not self._available:
-            self._maybe_reconnect()
-            return None
-        try:
-            pubsub = self._redis.pubsub()
-            pubsub.subscribe(*channels)
-            return pubsub
-        except Exception as e:
-            logger.warning(f"Redis subscribe 失败 channels={channels}")
             self._available = False
             self._maybe_reconnect()
             return None
@@ -313,45 +250,6 @@ class RedisClient:
         return result == 1
 
     # ── Streams ──
-
-    def xadd(self, stream: str, fields: dict, maxlen: int = 10000) -> Optional[str]:
-        """向 Stream 追加消息"""
-        if not self._available:
-            self._maybe_reconnect()
-            return None
-        try:
-            return self._redis.xadd(stream, fields, maxlen=maxlen)
-        except Exception as e:
-            logger.warning(f"Redis xadd 失败 stream={stream}")
-            self._available = False
-            self._maybe_reconnect()
-            return None
-
-    def xread(self, streams: dict, count: int = 10, block: int = 0):
-        """从 Stream 读取消息"""
-        if not self._available:
-            self._maybe_reconnect()
-            return None
-        try:
-            return self._redis.xread(streams, count=count, block=block)
-        except Exception as e:
-            logger.warning(f"Redis xread 失败 streams={streams}")
-            self._available = False
-            self._maybe_reconnect()
-            return None
-
-    def xlen(self, stream: str) -> Optional[int]:
-        """获取 Stream 长度"""
-        if not self._available:
-            self._maybe_reconnect()
-            return None
-        try:
-            return self._redis.xlen(stream)
-        except Exception as e:
-            logger.warning(f"Redis xlen 失败 stream={stream}")
-            self._available = False
-            self._maybe_reconnect()
-            return None
 
 
 @lru_cache

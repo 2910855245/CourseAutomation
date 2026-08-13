@@ -70,7 +70,6 @@ from api.routers import (
     queue,
     scan,
     users,
-    wallet,
     ypay_admin,
     ypay_app,
     ypay_routes,
@@ -220,7 +219,6 @@ async def no_cache_middleware(request: Request, call_next):
 app.include_router(scan.router)
 app.include_router(progress.router)
 app.include_router(users.router)
-app.include_router(wallet.router)
 app.include_router(orders.router)
 app.include_router(admin.router)
 app.include_router(admin_users.router)

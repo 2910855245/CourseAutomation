@@ -412,51 +412,8 @@ def clear_history(current_user: dict = Depends(get_optional_user)):
 from api.utils import mask_password as _mask_password
 
 
-class BatchAction(BaseModel):
-    order_ids: list
 
 
-@router.post("/batch-cancel", response_model=ApiResponse)
-def batch_cancel_orders(
-    body: BatchAction,
-    current_user: dict = Depends(get_optional_user),
-):
-    uid = current_user["user_id"] if current_user["user_id"] != "guest" else None
-    if not uid:
-        raise HTTPException(status_code=401, detail="请先登录")
-    count = 0
-    for oid in body.order_ids:
-        order = db.get_order(oid)
-        if not order or order["status"] != "pending":
-            continue
-        if uid and order.get("user_id") != uid:
-            continue
-        cancelled = db.cancel_order(oid)
-        if not cancelled:
-            continue
-        if order.get("paid") and order["price"] > 0 and order["user_id"]:
-            db.update_user_balance(order["user_id"], order["price"], "order_refund",
-                                   note=f"订单 {oid} 取消退款", order_id=oid)
-        count += 1
-    return ApiResponse(message=f"成功取消 {count} 个订单")
-
-
-@router.post("/retry/{order_id}", response_model=ApiResponse)
-def retry_order(order_id: str, current_user: dict = Depends(get_optional_user)):
-    uid = current_user["user_id"] if current_user["user_id"] != "guest" else None
-    if not uid:
-        raise HTTPException(status_code=401, detail="请先登录")
-    original = db.get_order(order_id)
-    if not original:
-        raise HTTPException(status_code=404, detail="订单不存在")
-    if original.get("user_id") != uid:
-        raise HTTPException(status_code=403, detail="无权操作")
-
-    from services.order_service import retry_order as _retry
-    new_order = _retry(original, uid)
-
-    return ApiResponse(data={"order_id": new_order["order_id"],
-                              "message": "已重新创建订单，请支付"})
 
 
 @router.get("/audit-log/{order_id}", response_model=ApiResponse)

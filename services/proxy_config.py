@@ -64,12 +64,6 @@ def get_proxy_config() -> dict:
     return result
 
 
-def get_next_proxy() -> dict:
-    """获取下一个代理（轮换模式）"""
-    global _proxy_index
-    if not _proxy_pool:
-        return get_proxy_config()
-
     url = _proxy_pool[_proxy_index % len(_proxy_pool)]
     _proxy_index += 1
     # 随机打乱顺序实现随机轮换
@@ -79,11 +73,6 @@ def get_next_proxy() -> dict:
 
     return {"enabled": True, "proxies": {"http": url, "https": url}}
 
-
-def get_random_proxy() -> dict:
-    """获取随机代理"""
-    if not _proxy_pool:
-        return get_proxy_config()
 
     url = random.choice(_proxy_pool)
     return {"enabled": True, "proxies": {"http": url, "https": url}}

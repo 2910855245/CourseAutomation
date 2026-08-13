@@ -1,4 +1,5 @@
 import hashlib
+import asyncio
 import json
 import time
 from datetime import datetime
@@ -13,7 +14,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
-from api.compat import to_thread_impl
+
 from api.database import db
 from api.models import ApiResponse
 from services.ypay_service import ypay
@@ -203,7 +204,7 @@ async def ypay_app_push(request: Request):
     if not ypay.verify_push_sign(ptype, price, t, sign):
         return json.dumps({"code": -1, "msg": "签名错误"}, ensure_ascii=False)
 
-    return await to_thread_impl(_ypay_app_push_sync, ptype, price)
+    return await asyncio.to_thread(_ypay_app_push_sync, ptype, price)
 
 
 def _ypay_app_push_sync(ptype: str, price: str) -> str:

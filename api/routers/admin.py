@@ -32,13 +32,6 @@ def _require_admin(current_user: dict = Depends(get_current_user)):
     return get_current_admin(current_user)
 
 
-@router.get("/stats", response_model=ApiResponse)
-def get_stats(admin: dict = Depends(_require_admin)):
-    stats = db.get_stats()
-    user_stats = db.get_user_stats()
-    stats["users"] = user_stats
-    return ApiResponse(data=stats)
-
 
 @router.get("/orders", response_model=ApiResponse)
 def admin_list_orders(
@@ -137,19 +130,6 @@ def execute_order(order_id: str, admin: dict = Depends(_require_admin)):
         db.fail_order(order_id, error="执行失败")
         raise HTTPException(status_code=500, detail="执行失败")
 
-
-@router.post("/orders/{order_id}/accept-and-execute", response_model=ApiResponse)
-def accept_and_execute(order_id: str, req: AcceptOrderRequest = AcceptOrderRequest(),
-                       admin: dict = Depends(_require_admin)):
-    order = db.get_order(order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="订单不存在")
-    # 管理员操作：允许 pending/cancelled 状态
-    if order["status"] not in ("pending", "cancelled"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"只能对 pending/cancelled 状态的订单执行此操作，当前状态: {order['status']}",
-        )
 
     # cancelled 状态重置
     if order["status"] == "cancelled":
@@ -283,19 +263,6 @@ def complete_order(order_id: str, admin: dict = Depends(_require_admin)):
     db.complete_order(order_id)
     return ApiResponse(message=f"订单 {order_id} 已标记完成")
 
-
-@router.get("/tasks/{order_id}", response_model=ApiResponse)
-def get_order_task(order_id: str, admin: dict = Depends(_require_admin)):
-    order = db.get_order(order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="订单不存在")
-    task_id = order.get("task_id")
-    if not task_id:
-        return ApiResponse(data={"status": order["status"], "task": None})
-    task = task_manager.get_task(task_id)
-    if not task:
-        return ApiResponse(data={"status": order["status"], "task": None})
-    return ApiResponse(data={"status": order["status"], "task": task.to_detail_dict()})
 
 
 def _start_order_monitor(order_id: str, task_id: str):

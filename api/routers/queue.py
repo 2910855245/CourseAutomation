@@ -66,14 +66,6 @@ def list_jobs(
     return ApiResponse(data=tagged_jobs)
 
 
-@router.get("/jobs/{job_id}", response_model=ApiResponse)
-def get_job(job_id: str, admin: dict = Depends(_require_admin)):
-    q = get_queue_by_job_id(job_id)
-    if not q:
-        raise HTTPException(status_code=404, detail="任务不存在")
-    job = q.get_job(job_id)
-    return ApiResponse(data=job.to_dict())
-
 
 @router.post("/jobs/{job_id}/cancel", response_model=ApiResponse)
 def cancel_job(job_id: str, admin: dict = Depends(_require_admin)):
@@ -177,13 +169,6 @@ def set_queue_config(
         data=get_combined_stats(),
     )
 
-
-@router.post("/auto-correct", response_model=ApiResponse)
-def trigger_auto_correct(admin: dict = Depends(_require_admin)):
-    """手动触发一次自动纠错扫描"""
-    school_queue.trigger_correction()
-    chaoxing_queue.trigger_correction()
-    return ApiResponse(message="纠错扫描已完成", data=get_combined_stats())
 
 
 @router.get("/error-stats", response_model=ApiResponse)

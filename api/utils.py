@@ -1,48 +1,29 @@
+"""通用工具：密码脱敏、二维码、站点 URL、ID 生成。"""
+
 from __future__ import annotations
 
 import base64
 import io
-import random
-import string
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+import json
+import uuid
 
 import qrcode
 
 from config import settings
 
-# 中国时区 UTC+8
-_CHINA_TZ = timezone(timedelta(hours=8))
-
-
-def now() -> datetime:
-    """返回中国时区的当前时间（替代 datetime.now()）"""
-    return datetime.now(_CHINA_TZ)
-
-
-def now_str() -> str:
-    """返回中国时区的当前时间字符串"""
-    return now().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def now_iso() -> str:
-    """返回中国时区的当前时间 ISO 格式"""
-    return now().isoformat()
-
 
 def mask_password(order: dict) -> dict:
+    """订单展示层密码脱敏（***）"""
     if not order:
         return order
     d = dict(order)
     pwd = d.get("password", "")
-    if not pwd:
-        d["password"] = ""
-    else:
-        d["password"] = "***"
+    d["password"] = "***" if pwd else ""
     return d
 
 
-def make_qr_base64(data: str) -> Optional[str]:
+def make_qr_base64(data: str) -> str | None:
+    """内容 → 二维码 PNG base64（data:image/png;base64,...）"""
     try:
         qr = qrcode.QRCode(box_size=8, border=2)
         qr.add_data(data)
@@ -50,48 +31,43 @@ def make_qr_base64(data: str) -> Optional[str]:
         img = qr.make_image(fill_color="black", back_color="white")
         buf = io.BytesIO()
         img.save(buf, format="PNG")
-        b64 = base64.b64encode(buf.getvalue()).decode()
-        return f"data:image/png;base64,{b64}"
-    except Exception as e:
+        return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
+    except Exception:
         return None
 
 
 def get_site_url() -> str:
+    """站点 URL：优先数据库配置，回退 settings"""
     from api.database import db
     try:
         db_url = db.ypay_setting_get("site_url", "")
         if db_url:
             return db_url.strip().rstrip("/")
-    except Exception as e:
+    except Exception:
         pass
     return (settings.site_url or "http://localhost:8000").strip().rstrip("/")
 
 
-def retry(max_attempts: int = 3, delay: float = 1.0, backoff: float = 2.0,
-          exceptions: tuple = (Exception,)):
-    """重试装饰器，用于支付等关键路径。
+def gen_id(prefix: str, n: int = 8) -> str:
+    """业务 ID 生成：PREFIX-XXXXXXXX（大写 hex）"""
+    return f"{prefix}-{uuid.uuid4().hex[:n].upper()}"
 
-    用法:
-        @retry(max_attempts=3, delay=0.5, exceptions=(ConnectionError, TimeoutError))
-        def call_external_api():
-            ...
-    """
-    import functools
-    import time as _time
 
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            last_exc = None
-            wait = delay
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    return func(*args, **kwargs)
-                except exceptions as e:
-                    last_exc = e
-                    if attempt < max_attempts:
-                        _time.sleep(wait)
-                        wait *= backoff
-            raise last_exc
-        return wrapper
-    return decorator
+def parse_course_ids(course_ids) -> list:
+    """course_ids str/list/None → list（订单字段解析，多处分身归一）"""
+    if isinstance(course_ids, str):
+        try:
+            course_ids = json.loads(course_ids) if course_ids else []
+        except (json.JSONDecodeError, ValueError):
+            course_ids = []
+    if not isinstance(course_ids, list):
+        course_ids = []
+    return course_ids
+
+
+VALID_TASK_TYPES = ("video", "exam", "full", "chaoxing_points")
+
+
+def normalize_task_type(task_type: str) -> str:
+    """task_type 白名单归一（非法值回退 full）"""
+    return task_type if task_type in VALID_TASK_TYPES else "full"
