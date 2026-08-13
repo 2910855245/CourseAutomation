@@ -1,41 +1,51 @@
-//! rust_worker — 刷课守护进程
+//! rust-backend — 刷课系统后端（纯 Rust 化，单二进制）
 //!
-//! Python（编织层）完成登录/爬取/考试后，把刷课任务 JSON 交给本进程；
-//! 每任务一个 tokio task，反检测参数与 study_worker.py 的 LightStudyReporter 1:1 对齐。
-//! 单进程 N 并发任务内存 ~50MB（对比 Python 每任务 ~100MB 子进程）。
+//! 单进程承载：
+//! - 刷课 daemon（/submit /submit_cx /submit_full /cancel，tokio task 调度）
+//! - HTTP API（/api/*，逐步对齐 Python 版本）
+//! - 静态资源 + SPA（gzip/brotli 压缩 + immutable 缓存）
+//! - SQLite 访问层（rusqlite 直连，与 Python 迁移期共享 data/*.db）
 
+mod api;
 mod cx_study;
+mod db;
 mod scan;
 mod study;
 
-use std::env;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
-use axum::{
-    Json, Router,
-    extract::Path, extract::State,
-    routing::{get, post},
-};
+use axum::body::Body;
+use axum::extract::{Path, Request, State};
+use axum::http::{header, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::Response;
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use dashmap::DashMap;
 use serde_json::json;
+use tower_http::compression::CompressionLayer;
+use tower_http::services::ServeDir;
+use tracing_subscriber::EnvFilter;
 
 type TaskMap = Arc<DashMap<String, tokio::task::JoinHandle<()>>>;
 
 #[derive(Clone)]
-struct DaemonState {
-    tasks: TaskMap,
-    push_url: String,
-    push_token: String,
+pub struct AppState {
+    pub tasks: TaskMap,
+    pub push_url: String,
+    pub push_token: String,
+    pub db: db::Db,
 }
 
 type SubmitTask = study::TaskInput;
 
 fn env_or(key: &str, default: &str) -> String {
-    env::var(key).unwrap_or_else(|_| default.to_string())
+    std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
-fn rss_mb() -> u64 {
+pub(crate) fn rss_mb() -> u64 {
     #[cfg(target_os = "linux")]
     {
         let s = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
@@ -51,47 +61,106 @@ fn rss_mb() -> u64 {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = dotenvy::dotenv();
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .init();
+
     let port: u16 = env_or("RUST_DAEMON_PORT", "17017").parse().unwrap_or(17017);
     let push_url = env_or("RUST_DAEMON_PUSH_URL", "http://127.0.0.1:8000/api/progress/live/push");
     let push_token = env_or("RUST_DAEMON_PUSH_TOKEN", "");
+    let db_path = env_or("DB_PATH", "data/orders.db");
 
-    let state = DaemonState {
+    let database = db::Db::open(&db_path)
+        .with_context(|| format!("打开数据库失败: {db_path}"))?;
+    tracing::info!(db_path, "SQLite 就绪");
+
+    let state = AppState {
         tasks: Arc::new(DashMap::new()),
         push_url,
         push_token,
+        db: database,
     };
 
     let app = Router::new()
-        .route("/health", get(health))
         .route("/status", get(status))
         .route("/submit", post(submit))
         .route("/submit_cx", post(submit_cx))
         .route("/submit_full", post(submit_full))
         .route("/cancel/{order_id}", post(cancel))
+        .merge(api::router())
+        .nest_service("/static", ServeDir::new("static").append_index_html_on_directories(true))
+        .fallback(spa_fallback)
+        .layer(middleware::from_fn(cache_headers))
+        .layer(CompressionLayer::new())
+        .layer(middleware::from_fn(trace_request))
         .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");
-    println!("[rust_worker] listening on {addr}");
+    tracing::info!(addr, "rust-backend 就绪（API + daemon + 静态服务）");
     let listener = tokio::net::TcpListener::bind(&addr).await
         .with_context(|| format!("绑定 {addr} 失败"))?;
     axum::serve(listener, app).await?;
     Ok(())
 }
 
-async fn health(State(state): State<DaemonState>) -> Json<serde_json::Value> {
-    Json(json!({
-        "tasks": state.tasks.len(),
-        "memory_mb": rss_mb(),
-    }))
+/// 请求日志
+async fn trace_request(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let start = std::time::Instant::now();
+    let resp = next.run(req).await;
+    let status = resp.status().as_u16();
+    if path.starts_with("/api/") || path == "/submit" || path == "/submit_cx" || path == "/submit_full" {
+        tracing::debug!(method = %method, path = %path, status, elapsed_ms = start.elapsed().as_millis(), "request");
+    }
+    resp
 }
 
-async fn status(State(state): State<DaemonState>) -> Json<serde_json::Value> {
+/// 构建产物文件名带内容 hash：永久缓存；HTML 保持 no-cache
+async fn cache_headers(req: Request, next: Next) -> Response {
+    let is_asset = req.uri().path().starts_with("/static/assets/");
+    let mut resp = next.run(req).await;
+    if is_asset {
+        resp.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=31536000, immutable"),
+        );
+    }
+    resp
+}
+
+/// SPA 回退：非 API/静态路径返回 index.html（no-cache）
+async fn spa_fallback() -> Response {
+    match tokio::fs::read("static/index.html").await {
+        Ok(body) => {
+            let mut resp = Response::new(Body::from(body));
+            *resp.status_mut() = StatusCode::OK;
+            resp.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=utf-8"),
+            );
+            resp.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("no-store, no-cache, must-revalidate, max-age=0"),
+            );
+            resp
+        }
+        Err(_) => {
+            let mut resp = Response::new(Body::from("index.html 未找到（请先 npm run build）"));
+            *resp.status_mut() = StatusCode::NOT_FOUND;
+            resp
+        }
+    }
+}
+
+async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
     let ids: Vec<String> = state.tasks.iter().map(|e| e.key().clone()).collect();
     Json(json!({"tasks": ids}))
 }
 
 async fn cancel(
-    State(state): State<DaemonState>,
+    State(state): State<AppState>,
     Path(order_id): Path<String>,
 ) -> Json<serde_json::Value> {
     if let Some((_, handle)) = state.tasks.remove(&order_id) {
@@ -103,7 +172,7 @@ async fn cancel(
 }
 
 async fn submit(
-    State(state): State<DaemonState>,
+    State(state): State<AppState>,
     Json(task): Json<SubmitTask>,
 ) -> Json<serde_json::Value> {
     if task.order_id.is_empty() || task.videos.is_empty() {
@@ -123,7 +192,7 @@ async fn submit(
     let handle = tokio::spawn(async move {
         let result = study::run_study(&task, &push_url, &push_token).await;
         if let Err(e) = result {
-            eprintln!("[rust_worker] task {} failed: {e}", oid_for_task);
+            tracing::warn!(order_id = %oid_for_task, error = %e, "school study task failed");
         }
         tasks.remove(&oid_for_task);
     });
@@ -133,7 +202,7 @@ async fn submit(
 }
 
 async fn submit_full(
-    State(state): State<DaemonState>,
+    State(state): State<AppState>,
     Json(task): Json<scan::ScanTaskInput>,
 ) -> Json<serde_json::Value> {
     if task.order_id.is_empty() || task.cookie_str.is_empty() || task.base_url.is_empty() {
@@ -152,7 +221,7 @@ async fn submit_full(
     let handle = tokio::spawn(async move {
         let result = scan::run_scan_and_study(&task, &push_url, &push_token).await;
         if let Err(e) = result {
-            eprintln!("[rust_worker] full task {} failed: {e}", order_id);
+            tracing::warn!(order_id = %order_id, error = %e, "full task failed");
         }
         tasks.remove(&order_id);
     });
@@ -162,7 +231,7 @@ async fn submit_full(
 }
 
 async fn submit_cx(
-    State(state): State<DaemonState>,
+    State(state): State<AppState>,
     Json(task): Json<cx_study::CxTaskInput>,
 ) -> Json<serde_json::Value> {
     if task.order_id.is_empty() || task.points.is_empty() {
@@ -181,11 +250,17 @@ async fn submit_cx(
     let handle = tokio::spawn(async move {
         let result = cx_study::run_cx_study(&task, &push_url, &push_token).await;
         if let Err(e) = result {
-            eprintln!("[rust_worker] cx task {} failed: {e}", order_id);
+            tracing::warn!(order_id = %order_id, error = %e, "cx task failed");
         }
         tasks.remove(&order_id);
     });
 
     state.tasks.insert(oid_resp.clone(), handle);
     Json(json!({"ok": true, "order_id": oid_resp}))
+}
+
+// 供状态写入使用的时间戳
+#[allow(dead_code)]
+pub(crate) fn now_ms() -> u128 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
 }

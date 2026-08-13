@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "signal", "sync", "fs"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "signal", "sync", "fs", "io-util"] }
 reqwest = { version = "0.12", default-features = false, features = ["native-tls", "cookies", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -15,9 +15,20 @@ base64 = "0.22"
 axum = "0.8"
 md5 = "0.7"
 scraper = "0.20"
+# ── 后端 API 骨架（纯 Rust 化阶段 0）──
+rusqlite = { version = "0.32", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "compression-gzip", "compression-br", "set-header", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dotenvy = "0.15"
 
 [profile.release]
-lto = true
+# 终极性能：最大优化 + 全程序 LTO（二进制略大，换取运行时速度）
+lto = "fat"
 codegen-units = 1
 strip = true
-opt-level = "z"
+opt-level = 3
+panic = "unwind"
