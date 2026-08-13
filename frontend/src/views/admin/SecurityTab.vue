@@ -166,11 +166,15 @@ const { DEEPSEEK_MODELS, chaoxingModel, clearDeepseekKey, deepseekApiKey, deepse
               学习通
             </div>
             <select v-model="chaoxingModel" class="ai-model-select">
-              <option v-for="m in DEEPSEEK_MODELS" :key="m.value" :value="m.value">{{ m.label }}</option>
+              <option v-for="m in DEEPSEEK_MODELS" :key="m.value" :value="m.value">
+{{ m.label }}
+</option>
             </select>
             <div class="ai-model-foot">
               <span class="ai-model-desc">{{ DEEPSEEK_MODELS.find(m => m.value === chaoxingModel)?.desc }}</span>
-              <button class="btn-link" :disabled="testingModel === chaoxingModel" @click="testModelApi(chaoxingModel)">{{ testingModel === chaoxingModel ? '...' : '测试' }}</button>
+              <button class="btn-link" :disabled="testingModel === chaoxingModel" @click="testModelApi(chaoxingModel)">
+{{ testingModel === chaoxingModel ? '...' : '测试' }}
+</button>
             </div>
           </div>
           <div class="ai-model-card">

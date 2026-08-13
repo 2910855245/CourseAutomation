@@ -1,12 +1,10 @@
 // Home.vue 完整状态管理：扫描、课程选择、定价、支付、角色检测
 import { ref, computed } from 'vue'
-import { useRoute } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { api, type PlatformResult, type CourseItem } from '@/api'
 
 export function useHomeState() {
   const store = useAppStore()
-  const route = useRoute()
 
   // ── Role detection ──
   const userRole = ref<'admin' | null>(null)

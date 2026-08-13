@@ -318,8 +318,6 @@ useAdminStore().init({
           <PricingTab v-if="activeTab === 'pricing'" />
 
           <YpayTab v-if="activeTab === 'ypay'" />
-
-
 </div>
       </main>
 
@@ -374,8 +372,7 @@ useAdminStore().init({
         </div>
       </div>
     </div>
-
-  </div>
+</div>
 </template>
 
 <style>

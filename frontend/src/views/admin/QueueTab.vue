@@ -202,7 +202,9 @@ const { applyAutoConcurrency, cancelQueueJob, clearQueueHistory, deleteQueueJob,
         <table class="data-table">
           <thead>
             <tr>
-              <th>任务ID</th><th>用户</th><th>订单编号</th><th v-if="queueFilter === ''">队列</th><th>状态</th><th>进度</th><th>创建时间</th><th>操作</th>
+              <th>任务ID</th><th>用户</th><th>订单编号</th><th v-if="queueFilter === ''">
+队列
+</th><th>状态</th><th>进度</th><th>创建时间</th><th>操作</th>
             </tr>
           </thead>
           <tbody>

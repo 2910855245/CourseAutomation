@@ -107,7 +107,9 @@ onMounted(async () => {
           </div>
           <h1>所有任务正在进行中</h1>
           <p>所有课程已提交下单，系统正在自动刷课处理中，请耐心等待</p>
-          <p style="margin-top:12px;font-size:14px;color:var(--c-text-secondary)">{{ autoRedirectCountdown }}秒后自动跳转到订单页面...</p>
+          <p style="margin-top:12px;font-size:14px;color:var(--c-text-secondary)">
+{{ autoRedirectCountdown }}秒后自动跳转到订单页面...
+</p>
         </div>
       </div>
 
@@ -120,8 +122,12 @@ onMounted(async () => {
             </svg>
           </div>
           <h1>登录失败</h1>
-          <p v-if="activeTab === 'chaoxing'">学习通登录失败，请检查账号密码是否正确</p>
-          <p v-else>所有平台均登录失败，请检查学号密码是否正确</p>
+          <p v-if="activeTab === 'chaoxing'">
+学习通登录失败，请检查账号密码是否正确
+</p>
+          <p v-else>
+所有平台均登录失败，请检查学号密码是否正确
+</p>
           <div class="countdown error-countdown">
 {{ loginErrorCountdown }} 秒后自动返回
 </div>
@@ -146,8 +152,12 @@ onMounted(async () => {
           <div class="login-card" style="margin-top: 32px;">
             <div class="lc-header">
               <h2>平台登录</h2>
-              <p v-if="activeTab === 'school'">输入学号密码，系统将自动检测所有平台</p>
-              <p v-else>输入学习通账号密码，自动扫描课程和积分状态</p>
+              <p v-if="activeTab === 'school'">
+输入学号密码，系统将自动检测所有平台
+</p>
+              <p v-else>
+输入学习通账号密码，自动扫描课程和积分状态
+</p>
             </div>
             <div class="tab-switcher">
               <button :class="['tab-btn', { active: activeTab === 'school' }]" @click="activeTab = 'school'">
@@ -494,7 +504,9 @@ AI智能答题考试
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
             <h3>系统公告</h3>
           </div>
-          <div class="announcement-body">{{ announcementContent }}</div>
+          <div class="announcement-body">
+{{ announcementContent }}
+</div>
           <button class="btn btn-primary btn-block announcement-confirm" @click="dismissAnnouncement">
 我知道了
 </button>

@@ -1,11 +1,8 @@
 // 概览数据/侧边栏/格式化
 import { ref, computed } from 'vue'
-import { useAppStore } from '@/stores/app'
 import { api, type DashboardStats } from '@/api'
 
 export function useDashboard() {
-  const store = useAppStore()
-
   const dash = ref<DashboardStats | any | null>(null)
   const dashError = ref('')
   const loadingDash = ref(false)
@@ -82,8 +79,6 @@ export function useDashboard() {
       ],
     },
   ] as const
-
-  type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'users' | 'pricing' | 'ypay' | 'proxy' | 'risk' | 'security'
 
   const allSidebarItems: { key: string; label: string; icon: string }[] = sidebarGroups.flatMap((g: any) =>
     g.children.flatMap((item: any) => item.children ? [item, ...item.children] : [item])

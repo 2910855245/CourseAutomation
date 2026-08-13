@@ -5,7 +5,6 @@ export function setAdminApiToken(t: string) { adminToken = t }
 
 let userToken = ''
 export function setUserApiToken(t: string) { userToken = t }
-export function getUserApiToken() { return userToken }
 
 const FETCH_TIMEOUT_MS = 30000  // 30 秒超时，防止按钮永久卡住
 
