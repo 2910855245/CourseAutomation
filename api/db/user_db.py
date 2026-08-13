@@ -31,9 +31,6 @@ def _user_to_dict(user) -> Dict[str, Any]:
         "nickname": user.nickname,
         "contact": user.contact,
         "role": user.role,
-        "balance": user.balance,
-        "total_spent": user.total_spent,
-        "order_count": user.order_count,
         "created_at": user.created_at,
         "last_login": user.last_login,
     }

@@ -1,3 +1,15 @@
+# 2026-08-13 轻量化：单人运营模式
+
+## 变更内容
+
+- **删 MySQL**：SQLite 为唯一存储（WAL + busy_timeout），pymysql/USE_MYSQL 分支全删
+- **删用户体系**：注册/登录/资料/改密全删，只留管理员登录（/api/admin/login）+ 改密（/api/admin/change-password）
+- **删钱包账单**：余额/充值/扣费/余额支付/退款/交易流水全删，支付纯扫码
+- **删 task_manager**：内存任务系统（2 常驻线程）删除，统一走持久化队列；admin 执行端点删
+- User 模型瘦身（-3 字段）、WalletTransaction 表删、UsersTab/useUsers/用户侧栏删
+- domain_monitor 不再改写源码，新平台写入 websites_extra.json 运行时合并
+- 前端 vue-tsc 0 错误 + build 通过；活服冒烟（订单/管理员登录/验证码）全过
+
 # 2026-08-13 全库优化重构（12 阶段）
 
 ## 变更内容

@@ -355,55 +355,33 @@ def _ensure_website_id(domain: str, name: str = "") -> int:
     _save_website_map(mapping)
     logger.info(f"平台检测: 自动分配 website_id domain={domain} name={name} id={new_id}")
 
-    # 自动更新 config.py 中的 WEBSITES
-    _update_config_py_websites(new_id, name, f"https://{domain}")
+    # 运行时平台注册（写入 data/global_config/websites_extra.json，不再改写源码）
+    _register_extra_website(new_id, name, f"https://{domain}")
 
     return new_id
 
 
-def _update_config_py_websites(website_id: int, name: str, base_url: str):
-    """自动更新 config.py 中的 WEBSITES 配置"""
-    import os
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "config.py")
+def _register_extra_website(website_id: int, name: str, base_url: str):
+    """运行时注册新发现的平台到 extras 文件（config.context.get_websites 合并读取）"""
+    import json as _json
+    from config.context import WEBSITES_EXTRA_FILE
 
+    extras = {}
     try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        # 检查是否已存在
-        if base_url in content:
-            logger.info(f"config.py 已包含 {base_url}，跳过更新")
-            return
-
-        # 找到 WEBSITES 字典的开始位置
-        start_marker = "WEBSITES = {"
-        start_idx = content.find(start_marker)
-        if start_idx == -1:
-            logger.warning("config.py 中未找到 WEBSITES 字典")
-            return
-
-        # 找到匹配的结束大括号（处理嵌套）
-        depth = 0
-        end_idx = start_idx
-        for i in range(start_idx + len(start_marker) - 1, len(content)):
-            if content[i] == '{':
-                depth += 1
-            elif content[i] == '}':
-                depth -= 1
-                if depth == 0:
-                    end_idx = i
-                    break
-
-        # 在最后一个条目后、结束大括号前插入新条目
-        new_entry = f'\n    {website_id}: {{"name": "{name}", "base_url": "{base_url}"}},'
-        new_content = content[:end_idx] + new_entry + '\n' + content[end_idx:]
-
-        with open(config_path, "w", encoding="utf-8") as f:
-            f.write(new_content)
-
-        logger.info(f"config.py 已更新: 添加 website_id={website_id} name={name} url={base_url}")
+        with open(WEBSITES_EXTRA_FILE, encoding="utf-8") as f:
+            extras = _json.load(f)
+    except Exception:
+        pass
+    if str(website_id) in extras and extras[str(website_id)].get("base_url") == base_url:
+        return
+    extras[str(website_id)] = {"name": name, "base_url": base_url}
+    try:
+        os.makedirs(os.path.dirname(WEBSITES_EXTRA_FILE), exist_ok=True)
+        with open(WEBSITES_EXTRA_FILE, "w", encoding="utf-8") as f:
+            _json.dump(extras, f, ensure_ascii=False, indent=2)
+        logger.info(f"注册新平台 website_id={website_id} name={name} url={base_url}")
     except Exception as e:
-        logger.error(f"更新 config.py 失败: {e}")
+        logger.error(f"注册新平台失败: {e}")
 
 
 def get_active_platforms() -> Dict[int, dict]:

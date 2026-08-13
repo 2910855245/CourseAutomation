@@ -28,13 +28,31 @@ GLOBAL_CONFIG_FILE = os.path.join(
     "data", "global_config", "global_config.json",
 )
 
+WEBSITES_EXTRA_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "global_config", "websites_extra.json",
+)
+
+
+def get_websites() -> dict:
+    """WEBSITES + 运行时发现的新平台（domain_monitor 持久化的 extras）"""
+    merged = dict(WEBSITES)
+    try:
+        with open(WEBSITES_EXTRA_FILE, encoding="utf-8") as f:
+            for k, v in json.load(f).items():
+                merged[int(k)] = v
+    except Exception:
+        pass
+    return merged
+
 
 def get_website_id() -> int:
     return _website_ctx.get() or _process_default_website
 
 
 def get_website_config() -> dict:
-    return WEBSITES.get(get_website_id(), WEBSITES[1])
+    sites = get_websites()
+    return sites.get(get_website_id(), sites.get(1, WEBSITES[1]))
 
 
 def get_base_url() -> str:
@@ -52,7 +70,7 @@ def set_website_id(website_id: int):
     旧线程（请求处理中）继续用自己上下文里的旧值。
     """
     global _process_default_website
-    if website_id not in WEBSITES:
+    if website_id not in get_websites():
         raise ValueError(f"无效的网站ID: {website_id}")
     with _context_lock:
         _process_default_website = website_id
@@ -71,7 +89,7 @@ def init_process_context():
     try:
         with open(GLOBAL_CONFIG_FILE, encoding="utf-8") as f:
             saved = json.load(f).get("last_website_id")
-        if saved in WEBSITES:
+        if saved in get_websites():
             global _process_default_website
             with _context_lock:
                 _process_default_website = saved
@@ -86,7 +104,7 @@ def init_process_context():
 def init_worker_context(params: dict):
     """worker 子进程入口调用：从任务参数设置上下文（与 API 进程完全隔离）"""
     wid = params.get("website_id") or _process_default_website
-    if wid not in WEBSITES:
+    if wid not in get_websites():
         wid = 1
     _website_ctx.set(wid)
     _account_ctx.set(params.get("username"))

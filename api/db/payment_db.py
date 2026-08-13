@@ -10,35 +10,23 @@ from api.db._base import _db_logger
 logger = _db_logger
 
 # Lazy-loaded model references
-_VmqSetting = _VmqPayOrder = _TmpPrice = _YpaySetting = _YpayTmpPrice = _YpayOrder = _YpayAccount = _Ad = None
+_YpaySetting = _YpayTmpPrice = _YpayOrder = _YpayAccount = None
 
 
 def _resolve_models():
-    global _VmqSetting, _VmqPayOrder, _TmpPrice, _YpaySetting, _YpayTmpPrice, _YpayOrder, _YpayAccount
-    if _VmqSetting is None:
+    global _YpaySetting, _YpayTmpPrice, _YpayOrder, _YpayAccount
+    if _YpaySetting is None:
         from api.db.models import (
-            TmpPrice,
-            VmqPayOrder,
-            VmqSetting,
             YpayAccount,
             YpayOrder,
             YpaySetting,
             YpayTmpPrice,
         )
-        _VmqSetting, _VmqPayOrder, _TmpPrice, _YpaySetting, _YpayTmpPrice, _YpayOrder, _YpayAccount = VmqSetting, VmqPayOrder, TmpPrice, YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount
-    return _VmqSetting, _VmqPayOrder, _TmpPrice, _YpaySetting, _YpayTmpPrice, _YpayOrder, _YpayAccount
+        _YpaySetting, _YpayTmpPrice, _YpayOrder, _YpayAccount = YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount
+    return _YpaySetting, _YpayTmpPrice, _YpayOrder, _YpayAccount
 
 
 class PaymentDBMixin:
-    # ── VMQ 支付 ──
-
-
-
-
-
-
-
-
 
 
 
@@ -142,7 +130,6 @@ class PaymentDBMixin:
 
     def ypay_pick_channel(self, pay_type: int) -> Optional[Dict[str, Any]]:
         YpaySetting, YpayTmpPrice, YpayOrder, YpayAccount = _resolve_models()
-        from api.db_engine import USE_MYSQL
         session = self._get_session()
         try:
             type_str = {1: "wxpay", 2: "alipay", 3: "lkl"}.get(pay_type, "wxpay")
@@ -151,7 +138,7 @@ class PaymentDBMixin:
                 YpayAccount.type == type_str,
                 YpayAccount.status == 1,
                 YpayAccount.is_status == 1,
-            ).order_by(sqlfunc.rand() if USE_MYSQL else sqlfunc.random())).first()
+            ).order_by(sqlfunc.random())).first()
             if not account:
                 return None
             return {
