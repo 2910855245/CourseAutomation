@@ -1,3 +1,15 @@
+# 2026-08-13 全库优化重构（12 阶段）
+
+## 变更内容
+
+- **修 20+ bug**：游客订单鉴权洞（view token 方案）、paid_processed 卡死回收、worker 存活探测、SQLite busy_timeout、钱包原子扣款、重阶段超时、路径穿越净化、公告 XSS 等
+- **结构重组**：config 三分拆（settings/platforms/context）+ contextvars 线程隔离；双层 services 合并为单层；infrastructure 重排为 school/chaoxing 子包
+- **解耦**：scan_service 参数注入、计价逻辑下沉 pricing_service、import 副作用全部移入 run_startup
+- **抽取**：worker_common.py、OCR 单例、gen_id/parse_course_ids/normalize_task_type、db.refund_order、enqueue_order
+- **删除**：Redis 层整体（纯内存实现）、VMQ 旧协议、约 30 个死端点/模型/模块、desktop_app、测试/CI/alembic/Docker
+- **前端**：adminState 透传改 Pinia 显式类型 store，11 个 @ts-nocheck 全部移除，vue-tsc 0 错误 + lint 0 警告
+- 平台密码明文存储（无加密）；默认管理员 2910855245/woainima123 启动自动创建
+
 # 2026-08-13 移除教师端与代理分销系统
 
 ## 变更内容
