@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-Anti-Course Cheating Plugin 是一个在线课程自动化 SaaS 平台，支持视频自动观看、考试自动答题、多用户管理、代理分销系统和聚合支付处理。
+Anti-Course Cheating Plugin 是一个在线课程自动化 SaaS 平台，支持视频自动观看、考试自动答题、多用户管理和聚合支付处理。
 
 ## 技术栈
 
@@ -25,7 +25,6 @@ Anti-Course Cheating Plugin/
 │   ├── models.py                 # Pydantic 数据模型
 │   ├── routers/                  # 路由处理器
 │   │   ├── admin.py              # 管理员后台 CRUD
-│   │   ├── agents.py             # 代理分销系统
 │   │   ├── orders.py             # 订单生命周期
 │   │   ├── payment.py            # 支付 + 回调
 │   │   ├── pricing.py            # 定价系统 (打包/按量)
@@ -36,7 +35,6 @@ Anti-Course Cheating Plugin/
 │       ├── task_queue.py         # 持久化任务队列
 │       ├── task_runner.py        # 子进程管理
 │       ├── ypay_service.py       # YPay 集成
-│       ├── crack.py              # 佣金计算
 │       └── ...
 ├── services/                     # 跨切面业务服务
 │   ├── ai_service.py             # DeepSeek AI 答题
@@ -53,7 +51,6 @@ Anti-Course Cheating Plugin/
 │       ├── views/                # 页面组件
 │       │   ├── Home.vue          # 首页 (扫描+下单+支付)
 │       │   ├── Admin.vue         # 管理员后台
-│       │   ├── Agent.vue         # 代理中心
 │       │   └── Orders.vue        # 订单列表
 │       ├── api/index.ts          # API 接口定义
 │       ├── stores/app.ts         # Pinia 状态管理
@@ -125,11 +122,6 @@ Admin.vue (管理员后台)
   ├── 定价配置 (打包/按量/AI推荐)
   ├── AI 模型配置
   └── YPay 支付配置
-
-Agent.vue (代理中心)
-  ├── 登录/注册
-  ├── 佣金查看
-  └── 推广链接
 ```
 
 ### 4. 定价系统详解

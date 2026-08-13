@@ -1,3 +1,13 @@
+# 2026-08-13 移除教师端与代理分销系统
+
+## 变更内容
+
+- 删除教师端：成都文理学院教师平台 (wid=5)、role 参数链、教师登录函数、前端学生/教师切换
+- 删除三级代理分销系统：Agent/Commission/Withdrawal 模型、代理中心、佣金结算、提现、代理分站、合伙人管理、邀请码体系、AGENTREG/AGENTUP 注册费支付
+- 支付幂等重构：`commission_status` 语义改为 `paid_processed` 支付处理幂等列（claim_payment_processing → confirm_payment → mark_payment_processed → enqueue），旧库自动加列并拷贝旧值
+- 通用配置/审计方法从 agent_db.py 拆分为 `api/db/config_db.py`
+
+
 # 2026-05-24 改动总结
 
 ## 1. 反检测优化 — study_worker.py

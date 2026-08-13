@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Multi-project workspace for an online course automation SaaS platform. The primary project is **Anti-Course Cheating Plugin** — a FastAPI + Vue3 full-stack system that automates video watching and exam completion for online course platforms (粟湾平台, 劳动教育平台, 中嘉鑫盛, 学习通). Supports multi-user accounts, 3-tier agent/distributor commission system, aggregated payment processing, and background task workers.
+Multi-project workspace for an online course automation SaaS platform. The primary project is **Anti-Course Cheating Plugin** — a FastAPI + Vue3 full-stack system that automates video watching and exam completion for online course platforms (粟湾平台, 劳动教育平台, 中嘉鑫盛, 学习通). Supports multi-user accounts, aggregated payment processing, and background task workers.
 
 ## Sub-Projects
 
@@ -86,12 +86,12 @@ python run.py
 - **`run.py`** — Entry point. Sets China timezone, working dir, imports `api.main:app`. Exports `app` for granian/uvicorn compatibility
 - **`api/main.py`** — FastAPI entry. Registers all routers, CORS, rate-limit, no-cache middleware, SPA fallback. Lifecycle: auto-creates admin, initializes pricing, starts dual task queues, recovers running orders, starts GC/domain-monitor services
 - **`api/startup.py`** — Extracted startup logic: price init, queue callbacks, auto-cancel/heartbeat/order-recovery/session-restore/health-monitor daemon threads
-- **`api/database.py`** — SQLAlchemy ORM models (User, Order, WalletTransaction, Agent, Commission) + `Database` singleton. SQLite default, MySQL via `DATABASE_URL`. Table/column name whitelisting prevents SQL injection
-- **`api/db/`** — DB submodules: `models.py` (ORM models, dynamic queue job models `SchoolJobModel`/`ChaoxingJobModel`), `order_db.py`, `payment_db.py`, `agent_db.py`, `user_db.py`
+- **`api/database.py`** — SQLAlchemy ORM models (User, Order, WalletTransaction) + `Database` singleton. SQLite default, MySQL via `DATABASE_URL`. Table/column name whitelisting prevents SQL injection
+- **`api/db/`** — DB submodules: `models.py` (ORM models, dynamic queue job models `SchoolJobModel`/`ChaoxingJobModel`), `order_db.py`, `payment_db.py`, `config_db.py`, `user_db.py`
 - **`api/auth.py`** — JWT create/verify, bcrypt password hashing, token blacklist (memory + Redis fallback)
 - **`api/crypto.py`** — AES-256-GCM password encryption (backward-compatible XOR)
-- **`api/routers/`** — Route handlers by domain: `orders.py`, `payment.py`, `agents.py`, `admin.py`, `courses.py`, `setup.py`, `ypay_routes.py`, `ypay_vmq.py`, `ypay_app.py`, `wallet.py`, `pricing.py`, `invite.py`, `sub_admin.py`, `users.py`, `tasks.py`, `captcha.py`, `domain_monitor.py`, `health.py`, `scan.py`, `progress.py`, `queue.py`, `accounts.py`
-- **`api/services/`** — Business logic: `task_queue.py` (persistent queue, SQLAlchemy-backed, split into `school_queue` + `chaoxing_queue`), `task_runner.py` (subprocess launcher), `ypay_service.py`, `crack.py` (commission engine), `risk.py`, `session_pool.py`, `proxy_config.py`, `job_executor.py`, `order_service.py`, `commission_service.py`
+- **`api/routers/`** — Route handlers by domain: `orders.py`, `payment.py`, `admin.py`, `courses.py`, `setup.py`, `ypay_routes.py`, `ypay_vmq.py`, `ypay_app.py`, `wallet.py`, `pricing.py`, `users.py`, `tasks.py`, `captcha.py`, `domain_monitor.py`, `health.py`, `scan.py`, `progress.py`, `queue.py`, `accounts.py`
+- **`api/services/`** — Business logic: `task_queue.py` (persistent queue, SQLAlchemy-backed, split into `school_queue` + `chaoxing_queue`), `task_runner.py` (subprocess launcher), `ypay_service.py`, `risk.py`, `session_pool.py`, `proxy_config.py`, `job_executor.py`, `order_service.py`
 - **`config.py`** — Pydantic `Settings` from `.env`. Multi-website config (`WEBSITES` dict), per-account data dirs, URL management. `CURRENT_WEBSITE` selects active platform
 
 ### Worker Subprocess Model
@@ -125,14 +125,13 @@ Cross-domain business services: `auth_service.py`, `multi_platform_auth.py` (mul
 
 ### Frontend (`frontend/src/`)
 
-Vue3 SPA with Pinia, Vue Router, TypeScript. Views: Home (scan + order + pay), Admin (full admin panel with tabs), Agent (distributor center), Orders, Setup (first-run wizard), Subsite (agent sub-site), Payment, SubAdmin (partner management).
+Vue3 SPA with Pinia, Vue Router, TypeScript. Views: Home (scan + order + pay), Admin (full admin panel with tabs), Orders, Setup (first-run wizard), Payment.
 
 ### Key Design Patterns
 
 - **Multi-website support**: `config.py` `WEBSITES` dict, `CURRENT_WEBSITE` selects platform. User data isolated per `data/accounts/<username>/`
 - **Dual task queues**: `school_queue` (school platforms) and `chaoxing_queue` (学习通) independent, each with SQLAlchemy-backed task tables
 - **Payment**: YPay integration + HMAC verification; VMQ protocol for WeChat/Alipay monitoring; Android APP (`static/ypay-monitor.apk`) for real-time payment detection
-- **Agent commission**: 3 tiers (入门/高级/合伙), auto-upgrade by sales volume + invite count. Logic in `api/services/crack.py`
 - **Redis optional**: Rate limiting and JWT blacklist auto-degrade to in-memory
 - **Tunnel proxy**: Configured via admin panel, applied to all worker HTTP requests to prevent IP bans
 - **Anti-detection**: rnet TLS fingerprint spoofing for 学习通, random user agents, semaphore-limited concurrency (max 8 per course, 10 global), randomized delays
