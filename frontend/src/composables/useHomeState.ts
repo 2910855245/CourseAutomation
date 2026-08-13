@@ -465,6 +465,11 @@ export function useHomeState() {
       const existingIds = sessionStorage.getItem('last_order_ids') || ''
       const allIds = existingIds ? existingIds + ',' + newIds : newIds
       sessionStorage.setItem('last_order_ids', allIds); localStorage.setItem('last_order_ids', allIds)
+      // 游客查单凭证：order_id -> view_token 映射
+      const tokenPairs = allOrders.map((o: any) => `${o.order_id}:${o.view_token || ''}`)
+      const existingPairs = sessionStorage.getItem('last_order_tokens') || ''
+      const allPairs = existingPairs ? existingPairs + ',' + tokenPairs.join(',') : tokenPairs.join(',')
+      sessionStorage.setItem('last_order_tokens', allPairs); localStorage.setItem('last_order_tokens', allPairs)
       const orderedCourseIds = Object.values(grouped).flatMap(g => g.ids)
       if (!allOrders.length) { store.toast('订单创建成功，但未返回订单信息', 'warning'); paying.value = false; return }
       if (free) { handleOrderSuccess(orderedCourseIds); paying.value = false; return }

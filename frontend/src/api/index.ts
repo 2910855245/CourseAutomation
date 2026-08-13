@@ -101,8 +101,8 @@ export const api = {
     pay: () => post<ApiResponse<any>>('/api/orders/pay'),
     list: (params?: { status?: string; page?: number; page_size?: number; limit?: number; search?: string; sort_by?: string; sort_dir?: string }) =>
       get<ApiResponse<{ total: number; items: OrderItem[]; page: number; page_size: number; total_pages: number }>>('/api/orders/' + buildQuery(params)),
-    get: (id: string) => get<ApiResponse<OrderItem>>('/api/orders/' + id),
-    cancel: (id: string) => del<ApiResponse<any>>('/api/orders/' + id),
+    get: (id: string, token?: string) => get<ApiResponse<OrderItem>>('/api/orders/' + id + (token ? '?token=' + encodeURIComponent(token) : '')),
+    cancel: (id: string, token?: string) => del<ApiResponse<any>>('/api/orders/' + id + (token ? '?token=' + encodeURIComponent(token) : '')),
     clearHistory: () => post<ApiResponse<any>>('/api/orders/clear-history'),
     exportCsv: (params?: Record<string, any>) => `/api/orders/export-csv` + buildQuery(params),
     auditLog: (id: string) => get<ApiResponse<{ event: string; detail: string; created_at: string }[]>>('/api/orders/audit-log/' + id),

@@ -173,3 +173,15 @@ def verify_captcha(token: str, answer: str):
     from api.services.captcha import captcha_service
     if not captcha_service.verify(token, answer):
         raise HTTPException(status_code=400, detail="验证码错误或已过期")
+
+
+def make_view_token(order_id: str) -> str:
+    """游客查单凭证：基于订单号和 JWT 密钥的 HMAC 摘要"""
+    import hashlib
+    return hashlib.sha256(f"{order_id}:{settings.jwt_secret_key}".encode()).hexdigest()[:24]
+
+
+def verify_view_token(order_id: str, token: str) -> bool:
+    import hmac
+    expected = make_view_token(order_id)
+    return bool(token) and hmac.compare_digest(expected, token)

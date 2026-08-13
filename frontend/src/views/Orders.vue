@@ -42,6 +42,15 @@ const auditLogs = ref<{ event: string; detail: string; created_at: string }[]>([
 const taskTypeNames: Record<string, string> = { video: '视频', exam: '考试', full: '全包', chaoxing_points: '学习通积分' }
 const isGuest = ref(false)
 const guestOrderIds = ref<string[]>([])
+const guestOrderTokens: Record<string, string> = {}
+
+function loadGuestTokens() {
+  const raw = sessionStorage.getItem('last_order_tokens') || localStorage.getItem('last_order_tokens') || ''
+  for (const pair of raw.split(',')) {
+    const [oid, tok] = pair.split(':')
+    if (oid && tok) guestOrderTokens[oid] = tok
+  }
+}
 
 // 支付相关
 const showPayModal = ref(false)
@@ -86,7 +95,7 @@ async function load() {
       const items: OrderItem[] = []
       for (const oid of guestOrderIds.value) {
         try {
-          const r = await api.orders.get(oid)
+          const r = await api.orders.get(oid, guestOrderTokens[oid])
           if (r?.data) items.push(r.data as OrderItem)
         } catch { /* skip */ }
       }
@@ -153,6 +162,7 @@ onMounted(async () => {
       isGuest.value = true
     }
 
+    loadGuestTokens()
     await load()
 
     // 如果URL带订单ID，自动打开该订单详情
@@ -172,7 +182,7 @@ async function cancel(id: string) {
   const ok = await showConfirm({ title: '取消订单', message: '确认取消该订单吗？取消后不可恢复。', type: 'warning' })
   if (!ok) return
   try {
-    await api.orders.cancel(id)
+    await api.orders.cancel(id, guestOrderTokens[id])
     store.toast('订单已取消', 'success')
     load()
   } catch (e: any) { store.toast(e.message, 'error') }
@@ -186,6 +196,8 @@ async function clearHistory() {
     guestOrderIds.value = []
     sessionStorage.removeItem('last_order_ids')
     localStorage.removeItem('last_order_ids')
+    sessionStorage.removeItem('last_order_tokens')
+    localStorage.removeItem('last_order_tokens')
     orders.value = []
     totalOrders.value = 0
     store.toast('历史订单已清空', 'success')

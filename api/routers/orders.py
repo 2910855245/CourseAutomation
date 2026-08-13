@@ -164,13 +164,16 @@ def create_order(
     )
 
     background_tasks.add_task(
-        risk_control.log_audit, "order_created", uid or "", order["order_id"],
-        f"金额¥{req.price} 平台{req.website_id}")
+        risk_control.log_audit, "order_created",
+        operator=uid or "",
+        order_id=order["order_id"],
+        detail=f"金额¥{req.price} 平台{req.website_id}")
 
+    from api.auth import make_view_token
     return ApiResponse(
         success=True,
         message=f"订单 {order['order_id']} 已创建",
-        data={"order": _mask_password(order)},
+        data={"order": _mask_password(order), "view_token": make_view_token(order["order_id"])},
     )
 
 
@@ -192,6 +195,7 @@ def create_batch_orders(
             if role in ("admin",):
                 is_privileged = True
 
+    from api.auth import make_view_token
     from api.services.order_service import compute_batch_price, submit_free_order
     computed_total, detail_lines = compute_batch_price(req.orders)
     total_price = round(sum(o.price for o in req.orders), 2)
@@ -235,7 +239,8 @@ def create_batch_orders(
         # 管理员下单直接入队执行（免支付）
         if free_order or is_privileged:
             submit_free_order(order, req.username, req.password, item.website_id)
-        created.append(_mask_password(order))
+        created.append({**_mask_password(order),
+                        "view_token": make_view_token(order["order_id"])})
 
     return ApiResponse(
         success=True,
@@ -278,11 +283,12 @@ def list_orders(
     current_user: dict = Depends(get_optional_user),
 ):
     uid = current_user["user_id"] if current_user["user_id"] != "guest" else None
-    if uid:
-        user = db.get_user(uid)
-        role = user.get("role") if user else None
-        if role in ("admin",):
-            uid = None
+    if not uid:
+        raise HTTPException(status_code=401, detail="请先登录")
+    user = db.get_user(uid)
+    role = user.get("role") if user else None
+    if role in ("admin",):
+        uid = None
     offset = (page - 1) * page_size
     orders = db.list_orders(status=status, user_id=uid, search=search,
                             sort_by=sort_by, sort_dir=sort_dir,
@@ -326,15 +332,21 @@ def get_active_courses(username: str = Query("")):
 
 
 @router.get("/{order_id}", response_model=ApiResponse)
-def get_order(order_id: str, current_user: dict = Depends(get_optional_user)):
+def get_order(order_id: str, token: str = Query("", description="游客查单凭证"),
+              current_user: dict = Depends(get_optional_user)):
     order = db.get_order(order_id)
     if not order:
         raise HTTPException(status_code=404, detail="订单不存在")
     # Inject task progress
     enriched = _inject_task_progress([order])[0]
     uid = current_user["user_id"] if current_user["user_id"] != "guest" else None
-    # 任何人都可以用订单号查看订单详情（已脱敏）
     if not uid:
+        # 游客仅凭下单时发放的 view_token 查看匿名订单
+        from api.auth import verify_view_token
+        if not verify_view_token(order_id, token):
+            raise HTTPException(status_code=401, detail="请先登录或提供查单凭证")
+        if order.get("user_id"):
+            raise HTTPException(status_code=403, detail="无权查看此订单")
         return ApiResponse(data=_mask_password(enriched))
     # 非本人需要管理员权限
     if order.get("user_id") and order["user_id"] != uid:
@@ -345,12 +357,12 @@ def get_order(order_id: str, current_user: dict = Depends(get_optional_user)):
 
 
 @router.delete("/{order_id}", response_model=ApiResponse)
-def cancel_order(order_id: str, current_user: dict = Depends(get_optional_user)):
+def cancel_order(order_id: str, token: str = Query("", description="游客查单凭证"),
+                 current_user: dict = Depends(get_optional_user)):
     order = db.get_order(order_id)
     if not order:
         raise HTTPException(status_code=404, detail="订单不存在")
     uid = current_user["user_id"] if current_user["user_id"] != "guest" else None
-    # 如果订单有关联用户，则必须登录验证身份；游客创建的订单无需登录即可取消
     if order.get("user_id"):
         if not uid:
             raise HTTPException(status_code=401, detail="请先登录")
@@ -358,6 +370,12 @@ def cancel_order(order_id: str, current_user: dict = Depends(get_optional_user))
             user = db.get_user(uid)
             if not user or user.get("role") not in ("admin",):
                 raise HTTPException(status_code=403, detail="无权操作此订单")
+    else:
+        # 匿名订单：游客凭 view_token 操作，防订单号枚举滥用
+        if not uid:
+            from api.auth import verify_view_token
+            if not verify_view_token(order_id, token):
+                raise HTTPException(status_code=401, detail="请先登录或提供查单凭证")
     if order["status"] not in ("pending",):
         raise HTTPException(status_code=400, detail=f"当前状态 [{order['status']}] 不允许取消")
 

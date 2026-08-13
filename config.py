@@ -170,9 +170,17 @@ def get_current_account() -> str:
     with _global_state_lock:
         return _current_account
 
+_INVALID_USERNAME_CHARS = __import__("re").compile(r"[^\w\-.]")
+
+
+def _sanitize_username(username: str) -> str:
+    """净化用户名：只允许字母数字下划线短横点，防路径穿越"""
+    return _INVALID_USERNAME_CHARS.sub("_", username or "")
+
+
 def get_account_dir(username: str = None) -> str:
-    username = username or get_current_account()
-    if not username:
+    username = _sanitize_username(username or get_current_account())
+    if not username or username in (".", ".."):
         return ACCOUNTS_DIR
     account_path = os.path.join(ACCOUNTS_DIR, username)
     os.makedirs(account_path, exist_ok=True)
