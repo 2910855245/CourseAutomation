@@ -1,0 +1,12 @@
+C:\Users\win\Desktop\逆向工程\FUCK 文理网课\Anti-Course Cheating Plugin\rust_worker\target\release\deps\rand_core-c5affb46318c84c1.d: D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\lib.rs D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\block.rs D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\error.rs D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\impls.rs D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\le.rs D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\os.rs
+
+C:\Users\win\Desktop\逆向工程\FUCK 文理网课\Anti-Course Cheating Plugin\rust_worker\target\release\deps\librand_core-c5affb46318c84c1.rlib: D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\lib.rs D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\block.rs D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\error.rs D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\impls.rs D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\le.rs D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\os.rs
+
+C:\Users\win\Desktop\逆向工程\FUCK 文理网课\Anti-Course Cheating Plugin\rust_worker\target\release\deps\librand_core-c5affb46318c84c1.rmeta: D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\lib.rs D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\block.rs D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\error.rs D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\impls.rs D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\le.rs D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\os.rs
+
+D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\lib.rs:
+D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\block.rs:
+D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\error.rs:
+D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\impls.rs:
+D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\le.rs:
+D:\dev\rust\cargo\registry\src\rsproxy.cn-e3de039b2554c837\rand_core-0.6.4\src\os.rs:

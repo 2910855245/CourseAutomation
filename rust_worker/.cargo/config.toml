@@ -1,0 +1,3 @@
+# 中文路径下 mingw 链接器会找不到 rlib，target 目录固定到 D 盘 ASCII 路径
+[build]
+target-dir = "D:/dev/rust-target"

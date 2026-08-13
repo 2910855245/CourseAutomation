@@ -14,7 +14,513 @@ from config import validate_settings
 from infrastructure.ocr import get_ocr as _get_ocr
 
 
-from worker_common import ensure_terminal_status, send_status
+from worker_common import send_status, push_ws_update, ensure_terminal_status
+
+
+class LightStudyReporter:
+    _first_report_lock = threading.Lock()
+    _shared_cookie_str = None
+    _shared_username = None
+    _shared_password = None
+    _rate_lock = threading.Lock()
+    _next_request_time = 0.0
+    _request_spacing = 0.5
+
+    def __init__(self, base_url, node_id, cookie_str, video_duration=0,
+                 viewed_duration=0, course_name="", video_name="",
+                 report_interval=30, captcha_ak=None, captcha_url=None,
+                 shared_session=None):
+        self.base_url = base_url.rstrip('/')
+        self.node_id = node_id
+        self.video_duration = video_duration
+        self.viewed_duration = viewed_duration
+        self.report_interval = report_interval
+        self.course_name = course_name
+        self.video_name = video_name
+        self.captcha_ak = captcha_ak or '38570387e765646dff8372d4ec9e3c38'
+        self.captcha_url = captcha_url or 'https://shixun.kaikangxinxi.com/api/dunclick.json'
+
+        if shared_session is not None:
+            self.session = shared_session
+        else:
+            import requests
+            self.session = requests.Session()
+            self.session.verify = False
+            self.session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'X-Requested-With': 'XMLHttpRequest'
+            })
+        self._set_cookie(cookie_str)
+
+        self.study_id = 0
+        self.total_time = 0
+        self._start_time = 0
+        self._running = False
+        self._thread = None
+        self._captcha_retry = 0
+        self._max_captcha = 7
+        self._relogin_retry = 0
+        self._max_relogin = 3
+        self.completed = False
+        self.error_msg = ""
+
+    def _set_cookie(self, cookie_str):
+        for item in cookie_str.split(';'):
+            if '=' in item:
+                k, v = item.strip().split('=', 1)
+                self.session.cookies.set(k, v)
+
+    def _get_interval(self):
+        remaining = max(0, self.video_duration - self.viewed_duration - self.total_time)
+        if remaining <= 5:
+            return 1
+        elif remaining <= 15:
+            return 3
+        elif remaining <= 30:
+            return 5
+        elif remaining <= 60:
+            return 10
+        elif remaining <= 180:
+            return 15
+        elif remaining <= 300:
+            return 20
+        return self.report_interval
+
+    def _solve_click_captcha(self, verify_token):
+        for attempt in range(self._max_captcha + 1):
+            try:
+                s = self.session
+                resp = s.get(self.captcha_url, params={'act': 'token', 'ak': self.captcha_ak}, timeout=10)
+                data = resp.json()
+                key = data['key']
+                img_url = data['img'] + '?k=' + key
+                resp2 = s.post(self.captcha_url, data={'act': 'icon', 'key': key}, timeout=10)
+                icons = resp2.json()['captcha_icon']
+                resp3 = s.get(img_url, timeout=10)
+                img_bytes = resp3.content
+                try:
+                    ocr = _get_ocr()
+                    points = ocr.click(img_bytes)
+                except ImportError:
+                    points = [{'x': random.randint(50, 250), 'y': random.randint(50, 250)} for _ in range(len(icons))]
+                ivalue = "||".join([f"{p['x']}-{p['y']}" for p in points])
+                resp4 = s.post(self.captcha_url, data={'act': 'check', 'ivalue': ivalue, 'key': key, 'verify': verify_token}, timeout=10)
+                result = resp4.json()
+                if result.get('status') == 1:
+                    logger.info("[captcha] 点选验证通过")
+                    return True
+                logger.warning("[captcha] 点选验证失败 %d/%d", attempt + 1, self._max_captcha + 1)
+            except Exception as e:
+                logger.warning("[captcha] 点选验证异常: %s", e)
+            if attempt < self._max_captcha:
+                time.sleep(1)
+        return False
+
+    def _solve_image_captcha(self):
+        try:
+            resp = self.session.get(f"{self.base_url}/service/code",
+                                    params={'r': ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=8))},
+                                    timeout=10)
+            resp.raise_for_status()
+            img_bytes = resp.content
+            try:
+                ocr = _get_ocr()
+                code = ocr.classification(img_bytes).strip()
+            except ImportError:
+                code = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=4))
+            code += '_'
+            logger.info("[captcha] 图形验证码: %s", code)
+            return code
+        except Exception as e:
+            logger.error("[captcha] 图形验证码失败: %s", e)
+            return None
+
+    def _report(self, force=False, captcha_code=None):
+        if not force and self.video_duration > 0 and self.total_time >= self.video_duration:
+            return True
+        url = f"{self.base_url}/user/node/study"
+        data = {
+            'nodeId': self.node_id,
+            'studyId': self.study_id,
+            'studyTime': self.total_time
+        }
+        if captcha_code:
+            data['code'] = captcha_code[:4] if len(captcha_code) > 4 else captcha_code
+        if force and self.total_time < 1:
+            data['studyTime'] = 1
+        try:
+            resp = self.session.post(url, data=data, timeout=10)
+            resp.raise_for_status()
+            result = resp.json()
+        except Exception as e:
+            logger.error("[report] 请求异常: %s", e)
+            return False
+        if result.get('status'):
+            self._captcha_retry = 0
+            self._relogin_retry = 0
+            if result.get('state') == 1:
+                self.study_id = 0
+            else:
+                self.study_id = result.get('studyId', self.study_id)
+            return True
+        if result.get('offline') or '登录超时' in str(result.get('msg', '')):
+            if self._relogin_retry >= self._max_relogin:
+                logger.error("[report] 重登次数超限")
+                return False
+            self._relogin_retry += 1
+            time.sleep(1)
+            if self._do_relogin():
+                return self._report(force=force, captcha_code=captcha_code)
+            return False
+        need_code = result.get('need_code')
+        if need_code == 1:
+            if self._captcha_retry >= self._max_captcha:
+                logger.error("[report] 图形验证码重试超限")
+                return False
+            self._captcha_retry += 1
+            time.sleep(0.3 * self._captcha_retry)
+            code = self._solve_image_captcha()
+            if code:
+                return self._report(force=True, captcha_code=code)
+            return False
+        elif need_code == 2:
+            if self._captcha_retry >= self._max_captcha:
+                logger.error("[report] 点选验证码重试超限")
+                return False
+            self._captcha_retry += 1
+            time.sleep(0.3 * self._captcha_retry)
+            vt = result.get('verifyToken')
+            if vt and self._solve_click_captcha(vt):
+                return self._report(force=True)
+            return False
+        logger.warning("[report] 未知响应: %s", result)
+        return False
+
+    def _do_relogin(self):
+        uname = LightStudyReporter._shared_username
+        pwd = LightStudyReporter._shared_password
+        if not uname or not pwd:
+            logger.error("[relogin] 无用户名或密码，跳过")
+            return False
+        try:
+            import requests as req
+            ocr = _get_ocr()
+            s = req.Session()
+            s.verify = False
+            s.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+            login_url = f"{self.base_url}/user/login"
+            captcha_url = f"{self.base_url}/service/code"
+            # 访问登录页获取session
+            s.get(login_url, timeout=15)
+            # 获取验证码
+            captcha_resp = s.get(captcha_url, timeout=15)
+            code = ocr.classification(captcha_resp.content)
+            data = {
+                'username': uname, 'password': pwd,
+                'code': code, 'redirect': '', 'remember': 'on'
+            }
+            resp = s.post(login_url, data=data, allow_redirects=False, timeout=15)
+            if resp.status_code == 302 or '"status":true' in resp.text:
+                cookie_str = '; '.join([f"{c.name}={c.value}" for c in s.cookies])
+                LightStudyReporter._shared_cookie_str = cookie_str
+                self._set_cookie(cookie_str)
+                # 保存cookie到文件
+                try:
+                    from config import get_account_cookies_path, WEBSITES
+                    website_id = getattr(self, '_website_id', None)
+                    if not website_id:
+                        for wid, winfo in WEBSITES.items():
+                            if winfo.get("base_url", "").rstrip('/') == self.base_url:
+                                website_id = wid
+                                break
+                    if website_id:
+                        cookie_path = get_account_cookies_path(uname, website_id)
+                        os.makedirs(os.path.dirname(cookie_path), exist_ok=True)
+                        with open(cookie_path, 'w', encoding='utf-8') as f:
+                            json.dump({'cookie': cookie_str}, f)
+                        logger.info("[relogin] cookie已保存到 %s", cookie_path)
+                except Exception as ce:
+                    logger.warning("[relogin] 保存cookie失败: %s", ce)
+                logger.info("[relogin] 重新登录成功")
+                return True
+            logger.error("[relogin] 登录失败: status=%d", resp.status_code)
+        except Exception as e:
+            logger.error("[relogin] 异常: %s", e)
+        return False
+
+    @classmethod
+    def _wait_rate_limit(cls):
+        """全局请求速率控制，确保所有线程的HTTP请求间隔 >= _request_spacing 秒"""
+        now = time.time()
+        with cls._rate_lock:
+            wait = cls._next_request_time - now
+        if wait > 0:
+            time.sleep(wait)
+        with cls._rate_lock:
+            cls._next_request_time = max(cls._next_request_time, time.time()) + cls._request_spacing
+
+    _MIN_RATIO = 2.1  # wall_time / video_duration 安全阈值
+
+    def _wait_for_ratio(self):
+        """等待 wall_time 达到安全比率后再标记完成，防止平台检测并行刷课"""
+        if self.video_duration <= 0:
+            return
+        min_wall = self.video_duration * self._MIN_RATIO
+        elapsed = time.time() - self._start_time
+        if elapsed < min_wall:
+            wait = min_wall - elapsed
+            logger.info("[ratio] %s 等待 %.0fs (ratio %.1f→%.1f)",
+                        self.video_name, wait, elapsed / self.video_duration, self._MIN_RATIO)
+            # 分段 sleep，支持中途停止
+            deadline = time.time() + wait
+            while self._running and time.time() < deadline:
+                time.sleep(min(5, deadline - time.time()))
+
+    def _run_loop(self):
+        logger.info("[start] %s nodeId=%s dur=%ds viewed=%ds",
+                    self.video_name, self.node_id, self.video_duration, self.viewed_duration)
+        with LightStudyReporter._first_report_lock:
+            LightStudyReporter._wait_rate_limit()
+            if not self._report(force=True):
+                logger.error("[start] %s 首次上报失败", self.video_name)
+                self.error_msg = "首次上报失败"
+                return
+            logger.info("[start] %s 首次上报成功 studyId=%s", self.video_name, self.study_id)
+            time.sleep(0.5)
+        self._start_time = time.time()
+        last_report = time.time()
+        actual_target = self.video_duration - self.viewed_duration
+        # 视频已看完，等待 ratio 达标后标记完成
+        if actual_target <= 0:
+            self.total_time = self.video_duration  # 修复：设置已观看时间
+            self._wait_for_ratio()
+            self.completed = True
+            logger.info("[done] %s 已看完 (viewed=%d >= duration=%d)", self.video_name, self.viewed_duration, self.video_duration)
+            return
+        while self._running:
+            time.sleep(1)
+            self.total_time += 1
+            if self.total_time >= actual_target:
+                LightStudyReporter._wait_rate_limit()
+                ok = self._report(force=True)
+                if ok:
+                    self._wait_for_ratio()
+                    self.completed = True
+                    logger.info("[done] %s 学习完成 total=%ds", self.video_name, self.total_time)
+                else:
+                    self.error_msg = "最终上报失败"
+                    logger.warning("[done] %s 最终上报失败 total=%ds", self.video_name, self.total_time)
+                break
+            interval = self._get_interval()
+            if time.time() - last_report >= interval:
+                LightStudyReporter._wait_rate_limit()
+                if not self._report(force=False):
+                    self.error_msg = "上报失败"
+                    logger.error("[error] %s 上报失败", self.video_name, self.total_time)
+                    break
+                last_report = time.time()
+
+    def start(self):
+        if not self._running:
+            self._running = True
+            self._thread = threading.Thread(target=self._run_loop, daemon=True)
+            self._thread.start()
+
+    def stop(self):
+        self._running = False
+
+    @property
+    def is_alive(self):
+        return self._thread is not None and self._thread.is_alive()
+
+
+class LightHeartbeat:
+    def __init__(self, base_url, cookie_str, interval=120, shared_session=None):
+        self.base_url = base_url.rstrip('/')
+        self.url = f"{self.base_url}/user/online"
+        self.interval = interval
+        if shared_session is not None:
+            self.session = shared_session
+        else:
+            import requests
+            self.session = requests.Session()
+            self.session.verify = False
+            self.session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'X-Requested-With': 'XMLHttpRequest'
+            })
+        self._set_cookie(cookie_str)
+        self._running = False
+        self._thread = None
+        self._errors = 0
+
+    def _set_cookie(self, cookie_str):
+        for item in cookie_str.split(';'):
+            if '=' in item:
+                k, v = item.strip().split('=', 1)
+                self.session.cookies.set(k, v)
+
+    def _get_random_interval(self):
+        """返回随机心跳间隔，90-150秒"""
+        return random.randint(90, 150)
+
+    def _run_loop(self):
+        _consecutive_errors = 0
+        while self._running:
+            try:
+                resp = self.session.post(self.url, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get('status') is False and data.get('offline'):
+                        _consecutive_errors += 1
+                        if LightStudyReporter._shared_cookie_str:
+                            self._set_cookie(LightStudyReporter._shared_cookie_str)
+                    else:
+                        _consecutive_errors = 0
+                        self._errors = 0
+            except Exception:
+                _consecutive_errors += 1
+                self._errors += 1
+            # 连续 30 次失败（约 1 小时）才退出心跳，容忍网络波动
+            if _consecutive_errors >= 30:
+                break
+            interval = self._get_random_interval()
+            for _ in range(interval):
+                if not self._running:
+                    break
+                time.sleep(1)
+
+    def start(self):
+        if not self._running:
+            self._running = True
+            self._thread = threading.Thread(target=self._run_loop, daemon=True)
+            self._thread.start()
+
+    def stop(self):
+        self._running = False
+
+
+def _parse_duration_str(dur_str):
+    try:
+        parts = str(dur_str).split(":")
+        if len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+        elif len(parts) == 2:
+            return int(parts[0]) * 60 + int(parts[1])
+        return int(dur_str)
+    except (ValueError, AttributeError):
+        return 0
+
+
+def _verify_platform_progress(base_url, session, videos):
+    from collections import defaultdict
+
+    course_videos = defaultdict(list)
+    for v in videos:
+        cid = v.get("course_id", "")
+        if cid:
+            course_videos[cid].append(v)
+
+    # Map node_id -> progress% from platform API
+    node_progress = {}
+
+    for cid in course_videos:
+        try:
+            api_url = f"{base_url}/user/study_record/video"
+            page = 1
+            while True:
+                resp = session.get(api_url, params={"courseId": cid, "page": page},
+                                    timeout=15, headers={"X-Requested-With": "XMLHttpRequest"})
+                if resp.status_code != 200:
+                    break
+                data = resp.json()
+                records = data.get("list", []) if isinstance(data, dict) else []
+                if not records:
+                    break
+                for item in records:
+                    node_id = str(item.get("id", "") or item.get("nodeId", ""))
+                    # 优先用 viewedDuration/duration 计算真实进度
+                    # progress 字段在某些平台始终返回 "1.00"（固定值），不可靠
+                    viewed_dur_str = item.get("viewedDuration", "")
+                    total_dur_str = str(item.get("duration", "0"))
+                    if viewed_dur_str and total_dur_str and total_dur_str.replace(".", "").isdigit():
+                        viewed_secs = _parse_duration_str(viewed_dur_str)
+                        total_secs = int(float(total_dur_str))
+                        if total_secs > 0:
+                            prog = viewed_secs / total_secs * 100
+                        else:
+                            prog = 0
+                    else:
+                        prog = float(item.get("progress", 0) or 0)
+                    if node_id:
+                        node_progress[node_id] = prog
+                page_info = data.get("pageInfo", {})
+                if page >= page_info.get("pageCount", 1):
+                    break
+                page += 1
+        except Exception as e:
+            logger.warning("[verify] 查询课程 %s 进度失败: %s", cid, e)
+
+    total_dur = 0
+    total_viewed = 0
+    for v in videos:
+        dur = v["duration"]
+        total_dur += dur
+        node_id = str(v.get("node_id", ""))
+        prog = node_progress.get(node_id, 0)
+        # progress is percentage (0-100), convert to viewed duration
+        viewed = int(dur * prog / 100) if prog > 0 else 0
+        total_viewed += min(viewed, dur)
+
+    # 检查考试完成情况（日志记录，用于排查"考试已完成但被重复作答"的问题）
+    exam_with_score = 0
+    exam_total = 0
+    for cid in course_videos:
+        try:
+            api_url = f"{base_url}/user/study_record/exam"
+            resp = session.get(api_url, params={"courseId": cid}, timeout=15,
+                               headers={"X-Requested-With": "XMLHttpRequest"})
+            if resp.status_code == 200:
+                data = resp.json()
+                records = data.get("list", []) if isinstance(data, dict) else []
+                for item in records:
+                    exam_total += 1
+                    score = item.get("finalScore")
+                    if score and str(score).replace(".", "", 1).isdigit() and float(score) > 0:
+                        exam_with_score += 1
+        except Exception:
+            pass
+    if exam_total > 0:
+        logger.info("[verify] 考试记录: %d/%d 有分数", exam_with_score, exam_total)
+
+    if total_dur <= 0:
+        # 没有获取到任何视频数据，可能是会话过期
+        if not node_progress:
+            logger.warning("[verify] 未获取到任何视频进度数据，可能会话已过期")
+            return -1
+        return 100
+    return min(100, int(total_viewed / total_dur * 100))
+
+
+def _load_checkpoint(checkpoint_file: str) -> dict:
+    """加载断点续传检查点"""
+    if os.path.exists(checkpoint_file):
+        try:
+            with open(checkpoint_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"completed_nodes": [], "progress": {}}
+
+
+def _save_checkpoint(checkpoint_file: str, checkpoint: dict):
+    """保存断点续传检查点"""
+    try:
+        os.makedirs(os.path.dirname(checkpoint_file), exist_ok=True)
+        with open(checkpoint_file, 'w', encoding='utf-8') as f:
+            json.dump(checkpoint, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"[checkpoint] 保存失败: {e}")
 
 
 def run(params_file, status_file, videos_file):
@@ -304,5 +810,5 @@ if __name__ == "__main__":
         run(sys.argv[1], sys.argv[2], sys.argv[3])
     except Exception as e:
         logger.error("异常: %s\n%s", e, traceback.format_exc())
-        send_status(sys.argv[2], push_ws=True, phase="error", message=f"异常: {e}", done=True, success=False)
+        send_status(sys.argv[2], phase="error", message=f"异常: {e}", done=True, success=False)
         sys.exit(1)
