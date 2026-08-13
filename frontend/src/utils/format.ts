@@ -32,11 +32,3 @@ export const orderStatusClass: Record<string, string> = {
 export const taskTypeNames: Record<string, string> = {
   video: '视频', exam: '考试', both: '视频+考试', full: '全包', chaoxing_points: '学习通积分',
 }
-
-export const agentStatusLabel: Record<string, string> = {
-  pending: '待审核', active: '活跃', suspended: '已暂停',
-}
-
-export const agentStatusClass: Record<string, string> = {
-  pending: 'warn', active: 'ok', suspended: 'bad',
-}

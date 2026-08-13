@@ -13,11 +13,8 @@ import { useSystemConfig } from '@/composables/useSystemConfig'
 import { useYpayAdmin } from '@/composables/useYpayAdmin'
 import AppTopbar from '@/components/AppTopbar.vue'
 import OverviewTab from '@/views/admin/OverviewTab.vue'
-import CommissionsTab from '@/views/admin/CommissionsTab.vue'
 import OrdersTab from '@/views/admin/OrdersTab.vue'
 import UsersTab from '@/views/admin/UsersTab.vue'
-import AgentsTab from '@/views/admin/AgentsTab.vue'
-import WithdrawalsTab from '@/views/admin/WithdrawalsTab.vue'
 import QueueTab from '@/views/admin/QueueTab.vue'
 import ProxyTab from '@/views/admin/ProxyTab.vue'
 import SecurityTab from '@/views/admin/SecurityTab.vue'
@@ -43,7 +40,7 @@ const ypayAdmin = useYpayAdmin()
 const { load: loadPlatformNames, getName: getPlatformName, platformNames } = usePlatformNames()
 
 // ── Tab switching (orchestrates across composables) ──
-type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'users' | 'agents' | 'commissions' | 'withdrawals' | 'pricing' | 'ypay' | 'ads' | 'proxy' | 'announcement' | 'risk' | 'security'
+type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'users' | 'pricing' | 'ypay' | 'ads' | 'proxy' | 'announcement' | 'risk' | 'security'
 const activeTab = ref<SidebarKey>('overview')
 const expandedSidebarItems = ref<string[]>(['queue'])
 
@@ -57,15 +54,9 @@ function switchTab(tab: SidebarKey) {
   activeTab.value = tab
   if (tab === 'overview') dashboard.loadDashboard(currentRole.value)
   if (tab === 'orders') orders.loadOrders()
-  if (tab === 'commissions') users.loadCommissions()
   if (tab === 'users') {
-    if (currentRole.value === 'admin') { users.loadUnifiedUsers(); users.loadSubAdmins() }
+    if (currentRole.value === 'admin') { users.loadUsers() }
   }
-  if (tab === 'agents') {
-    if (currentRole.value === 'admin') { users.loadAgents(); users.loadAgentsByTier(); users.loadTierCommissions(); users.loadAgentFees() }
-    else { users.agentSubTab.value = 'agentMgmt'; users.loadAgents() }
-  }
-  if (tab === 'withdrawals') payments.loadWithdrawals()
   // queue 数据由 watch(activeTab) → setQueueFilter 统一加载，此处不重复调用
   if (tab === 'security') { pwForm.old_password = ''; pwForm.new_password = ''; pwForm.confirm_password = ''; if (currentRole.value === 'admin') { sysConfig.loadDeepseekKey(); sysConfig.loadRiskData() } }
   if (tab === 'pricing') sysConfig.loadPricing()
@@ -80,14 +71,6 @@ onMounted(async () => {
   if (isLoggedIn.value) {
     if (store.adminToken) {
       currentRole.value = 'admin'
-    } else if (store.userToken) {
-      try {
-        const { api } = await import('@/api')
-        const r = await api.users.me()
-        const role = r?.data?.role
-        if (role === 'sub_admin') currentRole.value = 'sub_admin'
-        else { store.clearUserToken(); isLoggedIn.value = false; return }
-      } catch { store.clearUserToken(); isLoggedIn.value = false; return }
     }
     dashboard.loadDashboard(currentRole.value)
   } else {
@@ -219,7 +202,7 @@ const adminState = initAdminState({
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
               <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
             </svg>
-            <span v-if="!sidebarCollapsed">{{ currentRole === 'admin' ? '后台管理' : '合伙人后台' }}</span>
+            <span v-if="!sidebarCollapsed">后台管理</span>
           </router-link>
         </div>
 
@@ -305,7 +288,7 @@ const adminState = initAdminState({
             <span v-else-if="activeTab === 'queue_chaoxing'" class="topbar-tag">学习通</span>
           </div>
           <div class="topbar-right">
-            <span class="admin-badge">{{ currentRole === 'admin' ? '管理员' : '合伙人' }}</span>
+            <span class="admin-badge">管理员</span>
             <button v-if="activeTab === 'overview'" class="btn btn-ghost btn-sm" :disabled="loadingDash" @click="loadDashboard">
               <span v-if="loadingDash" class="spinner" style="width:14px;height:14px"></span>
               {{ loadingDash ? '加载中' : '刷新数据' }}
@@ -317,28 +300,11 @@ const adminState = initAdminState({
           <!-- Overview Tab -->
           <OverviewTab v-if="activeTab === 'overview'" />
 
-
-          <!-- Commissions Tab -->
-
-          <!-- Commissions Tab -->
-          <CommissionsTab v-if="activeTab === 'commissions'" />
-
-
           <!-- Orders Tab -->
           <OrdersTab v-if="activeTab === 'orders'" />
 
-
           <!-- Users Tab -->
           <UsersTab v-if="activeTab === 'users'" />
-
-
-          <!-- Agents Tab -->
-          <AgentsTab v-if="activeTab === 'agents'" />
-
-
-          <!-- Withdrawals Tab -->
-          <WithdrawalsTab v-if="activeTab === 'withdrawals'" />
-
 
           <!-- Queue Tab -->
           <QueueTab v-if="activeTab === 'queue' || activeTab === 'queue_school' || activeTab === 'queue_chaoxing'" />
@@ -387,39 +353,11 @@ const adminState = initAdminState({
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
           <span>用户</span>
         </button>
-        <button :class="['mbn-item', { active: activeTab === 'security' || activeTab === 'pricing' || activeTab === 'ypay' || activeTab === 'ads' || activeTab === 'proxy' || activeTab === 'commissions' || activeTab === 'withdrawals' || activeTab === 'agents' }]" @click="mobileSidebarOpen = true">
+        <button :class="['mbn-item', { active: activeTab === 'security' || activeTab === 'pricing' || activeTab === 'ypay' || activeTab === 'ads' || activeTab === 'proxy' }]" @click="mobileSidebarOpen = true">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
           <span>更多</span>
         </button>
       </nav>
-    </div>
-
-    <!-- Rate Modal -->
-    <div v-if="showRateModal" class="modal-overlay" @click.self="showRateModal = false">
-      <div class="modal">
-        <h3>调整佣金比例</h3>
-        <p v-if="rateTarget" class="modal-sub">
-代理: {{ rateTarget.nickname || rateTarget.username }} ({{ rateTarget.referral_code }})
-</p>
-        <div class="field">
-          <label>佣金比例</label>
-          <div class="rate-input-row">
-            <input v-model.number="newRate" type="number" min="0" max="0.5" step="0.01" />
-            <span class="rate-pct">{{ (newRate * 100).toFixed(0) }}%</span>
-          </div>
-          <p class="field-hint">
-范围 0% ~ 50%
-</p>
-        </div>
-        <div class="modal-actions">
-          <button class="btn btn-ghost" @click="showRateModal = false">
-取消
-</button>
-          <button class="btn btn-primary" @click="saveRate">
-确认修改
-</button>
-        </div>
-      </div>
     </div>
 
     <!-- Topup Modal -->

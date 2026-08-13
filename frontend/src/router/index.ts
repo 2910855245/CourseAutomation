@@ -41,22 +41,6 @@ const router = createRouter({
       meta: { requiresAdmin: true, title: '后台管理' },
     },
     {
-      path: '/agent',
-      name: 'agent',
-      component: () => import('@/views/Agent.vue'),
-      meta: { title: '代理中心' },
-    },
-    {
-      path: '/subsite/:slug',
-      name: 'subsite',
-      component: () => import('@/views/Subsite.vue'),
-      meta: { title: '分站' },
-    },
-    {
-      path: '/sub-admin',
-      redirect: '/admin',
-    },
-    {
       path: '/setup',
       name: 'setup',
       component: () => import('@/views/Setup.vue'),
@@ -83,7 +67,7 @@ router.afterEach((to) => {
 })
 
 router.beforeEach(async (to, _from, next) => {
-  if (to.name === 'setup' || to.name === 'payment' || to.name === 'orders' || to.name === 'orderDetail' || to.name === 'admin' || to.name === 'agent') {
+  if (to.name === 'setup' || to.name === 'payment' || to.name === 'orders' || to.name === 'orderDetail' || to.name === 'admin') {
     next()
     return
   }
@@ -97,17 +81,7 @@ router.beforeEach(async (to, _from, next) => {
     }
     if (to.meta.requiresAdmin) {
       const adminToken = localStorage.getItem('admin_token')
-      const userToken = localStorage.getItem('user_token')
-      if (adminToken) {
-        // 管理员直接通过
-      } else if (userToken) {
-        // 检查是否为合伙人
-        try {
-          const r = await api.users.me()
-          const role = (r as any)?.data?.role
-          if (role !== 'sub_admin' && role !== 'agent') { next({ name: 'home' }); return }
-        } catch { next({ name: 'home' }); return }
-      } else {
+      if (!adminToken) {
         next({ name: 'home' }); return
       }
     }

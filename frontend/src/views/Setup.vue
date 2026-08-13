@@ -29,15 +29,13 @@ const welcomeFeatures = [
   { icon: 'platform', title: '多平台自动发现', desc: '自动检测学校关联的所有课程平台' },
   { icon: 'engine', title: '智能刷课引擎', desc: '自动完成视频 + 考试，AI 答题' },
   { icon: 'pay', title: '自建支付系统', desc: '微信/支付宝扫码，YPay-App监控实时到账' },
-  { icon: 'agent', title: '代理分销系统', desc: '多级代理、自动佣金结算' },
-  { icon: 'chart', title: '数据仪表盘', desc: '营收、订单、代理数据一目了然' },
-  { icon: 'server', title: '独立子站', desc: '每个代理拥有专属下单页面' },
+  { icon: 'chart', title: '数据仪表盘', desc: '营收、订单数据一目了然' },
 ]
 
 const guides = [
   { title: '登录管理后台', desc: '用管理员账号登录后台查看数据' },
   { title: '风险监控', desc: '查看平台健康、加密参数变化、接口状态' },
-  { title: '配置完整参数', desc: '设置佣金比例、提现规则、代理配置' },
+  { title: '配置完整参数', desc: '设置支付渠道、定价等参数' },
   { title: '开始接单', desc: '输入学号密码检测课程提交订单' },
 ]
 

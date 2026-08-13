@@ -12,17 +12,12 @@ export function useDashboard() {
   const sidebarCollapsed = ref(false)
   const mobileSidebarOpen = ref(false)
 
-  async function loadDashboard(currentRole: string) {
+  async function loadDashboard(_currentRole: string) {
     loadingDash.value = true
     dashError.value = ''
     try {
-      if (currentRole === 'admin') {
-        const r = await api.admin.dashboard()
-        dash.value = r.data
-      } else {
-        const r = await api.subAdmin.stats()
-        dash.value = r.data
-      }
+      const r = await api.admin.dashboard()
+      dash.value = r.data
     } catch (e: any) {
       dashError.value = e?.message || '加载失败，请检查后端服务是否正常运行'
     }
@@ -50,11 +45,6 @@ export function useDashboard() {
     if (!dash.value?.platform_distribution) return 1
     return dash.value.platform_distribution.reduce((s: any, p: any) => s + p.count, 0) || 1
   })
-  const maxPartnerStatusCount = computed(() => {
-    if (!dash.value?.by_status) return 1
-    return Math.max(...Object.values(dash.value.by_status).map((v: any) => v.count), 1)
-  })
-
   const sidebarGroups = [
     {
       label: '经营中心',
@@ -71,15 +61,6 @@ export function useDashboard() {
           ],
         },
         { key: 'users', label: '用户管理', icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z' },
-      ],
-    },
-    {
-      label: '代理商',
-      icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z',
-      children: [
-        { key: 'agents', label: '代理管理', icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z' },
-        { key: 'commissions', label: '佣金记录', icon: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
-        { key: 'withdrawals', label: '提现管理', icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15' },
       ],
     },
     {
@@ -103,18 +84,12 @@ export function useDashboard() {
     },
   ] as const
 
-  type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'users' | 'agents' | 'commissions' | 'withdrawals' | 'pricing' | 'ypay' | 'ads' | 'proxy' | 'risk' | 'security'
+  type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'users' | 'pricing' | 'ypay' | 'ads' | 'proxy' | 'risk' | 'security'
 
   const allSidebarItems: { key: string; label: string; icon: string }[] = sidebarGroups.flatMap((g: any) =>
     g.children.flatMap((item: any) => item.children ? [item, ...item.children] : [item])
   )
-  const partnerAllowedTabs: SidebarKey[] = ['overview', 'orders', 'agents', 'commissions', 'withdrawals', 'security']
-  const visibleSidebarGroups = computed(() => {
-    if ((store.adminToken ? 'admin' : 'sub_admin') === 'admin') return sidebarGroups as any
-    return sidebarGroups
-      .map(g => ({ ...g, children: (g.children as any).filter((c: any) => partnerAllowedTabs.includes(c.key as SidebarKey)) }))
-      .filter(g => g.children.length > 0)
-  })
+  const visibleSidebarGroups = computed(() => sidebarGroups as any)
 
   function fmtDate(s?: string) { if (!s) return '-'; return s.replace('T', ' ').slice(0, 19) }
   function fmtShortDate(s?: string) { if (!s) return '-'; return s.slice(5, 16).replace('T', ' ') }
@@ -123,8 +98,8 @@ export function useDashboard() {
   return {
     dash, dashError, loadingDash, sidebarCollapsed, mobileSidebarOpen,
     statusLabel, statusClass, orderStatusLabel, orderStatusClass,
-    maxStatusCount, maxBarRevenue, maxBarOrders, totalPlatformOrders, maxPartnerStatusCount,
-    sidebarGroups, allSidebarItems, partnerAllowedTabs, visibleSidebarGroups,
+    maxStatusCount, maxBarRevenue, maxBarOrders, totalPlatformOrders,
+    sidebarGroups, allSidebarItems, visibleSidebarGroups,
     fmtDate, fmtShortDate, fmtMoney, loadDashboard,
   }
 }

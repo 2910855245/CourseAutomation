@@ -29,29 +29,12 @@ const isAdmin = computed(() => {
   if (!u) return false
   return u.role === 'admin' || u.is_admin
 })
-const isSubAdmin = computed(() => {
-  const u = store.userInfo as any
-  if (!u) return false
-  return u.role === 'sub_admin'
-})
-const isAgent = computed(() => {
-  const u = store.userInfo as any
-  if (!u) return false
-  if (u.role === 'agent') return true
-  return u.agent_status === 'active'
-})
 const primaryRole = computed(() => {
   if (isAdmin.value) return 'admin'
-  if (isSubAdmin.value) return 'sub_admin'
-  if (isAgent.value) return 'agent'
   return ''
 })
 const roleBadge = computed(() => {
-  if (isAdmin.value && isAgent.value) return '管理员·代理'
   if (isAdmin.value) return '管理员'
-  if (isSubAdmin.value && isAgent.value) return '合伙人·代理'
-  if (isSubAdmin.value) return '合伙人'
-  if (isAgent.value) return '代理'
   return ''
 })
 </script>
@@ -75,12 +58,6 @@ const roleBadge = computed(() => {
         <router-link v-if="isAdmin" to="/admin">
 管理后台
 </router-link>
-        <router-link v-if="isSubAdmin" to="/admin">
-合伙人后台
-</router-link>
-        <router-link v-if="isAgent" to="/agent">
-代理中心
-</router-link>
         <span v-if="showRoleBadge && roleBadge" class="topbar-role-badge" :class="'role-' + primaryRole">{{ roleBadge }}</span>
         <a v-if="showLogout" href="#" class="logout-link" @click.prevent="emit('logout')">退出</a>
       </nav>
@@ -98,12 +75,6 @@ const roleBadge = computed(() => {
 </router-link>
         <router-link v-if="isAdmin" to="/admin" class="mn-item">
 管理后台
-</router-link>
-        <router-link v-if="isSubAdmin" to="/admin" class="mn-item">
-合伙人后台
-</router-link>
-        <router-link v-if="isAgent" to="/agent" class="mn-item">
-代理中心
 </router-link>
         <span v-if="showRoleBadge && roleBadge" class="mn-badge" :class="'role-' + primaryRole">{{ roleBadge }}</span>
         <a v-if="showLogout" href="#" class="mn-item logout-link" @click.prevent="emit('logout'); closeMobileMenu()">退出</a>

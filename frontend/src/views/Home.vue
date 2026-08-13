@@ -11,7 +11,7 @@ const store = useAppStore()
 const { load: loadPlatformNames, getName: getPlatformName } = usePlatformNames()
 
 const {
-  userRole, isPrivileged, isRegularUser, showUpgradeBanner, dismissUpgradeBanner, detectUserRole, handleVisibilityChange,
+  userRole, isPrivileged, isRegularUser, detectUserRole, handleVisibilityChange,
   username, password, scanning, rescanning, scanDone, allDone, isLeaving, scanData, countdown,
   activeTab, chaoxingUsername, chaoxingPassword, startChaoxingScan,
   loginError, failedPlatforms, reloginDialog, reloginPassword, reloginLoading, loginErrorCountdown,
@@ -25,7 +25,7 @@ const {
   selectedPayMethod, payOrders, payQrCodes, payReallyPrices, payBatchIds, payBatchOutTradeNos,
   payBatchId, payBatchOutTradeNo, showPaySuccess, footerAds, paySuccessAmount, payTimedOut,
   handleOrderSuccess, goToOrders, submitAndPay, onPaySuccessDone, closePay, savePayQr, switchPayMethod,
-  danmakuList, earnBtnY, earnPointerDown, earnClick, pct, pctClass, LS_KEY,
+  danmakuList, pct, pctClass, LS_KEY,
   showAnnouncement, announcementContent, checkAnnouncement, dismissAnnouncement,
 } = useHomeState()
 
@@ -82,20 +82,6 @@ onMounted(async () => {
     <AppTopbar title="FUCK 文理网课" :show-role-badge="true" />
 
     <div class="content-wrapper">
-      <div v-if="isRegularUser && showUpgradeBanner" class="upgrade-banner">
-        <div class="upgrade-banner-body">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-          <span>升级为<strong>L1代理</strong>，开启推广赚钱之旅，最高享15%佣金</span>
-        </div>
-        <div class="upgrade-banner-actions">
-          <router-link to="/agent" class="btn btn-primary btn-sm">
-立即升级
-</router-link>
-          <button class="btn btn-ghost btn-sm" @click="dismissUpgradeBanner">
-暂不
-</button>
-        </div>
-      </div>
       <div v-if="allDone" class="all-done-wrapper">
         <div :class="['done-card', isLeaving ? 'fade-out-leave-active' : 'fade-in-enter-active']">
           <div class="done-icon">
@@ -531,16 +517,6 @@ AI智能答题考试
         <span>FUCK<strong>文理网课</strong> · 专业解决你的需求</span>
       </div>
     </footer>
-
-    <router-link
-      to="/agent"
-      class="float-earn-btn"
-      :style="{ top: earnBtnY + 'px' }"
-      @pointerdown="earnPointerDown"
-      @click="earnClick"
-    >
-      <span class="feb-text">我也要赚钱</span>
-    </router-link>
   </div>
 
   <!-- 重新输入密码弹窗 -->
@@ -584,35 +560,6 @@ AI智能答题考试
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-}
-
-
-.upgrade-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 16px;
-  margin-bottom: 12px;
-  background: linear-gradient(135deg, var(--c-primary-bg, #eef2ff) 0%, var(--c-primary-bg-sub, #f5f3ff) 100%);
-  border: 1px solid var(--c-primary, #4f6ef7);
-  border-radius: 10px;
-  flex-wrap: wrap;
-}
-.upgrade-banner-body {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--c-primary, #4f6ef7);
-  font-size: 14px;
-}
-.upgrade-banner-body strong {
-  color: var(--c-primary, #4f6ef7);
-}
-.upgrade-banner-actions {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
 }
 
 .content-wrapper {
@@ -1550,23 +1497,6 @@ AI智能答题考试
   font-weight: 700;
 }
 
-.float-earn-btn {
-  position: fixed; right: 0;
-  z-index: 200; background: var(--c-primary); color: #fff;
-  padding: 12px 10px; border-radius: 10px 0 0 10px; text-decoration: none !important;
-  font-size: 12px; font-weight: 600; display: flex; flex-direction: column;
-  align-items: center; gap: 4px; box-shadow: -2px 2px 12px rgba(79,110,247,.35);
-  transition: background .2s, box-shadow .2s; writing-mode: horizontal-tb;
-  cursor: grab; user-select: none; -webkit-user-select: none;
-  touch-action: none;
-}
-.float-earn-btn:hover {
-  padding-right: 14px; background: var(--c-primary-hover);
-  text-decoration: none; box-shadow: -4px 4px 20px rgba(79,110,247,.45);
-}
-.float-earn-btn:active { cursor: grabbing; }
-.feb-text { white-space: nowrap; letter-spacing: 1px; }
-
 @media (max-width: 768px) {
   .plan-grid { grid-template-columns: 1fr; }
   .summary-bar { flex-direction: column; gap: 12px; }
@@ -1587,13 +1517,6 @@ AI智能答题考试
   .login-card { max-width: 100%; padding: 20px 16px; margin-top: 20px; }
   .login-card .field { margin-bottom: 14px; }
   .login-card .btn-lg { padding: 12px 20px; font-size: 15px; }
-
-  .upgrade-banner {
-    flex-direction: column;
-    align-items: flex-start;
-    padding: 10px 12px;
-  }
-  .upgrade-banner-actions { width: 100%; justify-content: flex-end; }
 
   /* 结果页：顶栏固定 + 底栏固定 + 列表滚动 */
   .results {
@@ -1685,11 +1608,6 @@ AI智能答题考试
   .modal-amount { font-size: 32px; }
   .pay-qr-img { width: 180px; height: 180px; }
   .pay-qr-placeholder { width: 180px; height: 180px; }
-
-  .float-earn-btn {
-    padding: 8px 8px;
-    font-size: 11px;
-  }
 
   /* Done/error cards */
   .done-card { padding: 32px 20px; }

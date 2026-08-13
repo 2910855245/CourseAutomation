@@ -9,7 +9,7 @@ export function useAuth() {
   const adminUser = ref('')
   const adminPass = ref('')
   const loginErr = ref('')
-  const currentRole = ref<'admin' | 'sub_admin'>(store.adminToken ? 'admin' : 'sub_admin')
+  const currentRole = ref<'admin'>('admin')
   const isLoggedIn = ref(!!store.adminToken || !!store.userToken)
   const pwForm = reactive({ old_password: '', new_password: '', confirm_password: '' })
   const changingPw = ref(false)
@@ -44,11 +44,8 @@ export function useAuth() {
       if (role === 'admin') {
         store.setAdminToken(r.data.token)
         currentRole.value = 'admin'
-      } else if (role === 'sub_admin') {
-        store.setUserToken(r.data.token, r.data)
-        currentRole.value = 'sub_admin'
       } else {
-        loginErr.value = '需要管理员或合伙人账号'; return
+        loginErr.value = '需要管理员账号'; return
       }
       isLoggedIn.value = true
     } catch (err: any) {
@@ -58,8 +55,7 @@ export function useAuth() {
   }
 
   function logout() {
-    if (currentRole.value === 'admin') store.clearAdminToken()
-    else store.clearUserToken()
+    store.clearAdminToken()
     isLoggedIn.value = false
   }
 

@@ -9,15 +9,9 @@ export function useHomeState() {
   const route = useRoute()
 
   // ── Role detection ──
-  const userRole = ref<'admin' | 'sub_admin' | 'agent' | null>(null)
+  const userRole = ref<'admin' | null>(null)
   const isPrivileged = computed(() => !!userRole.value)
   const isRegularUser = ref(false)
-  const UPGRADE_BANNER_KEY = 'hide_upgrade_banner'
-  const showUpgradeBanner = ref(localStorage.getItem(UPGRADE_BANNER_KEY) !== '1')
-  function dismissUpgradeBanner() {
-    showUpgradeBanner.value = false
-    localStorage.setItem(UPGRADE_BANNER_KEY, '1')
-  }
 
   async function detectUserRole() {
     // 管理员在后台登录后，adminToken 已存入 localStorage
@@ -31,8 +25,6 @@ export function useHomeState() {
         const r = await api.users.me()
         const role = r?.data?.role
         if (role === 'admin') { userRole.value = 'admin'; return }
-        if (role === 'sub_admin') { userRole.value = 'sub_admin'; return }
-        if (r?.data?.agent) { userRole.value = 'agent'; return }
         isRegularUser.value = true
       } catch {}
     }
@@ -467,7 +459,7 @@ export function useHomeState() {
       payTotal.value = orders.reduce((s, o) => s + o.price, 0)
       const orderUsername = isChaoxing ? chaoxingUsername.value.trim() : username.value.trim()
       const orderPassword = isChaoxing ? chaoxingPassword.value.trim() : password.value.trim()
-      const batchRes = await api.orders.batch({ username: orderUsername, password: orderPassword, orders, inviter_code: (route.query.ref as string) || '' })
+      const batchRes = await api.orders.batch({ username: orderUsername, password: orderPassword, orders })
       submitSuccess.value = true
       const allOrders = (batchRes?.data?.orders) || []; payOrders.value = allOrders
       const newIds = allOrders.map((o: any) => o.order_id).join(',')
@@ -535,18 +527,9 @@ export function useHomeState() {
     if (payPollTimer.value) clearInterval(payPollTimer.value); startPollPayment()
   }
 
-  // ── Danmaku / Earn button ──
+  // ── Danmaku ──
   const painTexts = ['化好妆了网课还没刷完', '兄弟们上号啊我还在刷课', '网课谁发明的能不能取消', '这视频怎么还要答题啊', '出去玩还要挂着刷课', '室友都在打游戏就我在刷', '又占我周末时间', '作业比专业课还多', '又要挂科了救救我吧', '周末本该出去拍照的', '室友都去KTV了就我留宿', '网课进度条怎么不动啊', '五排就差我一个了', '考前才知道有网课要刷', '早八人还要刷到凌晨三点', '社团活动全被网课耽误了', '一学期的课两周刷完', '求求了给个脚本吧']
   const danmakuList = painTexts.map((text, idx) => ({ text, x: `${3 + idx * 5}%`, delay: `${idx * 2}s`, dur: `${14 + (idx % 3) * 3}s` }))
-
-  const EARN_BTN_LS = 'earn_btn_y'
-  const earnBtnY = ref<number>((() => { const v = localStorage.getItem(EARN_BTN_LS); return v ? parseInt(v) : Math.round(window.innerHeight * 0.5 - 25) })())
-  let earnDragging = false; let earnStartY = 0; let earnStartClientY = 0
-  function clampEarnY(y: number) { return Math.max(10, Math.min(window.innerHeight - 60, y)) }
-  function earnPointerDown(e: PointerEvent) { earnDragging = false; earnStartY = earnBtnY.value; earnStartClientY = e.clientY; document.addEventListener('pointermove', earnPointerMove); document.addEventListener('pointerup', earnPointerUp) }
-  function earnPointerMove(e: PointerEvent) { const dy = e.clientY - earnStartClientY; if (Math.abs(dy) > 5) earnDragging = true; earnBtnY.value = clampEarnY(earnStartY + dy) }
-  function earnPointerUp() { document.removeEventListener('pointermove', earnPointerMove); document.removeEventListener('pointerup', earnPointerUp); localStorage.setItem(EARN_BTN_LS, String(Math.round(earnBtnY.value))) }
-  function earnClick(e: MouseEvent) { if (earnDragging) { e.preventDefault(); e.stopPropagation() } }
 
   // ── Utilities ──
   const pct = (c: CourseItem) => { const total = c.video_total; if (total === 0) return 0; return Math.round(c.video_completed / total * 100) }
@@ -579,7 +562,7 @@ export function useHomeState() {
 
   return {
     // Role
-    userRole, isPrivileged, isRegularUser, showUpgradeBanner, dismissUpgradeBanner, detectUserRole, handleVisibilityChange,
+    userRole, isPrivileged, isRegularUser, detectUserRole, handleVisibilityChange,
     // Scan
     username, password, scanning, rescanning, scanDone, allDone, isLeaving, scanData, countdown,
     activeTab, chaoxingUsername, chaoxingPassword, startChaoxingScan,
@@ -596,7 +579,7 @@ export function useHomeState() {
     payBatchId, payBatchOutTradeNo, showPaySuccess, footerAds, paySuccessAmount, payTimedOut,
     handleOrderSuccess, goToOrders, submitAndPay, startPollPayment, onPaySuccessDone, closePay, savePayQr, switchPayMethod,
     // UI
-    danmakuList, earnBtnY, earnPointerDown, earnClick, pct, pctClass,
+    danmakuList, pct, pctClass,
     // Announcement
     showAnnouncement, announcementContent, announcementId, checkAnnouncement, dismissAnnouncement,
     // LS_KEY for template

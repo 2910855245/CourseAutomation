@@ -1,62 +1,10 @@
-// 支付核心：提现管理、任务队列、支付测试
+// 支付核心：任务队列、支付测试
 import { ref } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { api } from '@/api'
-import { useConfirmSingleton } from '@/composables/useConfirm'
 
 export function usePayments() {
   const store = useAppStore()
-  const { showConfirm } = useConfirmSingleton()
-
-  function getRole(): 'admin' | 'sub_admin' { return store.adminToken ? 'admin' : 'sub_admin' }
-
-  // ── Withdrawals ──
-  const withdrawals = ref<any[]>([])
-  const withdrawalsTotal = ref(0)
-  const withdrawalStatusFilter = ref('')
-  const showQrModal = ref('')
-  const loadingWithdrawals = ref(false)
-
-  async function loadWithdrawals() {
-    loadingWithdrawals.value = true
-    try {
-      const params: any = { limit: 50, offset: 0 }
-      if (withdrawalStatusFilter.value) params.status = withdrawalStatusFilter.value
-      if (getRole() === 'admin') {
-        const r = await api.adminWithdrawals.list(params)
-        withdrawals.value = r.data.items
-        withdrawalsTotal.value = r.data.total
-      } else {
-        const r = await api.subAdmin.withdrawals.list(params)
-        withdrawals.value = r.data.items
-        withdrawalsTotal.value = r.data.total
-      }
-    } catch (e: any) { store.toast(e.message || '加载提现记录失败', 'error') }
-    finally { loadingWithdrawals.value = false }
-  }
-
-  async function approveWithdrawal(id: string) {
-    try {
-      if (getRole() === 'admin') await api.adminWithdrawals.approve(id)
-      else await api.subAdmin.withdrawals.approve(id)
-      store.toast('提现已通过', 'success'); loadWithdrawals()
-    } catch (e: any) { store.toast(e.message, 'error') }
-  }
-
-  async function rejectWithdrawal(id: string) {
-    const ok = await showConfirm({ title: '拒绝提现', message: '确定拒绝该提现申请吗？金额将退回代理余额。', type: 'warning' })
-    if (!ok) return
-    try {
-      if (getRole() === 'admin') await api.adminWithdrawals.reject(id)
-      else await api.subAdmin.withdrawals.reject(id)
-      store.toast('提现已拒绝，金额退回', 'success'); loadWithdrawals()
-    } catch (e: any) { store.toast(e.message, 'error') }
-  }
-
-  async function clearWithdrawalHistory() {
-    try { const res = await api.adminWithdrawals.clearHistory(); store.toast(res.message || '提现记录已清除', 'success') }
-    catch (e: any) { store.toast(e.message, 'error') }
-  }
 
   // ── Queue ──
   const queueStats = ref<any>(null)
@@ -207,9 +155,6 @@ export function usePayments() {
   }
 
   return {
-    // Withdrawals
-    withdrawals, withdrawalsTotal, withdrawalStatusFilter, showQrModal, loadingWithdrawals,
-    loadWithdrawals, approveWithdrawal, rejectWithdrawal, clearWithdrawalHistory,
     // Queue
     queueStats, queueJobs, queueStatusFilter, queueFilter, loadingQueue, queuePausing, maxWorkersInput, serverSpecs,
     loadQueueData, setQueueFilter, pauseQueue, resumeQueue, setMaxWorkers, detectServerSpecs, applyAutoConcurrency,

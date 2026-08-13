@@ -38,7 +38,7 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
             </div>
           </div>
           <div class="kpi-sub">
-            订单 {{ fmtMoney(dash.total_revenue - (dash.agent_upgrades?.revenue || 0)) }}
+            累计 {{ fmtMoney(dash.total_revenue || 0) }}
           </div>
         </div>
         <div class="kpi-card">
@@ -87,29 +87,6 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
             {{ dash.by_status?.completed?.count || 0 }} 单
           </div>
         </div>
-        <div class="kpi-card">
-          <div class="kpi-icon agt">
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            ><path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 22 12 18.56 5.82 22 7 14.14l-5-4.87 6.91-1.01z" /></svg>
-          </div>
-          <div class="kpi-body">
-            <div class="kpi-val">
-              {{ fmtMoney(dash.agent_upgrades?.revenue || 0) }}
-            </div>
-            <div class="kpi-label">
-              代理升级收入
-            </div>
-          </div>
-          <div class="kpi-sub">
-            {{ dash.agent_upgrades?.count || 0 }} 笔
-          </div>
-        </div>
       </div>
 
       <div class="panel-row">
@@ -134,14 +111,6 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
                     {{ fmtMoney(v.revenue) }}
                   </td>
                   <td>{{ dash.total_revenue > 0 ? (v.revenue / dash.total_revenue * 100).toFixed(1) : 0 }}%</td>
-                </tr>
-                <tr v-if="dash.agent_upgrades?.revenue">
-                  <td><span class="status-tag primary">代理升级</span></td>
-                  <td>{{ dash.agent_upgrades.count || 0 }}</td>
-                  <td class="money-cell">
-                    {{ fmtMoney(dash.agent_upgrades.revenue) }}
-                  </td>
-                  <td>{{ dash.total_revenue > 0 ? (dash.agent_upgrades.revenue / dash.total_revenue * 100).toFixed(1) : 0 }}%</td>
                 </tr>
               </tbody>
               <tfoot>
@@ -283,70 +252,6 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
           </div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-icon agt">
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            ><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" /><circle
-              cx="9"
-              cy="7"
-              r="4"
-            /><path d="M23 21v-2a4 4 0 00-3-3.87" /><path d="M16 3.13a4 4 0 010 7.75" /></svg>
-          </div>
-          <div class="kpi-body">
-            <div class="kpi-val">
-              {{ dash.agents.active }}
-            </div>
-            <div class="kpi-label">
-              活跃代理
-            </div>
-          </div>
-          <div class="kpi-sub">
-            待审核 {{ dash.agents.pending }}
-          </div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-icon usr">
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            ><path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" /><circle
-              cx="8.5"
-              cy="7"
-              r="4"
-            /><line
-              x1="20"
-              y1="8"
-              x2="20"
-              y2="14"
-            /><line
-              x1="23"
-              y1="11"
-              x2="17"
-              y2="11"
-            /></svg>
-          </div>
-          <div class="kpi-body">
-            <div class="kpi-val">
-              {{ dash.agents.total || 0 }}
-            </div>
-            <div class="kpi-label">
-              代理总数
-            </div>
-          </div>
-          <div class="kpi-sub">
-            今日 +{{ dash.agents.new_today || 0 }} · 本周 +{{ dash.agents.new_week || 0 }}
-          </div>
-        </div>
-        <div class="kpi-card">
           <div class="kpi-icon rate">
             <svg
               width="20"
@@ -367,32 +272,6 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
           </div>
           <div class="kpi-sub">
             累计 {{ dash.orders.completed }}/{{ dash.orders.total }}
-          </div>
-        </div>
-        <div
-          v-if="dash.agent_upgrades && (dash.agent_upgrades.today_count || dash.agent_upgrades.today_revenue)"
-          class="kpi-card"
-        >
-          <div class="kpi-icon upg">
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            ><path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 22 12 18.56 5.82 22 7 14.14l-5-4.87 6.91-1.01z" /></svg>
-          </div>
-          <div class="kpi-body">
-            <div class="kpi-val">
-              {{ fmtMoney(dash.agent_upgrades.today_revenue) }}
-            </div>
-            <div class="kpi-label">
-              代理升级收入
-            </div>
-          </div>
-          <div class="kpi-sub">
-            今日 {{ dash.agent_upgrades.today_count }} 笔 · 本周 {{ fmtMoney(dash.agent_upgrades.week_revenue) }}
           </div>
         </div>
         <div class="kpi-card">
@@ -424,16 +303,6 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
             <div class="kpi-label">失败订单</div>
           </div>
           <div class="kpi-sub">今日 {{ dash.orders.today || 0 }} 单</div>
-        </div>
-        <div v-if="(dash.agents.total_commission || 0) > 0" class="kpi-card">
-          <div class="kpi-icon rate">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
-          </div>
-          <div class="kpi-body">
-            <div class="kpi-val">{{ fmtMoney(dash.agents.total_commission) }}</div>
-            <div class="kpi-label">累计佣金</div>
-          </div>
-          <div class="kpi-sub">{{ dash.agents.active || 0 }} 活跃代理</div>
         </div>
       </div>
 
@@ -576,87 +445,6 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
       </div>
 
       <div class="panel-row">
-        <div class="panel">
-          <div class="panel-head">
-            <h3>代理层级分布</h3>
-          </div>
-          <div
-            v-if="dash.agents.by_tier && Object.keys(dash.agents.by_tier).length"
-            class="plat-list"
-          >
-            <div
-              v-for="(cnt, tier) in dash.agents.by_tier"
-              :key="tier"
-              class="plat-item"
-            >
-              <div class="plat-left">
-                <span
-                  class="plat-dot"
-                  :style="{ background: ['#6366f1','#8b5cf6','#a855f7','#d946ef'][Number(tier)-1] || '#6b7280' }"
-                />
-                <span class="plat-name">{{ tierNames[tier] || 'L' + tier }}</span>
-              </div>
-              <div class="plat-right">
-                <div class="plat-bar-bg">
-                  <div
-                    class="plat-bar-fill"
-                    :style="{ width: (cnt / dash.agents.active * 100) + '%', background: ['#6366f1','#8b5cf6','#a855f7','#d946ef'][Number(tier)-1] || '#6b7280' }"
-                  />
-                </div>
-                <span class="plat-cnt">{{ cnt }}人</span>
-              </div>
-            </div>
-          </div>
-          <div
-            v-else
-            class="empty-sm"
-          >
-            暂无代理
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-head">
-            <h3>代理统计概览</h3>
-          </div>
-          <div class="type-cards">
-            <div class="type-card">
-              <div class="tc-icon">
-                活跃
-              </div>
-              <div class="tc-count">
-                {{ dash.agents.active }}人
-              </div>
-            </div>
-            <div class="type-card">
-              <div class="tc-icon">
-                待审
-              </div>
-              <div class="tc-count">
-                {{ dash.agents.pending }}人
-              </div>
-            </div>
-            <div class="type-card">
-              <div class="tc-icon">
-                拒绝
-              </div>
-              <div class="tc-count">
-                {{ dash.agents.rejected || 0 }}人
-              </div>
-            </div>
-            <div class="type-card">
-              <div class="tc-icon">
-                佣金
-              </div>
-              <div class="tc-rev">
-                {{ fmtMoney(dash.agents.total_commission) }}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="panel-row">
         <div class="panel panel-wide-sm">
           <div class="panel-head">
             <h3>最近订单</h3>
@@ -687,38 +475,6 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
             class="empty-sm"
           >
             暂无订单
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-head">
-            <h3>代理排行榜</h3>
-          </div>
-          <div
-            v-if="dash.top_agents.length"
-            class="rank-list"
-          >
-            <div
-              v-for="(a, i) in dash.top_agents"
-              :key="a.agent_id"
-              class="rank-item"
-            >
-              <span
-                class="rank-no"
-                :class="'r' + (i + 1)"
-              >{{ i + 1 }}</span>
-              <div class="rank-info">
-                <span class="rank-name">{{ a.display_name || a.referral_code }}</span>
-                <span class="rank-code">{{ a.referral_code }}</span>
-              </div>
-              <span class="rank-earn">{{ fmtMoney(a.total_earnings) }}</span>
-            </div>
-          </div>
-          <div
-            v-else
-            class="empty-sm"
-          >
-            暂无代理
           </div>
         </div>
       </div>
