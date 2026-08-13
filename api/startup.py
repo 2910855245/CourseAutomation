@@ -281,6 +281,10 @@ def run_startup(settings):
     from api.database import db
     from api.services.task_queue import school_queue, chaoxing_queue, migrate_old_queue_table
 
+    # 进程上下文最先初始化（daemon 线程继承此刻的 contextvars）
+    from config import init_process_context
+    init_process_context()
+
     _ensure_default_admin(db)
     db.recover_stuck_paid_processing()
     _init_prices(db)

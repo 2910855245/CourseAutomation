@@ -126,6 +126,9 @@ def run_task(params_file, status_file):
     with open(params_file, encoding="utf-8") as f:
         params = json.load(f)
 
+    from config import init_worker_context
+    init_worker_context(params)
+
     username = params["username"]
     password = params["password"]
     website_id = params["website_id"]

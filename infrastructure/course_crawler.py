@@ -32,7 +32,8 @@ def get_current_base_url():
 
 def get_courses(session) -> List[Dict]:
     """从用户中心获取课程列表（HTML 爬取，无 API 替代）"""
-    from config import USER_CENTER_URL
+    from config import get_base_url
+    USER_CENTER_URL = f"{get_base_url()}/user/index"
     resp = safe_request(session, USER_CENTER_URL)
     if not resp:
         return []
@@ -45,7 +46,8 @@ def get_courses(session) -> List[Dict]:
         name = node.xpath('.//div[@class="name"]/a/text()')
         name = _s(name[0]).strip() if name else "未知课程"
 
-        from config import BASE_URL
+        from config import get_base_url
+        BASE_URL = get_base_url()
         detail_link = node.xpath('.//div[@class="name"]/a/@href')
         detail_link = BASE_URL + _s(detail_link[0]) if detail_link else ""
 
@@ -69,7 +71,8 @@ def get_courses(session) -> List[Dict]:
 
 def get_courses_with_diag(session) -> Dict:
     """带诊断信息的课程获取，返回 {"courses": [...], "error": "...", "http_code": int}"""
-    from config import USER_CENTER_URL
+    from config import get_base_url
+    USER_CENTER_URL = f"{get_base_url()}/user/index"
     result = {"courses": [], "error": "", "http_code": 0}
 
     resp = None
@@ -131,7 +134,8 @@ def get_courses_with_diag(session) -> Dict:
             result["error"] = "页面正常但未匹配到课程节点，页面结构可能变化"
         return result
 
-    from config import BASE_URL
+    from config import get_base_url
+    BASE_URL = get_base_url()
     for node in course_nodes:
         name = node.xpath('.//div[@class="name"]/a/text()')
         name = _s(name[0]).strip() if name else "未知课程"
@@ -165,7 +169,8 @@ def get_course_nodes_from_api(session, course_id: str, course_name: str = "") ->
     返回: {nodes: [...], videos: [...], exams: [...], works: [...]}
     字段值为 API 原始值，清洗由 data_cleaner 模块负责。
     """
-    from config import BASE_URL
+    from config import get_base_url
+    BASE_URL = get_base_url()
 
     result = {
         "nodes": [],
@@ -297,7 +302,8 @@ def get_first_study_link(session, detail_url: str) -> Optional[str]:
     for xp in possible_xpaths:
         hrefs = tree.xpath(xp)
         if hrefs:
-            from config import BASE_URL
+            from config import get_base_url
+            BASE_URL = get_base_url()
             h = _s(hrefs[0])
             full_url = BASE_URL + h if h.startswith('/') else h
             return full_url
@@ -324,7 +330,8 @@ def extract_all_nodes_from_study_page(html_content: str) -> List[Dict]:
 
 
 def extract_node_params(session, node_url: str, retries=2) -> Dict:
-    from config import BASE_URL
+    from config import get_base_url
+    BASE_URL = get_base_url()
     full_url = BASE_URL + node_url if node_url.startswith('/') else node_url
     for attempt in range(retries + 1):
         try:
@@ -477,7 +484,8 @@ def get_course_content(session, course_id: str, website_id: int = None) -> Optio
     study_url = target.get("study_record_url") or target.get("detail_link")
     if not study_url:
         return None
-    from config import BASE_URL
+    from config import get_base_url
+    BASE_URL = get_base_url()
     full_url = BASE_URL + study_url if study_url.startswith('/') else study_url
     resp = safe_request(session, full_url)
     if not resp:

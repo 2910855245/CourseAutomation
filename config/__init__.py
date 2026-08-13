@@ -24,6 +24,15 @@ from config.platforms import (
     get_random_user_agent,
 )
 from config.settings import ROOT_DIR, Settings, get_settings, settings, validate_settings
+from config.context import (
+    get_account_username,
+    get_base_url as _ctx_get_base_url,
+    get_website_config as _ctx_get_website_config,
+    init_process_context,
+    init_worker_context,
+    set_account_username,
+    set_website_id,
+)
 
 # ==================== 统一数据目录 ====================
 BASE_DIR = ROOT_DIR
@@ -46,19 +55,9 @@ CURRENT_WEBSITE = 1
 
 
 def load_global_config() -> bool:
-    global CURRENT_WEBSITE
-    with _global_state_lock:
-        if os.path.exists(GLOBAL_CONFIG_FILE):
-            try:
-                with open(GLOBAL_CONFIG_FILE, encoding='utf-8') as f:
-                    config = json.load(f)
-                    saved_website = config.get("last_website_id")
-                    if saved_website and saved_website in WEBSITES:
-                        CURRENT_WEBSITE = saved_website
-                        return True
-            except Exception as e:
-                logger.warning(f"加载全局配置失败 error={str(e)}")
-        return False
+    """已迁移到 config.context.init_process_context；保留函数兼容旧调用。"""
+    init_process_context()
+    return True
 
 
 def save_global_config() -> bool:
@@ -82,18 +81,19 @@ load_global_config()
 
 # ==================== 动态 URL 配置 ====================
 def get_current_website_config() -> dict:
-    with _global_state_lock:
-        return WEBSITES.get(CURRENT_WEBSITE, WEBSITES[1])
+    """委托 contextvars（线程级上下文 + 进程默认回退）"""
+    return _ctx_get_website_config()
 
 
 def get_base_url() -> str:
-    return get_current_website_config()["base_url"]
+    """委托 contextvars；旧模块级快照 BASE_URL 为 deprecated 兼容层"""
+    return _ctx_get_base_url()
 
 
 def set_current_website(website_id: int):
+    """deprecated：委托 set_website_id（contextvars）"""
+    set_website_id(website_id)
     global CURRENT_WEBSITE
-    if website_id not in WEBSITES:
-        raise ValueError(f"无效的网站ID: {website_id}")
     with _global_state_lock:
         CURRENT_WEBSITE = website_id
 
@@ -124,14 +124,16 @@ _current_account = None
 
 
 def set_current_account(username: str):
+    """deprecated：委托 set_account_username（contextvars）"""
+    set_account_username(username)
     global _current_account
     with _global_state_lock:
         _current_account = username
 
 
 def get_current_account() -> str:
-    with _global_state_lock:
-        return _current_account
+    """委托 contextvars；兼容旧调用返回 str"""
+    return get_account_username() or ""
 
 
 _INVALID_USERNAME_CHARS = re.compile(r"[^\w\-.]")
@@ -143,7 +145,7 @@ def _sanitize_username(username: str) -> str:
 
 
 def get_account_dir(username: str = None) -> str:
-    username = _sanitize_username(username or get_current_account())
+    username = _sanitize_username(username or get_account_username())
     if not username or username in (".", ".."):
         return ACCOUNTS_DIR
     account_path = os.path.join(ACCOUNTS_DIR, username)
@@ -211,7 +213,7 @@ def get_account_last_play_path(username: str = None) -> str:
 
 
 def get_account_log_path(username: str = None) -> str:
-    username = username or get_current_account()
+    username = username or get_account_username()
     if not username:
         return os.path.join(LOGS_DIR, "default.log")
     return os.path.join(LOGS_DIR, f"{username}.log")

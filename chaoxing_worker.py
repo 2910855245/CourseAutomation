@@ -546,6 +546,9 @@ def run_task(params_file, status_file):
     with open(params_file, encoding="utf-8") as f:
         params = json.load(f)
 
+    from config import init_worker_context
+    init_worker_context(params)
+
     # 学习通用账号密码登录
     cx_username = params.get("username", "")
     cx_password = params.get("password", "")
