@@ -12,7 +12,7 @@ rand = "0.8"
 dashmap = "6"
 anyhow = "1"
 base64 = "0.22"
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 md5 = "0.7"
 scraper = "0.20"
 # ── 后端 API 骨架（纯 Rust 化阶段 0）──
@@ -28,6 +28,8 @@ regex = "1.13.1"
 bcrypt = "0.15"
 jsonwebtoken = "9"
 sha2 = "0.11.0"
+tract-onnx = "0.23.4"
+futures-util = "0.3.34"
 
 [profile.release]
 # 终极性能：最大优化 + 全程序 LTO（二进制略大，换取运行时速度）

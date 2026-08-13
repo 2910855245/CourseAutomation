@@ -15,6 +15,7 @@ mod exam;
 mod login;
 mod order;
 mod pay;
+mod progress;
 mod queue;
 mod scan;
 mod study;
@@ -44,6 +45,7 @@ pub struct AppState {
     pub push_url: String,
     pub push_token: String,
     pub db: db::Db,
+    pub progress_tx: tokio::sync::broadcast::Sender<String>,
 }
 
 type SubmitTask = study::TaskInput;
@@ -74,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let port: u16 = env_or("RUST_DAEMON_PORT", "17017").parse().unwrap_or(17017);
-    let push_url = env_or("RUST_DAEMON_PUSH_URL", "http://127.0.0.1:8000/api/progress/live/push");
+    let push_url = env_or("RUST_DAEMON_PUSH_URL", "http://127.0.0.1:17017/api/progress/live/push");
     let push_token = env_or("RUST_DAEMON_PUSH_TOKEN", "");
     let db_path = env_or("DB_PATH", "data/orders.db");
 
@@ -82,11 +84,13 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("打开数据库失败: {db_path}"))?;
     tracing::info!(db_path, "SQLite 就绪");
 
+    let (progress_tx, _) = tokio::sync::broadcast::channel::<String>(256);
     let state = AppState {
         tasks: Arc::new(DashMap::new()),
         push_url,
         push_token,
         db: database,
+        progress_tx,
     };
 
     // Rust 队列调度器（RUST_QUEUE_ENABLED=true 时接管学校任务）
@@ -99,6 +103,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/submit_cx_full", post(submit_cx_full))
         .route("/submit_full", post(submit_full))
         .route("/submit_exam", post(submit_exam))
+        .route("/api/progress/live/push", post(progress::push_progress))
+        .route("/api/progress/ws/live", get(progress::ws_live))
         .route("/cancel/{order_id}", post(cancel))
         .merge(api::router(state.clone()))
         .nest_service("/static", ServeDir::new("static").append_index_html_on_directories(true))
