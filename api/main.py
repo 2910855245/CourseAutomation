@@ -53,6 +53,7 @@ if sys.platform == 'win32':
 import uvicorn
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -192,15 +193,22 @@ async def rate_limit_middleware(request: Request, call_next):
 async def no_cache_middleware(request: Request, call_next):
     response = await call_next(request)
     path = request.url.path
+    # 构建产物文件名带内容 hash：永久缓存（immutable），业务更新即新文件
+    if path.startswith("/static/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
     # 仅对 HTML 页面设置 no-cache，静态资源（CSS/JS/图片）允许浏览器缓存
     if not path.startswith("/api/") and not path.startswith("/appHeart") and not path.startswith("/appPush"):
-        is_static = path.startswith("/static/assets/") or path.startswith("/uploads/")
+        is_static = path.startswith("/uploads/")
         if not is_static:
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
     return response
 
+
+# 压缩（最外层：JSON API + 静态资源统一 gzip；>1KB 才压缩避免小包开销）
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 app.include_router(scan.router)
 app.include_router(internal.router)
