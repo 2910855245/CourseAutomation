@@ -33,7 +33,7 @@ def validate_new_order(uid: str, client_ip: str, course_ids: list, price: float,
 
     # 价格校验：以后端计算为准，不拒绝订单
     if price > 0:
-        from api.routers.pricing import _calculate_package_price_backend
+        from api.services.pricing_service import calculate_package_price as _calculate_package_price_backend
         expected = _calculate_package_price_backend(video_count, 0)
         if abs(price - expected) > 0.01:
             logger.bind(front_price=price, expected=expected).info("单订单价格校正")
@@ -83,8 +83,8 @@ def retry_order(original: dict, uid: str) -> dict:
 
 def compute_batch_price(orders: list, website_prices: Dict[str, float] = None) -> Tuple[float, List[str]]:
     """计算批量订单的后端校验总价（与 /api/pricing/calculate 逻辑一致）。"""
-    from api.routers.pricing import _calculate_package_price_backend
-    from api.routers.pricing import _get_or_default as _pricing_get
+    from api.services.pricing_service import calculate_package_price as _calculate_package_price_backend
+    from api.services.pricing_service import get_or_default as _pricing_get
 
     price_exam_only = _pricing_get("price_exam_only", 5.0)
     price_homework_only = _pricing_get("price_homework_only", 3.0)

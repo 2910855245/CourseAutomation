@@ -1,62 +1,103 @@
-"""定价服务 — AI 推荐 + 打包定价计算"""
+"""定价领域服务：课程类型检测 + 打包定价计算。
+
+路由层（api/routers/pricing.py）只做端点编排，业务逻辑统一在本模块，
+供 orders/order_service/前端 calculate 共用，避免三处计价实现漂移。
+"""
 from __future__ import annotations
 
-import json
-from typing import Optional
-
-from loguru import logger
+from typing import Protocol
 
 from api.database import db
 
 
-# AI 推荐定价的 prompt 模板
-_RECOMMEND_PROMPT = """你是一个网课代刷平台的定价专家。请根据以下市场数据推荐最优定价方案。
-
-## 市场行情
-- 市场平均价：¥{avg}/课
-- 市场最高价：¥{mx}/课
-- 市场最低价：¥{mn}/课
-- 我的边际成本：¥{cost}/课（机器自动刷课，几乎零成本）
-- 竞品是人工刷课，成本约 ¥{cost_low:.0f}-{cost_high:.0f}/课
-- 竞品对所有课程统一收费，不区分课程大小和进度
-- 竞品对纯考试课程收 ¥5-6，纯考试优先级最高
-{extra_section}
-
-## AI 成本分析
-- 期末考试使用 deepseek-v4-flash：输入¥1/百万tokens（缓存命中¥0.02），输出¥2/百万tokens
-- 平时作业使用 deepseek-chat：同上价格
-- 每道题约消耗 200-500 tokens，每门考试约 50-100 道题
-- 单门考试 AI 成本约 ¥0.01-0.05（极低）
-- 单门作业 AI 成本约 ¥0.005-0.02（极低）
-- AI 成本几乎可忽略，定价主要考虑市场竞争
-
-## 我的系统能力
-- 支持按课程视频数分档定价（小课/中课/大课）
-- 支持按学生已完成进度打折（学生看了一半的课，我工作量少一半）
-- 视频+考试打包一口价
-- 纯考试课程单独定价（无视频，只有期末考试）
-- 纯作业课程单独定价（无视频，只有平时作业）
-- 最低收费保底
-
-## 要求
-请给出打包定价方案：
-
-1. 纯考试价格（参考竞品 ¥5-6）
-2. 纯作业价格
-3. 三档课程包价（小课≤30视频、中课31-80视频、大课>80视频）
-4. 三档进度折扣系数（25-50%、50-75%、>75%）
-5. 最低收费
-6. 定价策略分析（50字以内）
-7. 3个典型场景对比（课程规模×进度 vs 竞品价 vs 我的价）
-
-请用JSON格式返回，格式如下：
-{{"priceSmall":3,"priceMedium":5,"priceLarge":6,"discount25":0.7,"discount50":0.5,"discount75":0.3,"priceMinimum":2,"priceExamOnly":5,"priceHomeworkOnly":3,"strategy":"策略分析文字","scenarios":[{{"course":"场景名","videos":20,"progress":"0%","competitor":"¥5-6","your_price":"¥3","note":"说明"}}]}}"""
+def get_or_default(key: str, default: float) -> float:
+    val = db.config_get(key)
+    return float(val) if val else default
 
 
-def _get_api_key() -> str:
-    """获取 DeepSeek API Key，优先从数据库配置读取"""
-    api_key = db.config_get("deepseek_api_key") or ""
-    if not api_key:
-        from config import settings
-        api_key = settings.deepseek_api_key
-    return api_key
+def get_pricing_config() -> dict:
+    """打包定价完整配置（与数据库 config 表对应）"""
+    return {
+        "price_small": get_or_default("price_small", 3.0),
+        "price_medium": get_or_default("price_medium", 5.0),
+        "price_large": get_or_default("price_large", 6.0),
+        "discount_25": get_or_default("discount_25", 0.7),
+        "discount_50": get_or_default("discount_50", 0.5),
+        "discount_75": get_or_default("discount_75", 0.3),
+        "price_minimum": get_or_default("price_minimum", 2.0),
+        "price_exam_only": get_or_default("price_exam_only", 5.0),
+        "price_homework_only": get_or_default("price_homework_only", 3.0),
+        "price_chaoxing": get_or_default("price_chaoxing", 8.0),
+    }
+
+
+class CourseLike(Protocol):
+    video_total: int
+    video_completed: int
+    exam_total: int
+    exam_done: int
+    homework_total: int
+    homework_done: int
+
+
+def detect_course_type(c: CourseLike) -> str:
+    """检测课程类型：video / exam_only / homework_only / exam_homework / unknown
+
+    当视频全部完成、只剩考试或作业未完成时，按考试/作业类型计价。
+    """
+    has_video = c.video_total > 0
+    video_all_done = has_video and c.video_completed >= c.video_total
+    has_exam = c.exam_total > 0 and c.exam_done < c.exam_total
+    has_homework = c.homework_total > 0 and c.homework_done < c.homework_total
+
+    if video_all_done:
+        if has_exam and not has_homework:
+            return "exam_only"
+        if has_homework and not has_exam:
+            return "homework_only"
+        if has_exam and has_homework:
+            return "exam_homework"
+        return "video"  # 全部完成，无待做内容
+    if has_video:
+        return "video"
+    if has_exam and not has_homework:
+        return "exam_only"
+    if has_homework and not has_exam:
+        return "homework_only"
+    if has_exam and has_homework:
+        return "exam_homework"
+    return "unknown"
+
+
+def calculate_package_price(video_total: int, video_completed: int) -> float:
+    """打包模式：按视频数分档 + 进度折扣 + 最低收费"""
+    if video_total <= 0:
+        return 0.0
+    cfg = get_pricing_config()
+
+    match video_total:
+        case n if n <= 30:
+            base = cfg["price_small"]
+        case n if n <= 80:
+            base = cfg["price_medium"]
+        case _:
+            base = cfg["price_large"]
+
+    progress = (video_completed / video_total * 100) if video_total > 0 else 0
+    match progress:
+        case p if p <= 25:
+            coeff = 1.0
+        case p if p <= 50:
+            coeff = cfg["discount_25"]
+        case p if p <= 75:
+            coeff = cfg["discount_50"]
+        case _:
+            coeff = cfg["discount_75"]
+
+    return max(cfg["price_minimum"], round(base * coeff, 2))
+
+
+def package_label(video_total: int, video_completed: int) -> str:
+    tier = "小课" if video_total <= 30 else ("中课" if video_total <= 80 else "大课")
+    progress = round(video_completed / video_total * 100) if video_total > 0 else 0
+    return f"{tier} {video_total}视频 {progress}%进度"

@@ -5,13 +5,14 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from api.database import db
+from api.services.pricing_service import (
+    calculate_package_price as _calculate_package_price_backend,
+    detect_course_type as _detect_course_type,
+    get_or_default as _get_or_default,
+    package_label as _package_label,
+)
 
 router = APIRouter(prefix="/api/pricing", tags=["套餐定价"])
-
-
-def _get_or_default(key: str, default: float) -> float:
-    val = db.config_get(key)
-    return float(val) if val else default
 
 
 @router.get("")
@@ -59,68 +60,7 @@ class CalculateRequest(BaseModel):
     courses: List[CourseItem]
 
 
-def _detect_course_type(c: CourseItem) -> str:
-    """检测课程类型：video / exam_only / homework_only / mixed
 
-    当视频全部完成、只剩考试或作业未完成时，按考试/作业类型计价。
-    """
-    has_video = c.video_total > 0
-    video_all_done = has_video and c.video_completed >= c.video_total
-    has_exam = c.exam_total > 0 and c.exam_done < c.exam_total
-    has_homework = c.homework_total > 0 and c.homework_done < c.homework_total
-
-    # 视频全部完成，只剩考试/作业 → 按考试/作业计价
-    if video_all_done:
-        if has_exam and not has_homework:
-            return "exam_only"
-        if has_homework and not has_exam:
-            return "homework_only"
-        if has_exam and has_homework:
-            return "exam_homework"
-        return "video"  # 全部完成，无待做内容
-
-    # 有视频未完成 → 走视频打包价
-    if has_video:
-        return "video"
-    if has_exam and not has_homework:
-        return "exam_only"
-    if has_homework and not has_exam:
-        return "homework_only"
-    if has_exam and has_homework:
-        return "exam_homework"
-    return "unknown"
-
-
-def _calculate_package_price_backend(video_total: int, video_completed: int) -> float:
-    """打包模式：按视频数分档 + 进度折扣"""
-    if video_total <= 0:
-        return 0.0
-    price_small = _get_or_default("price_small", 3.0)
-    price_medium = _get_or_default("price_medium", 5.0)
-    price_large = _get_or_default("price_large", 6.0)
-    discount_25 = _get_or_default("discount_25", 0.7)
-    discount_50 = _get_or_default("discount_50", 0.5)
-    discount_75 = _get_or_default("discount_75", 0.3)
-    price_minimum = _get_or_default("price_minimum", 2.0)
-
-    if video_total <= 30:
-        base = price_small
-    elif video_total <= 80:
-        base = price_medium
-    else:
-        base = price_large
-
-    progress = (video_completed / video_total * 100) if video_total > 0 else 0
-    if progress <= 25:
-        coeff = 1.0
-    elif progress <= 50:
-        coeff = discount_25
-    elif progress <= 75:
-        coeff = discount_50
-    else:
-        coeff = discount_75
-
-    return max(price_minimum, round(base * coeff, 2))
 
 
 @router.post("/calculate")
@@ -168,16 +108,6 @@ def calculate_pricing(req: CalculateRequest):
         },
     }
 
-
-def _package_label(video_total: int, video_completed: int) -> str:
-    if video_total <= 30:
-        tier = "小课"
-    elif video_total <= 80:
-        tier = "中课"
-    else:
-        tier = "大课"
-    progress = round(video_completed / video_total * 100) if video_total > 0 else 0
-    return f"{tier} {video_total}视频 {progress}%进度"
 
 
 @router.post("/apply-package")
