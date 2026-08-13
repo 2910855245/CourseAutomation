@@ -496,12 +496,306 @@ def _solve_course_quizzes(session, cid, clid, cname, status_file, api_key):
 from worker_common import ensure_terminal_status, push_ws_update, send_status
 
 
+# ── 阶段拆分辅助（WORKER_PHASE_SPLIT_CX）────────────────────────
+
+def _get_api_key() -> str:
+    _api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if not _api_key:
+        try:
+            from config import DEEPSEEK_API_KEY
+            _api_key = DEEPSEEK_API_KEY
+        except Exception:
+            pass
+    if not _api_key:
+        try:
+            from api.database import db
+            _api_key = db.config_get('deepseek_api_key') or ''
+        except Exception:
+            pass
+    return _api_key
+
+
+def _plan_file(status_file: str) -> str:
+    return os.path.join(os.path.dirname(status_file), "cx_plan.json")
+
+
+def _build_video_plan(session, courses, status_file) -> dict:
+    """crawl 阶段：为所有课程构造视频刷课计划（积分视频 + 必学视频），
+    并预取 quiz 阶段需要的 person_id。
+
+    选择逻辑与 PointsExecutor._play_videos 一致：
+    每个有视频的知识点计 min(3, remaining-earned) 分，达 remaining 或 daily_cap 停止。
+    """
+    from infrastructure.chaoxing.crawler import fetch_knowledge_list, fetch_must_learn_kids
+    from infrastructure.chaoxing.points import ScoreRuleParser, PointsExecutor, PointsRule
+
+    plan = {
+        "video_points": [],   # [{cid, kid, clid, name}] 积分视频
+        "must_learn_points": [],  # [{cid, kid, clid, name}] 必学视频
+        "person_ids": {},     # {cid: personId}
+        "day_count": 1,
+    }
+    for course in courses:
+        cid = course.get('courseId', '')
+        clid = course.get('classId', '')
+        cname = course.get('course_name', course.get('name', f'课程{cid}'))
+        if not clid:
+            continue
+
+        try:
+            rule = ScoreRuleParser.fetch_rules(session, cid, clid)
+        except Exception:
+            rule = PointsRule()
+        executor = PointsExecutor(session, cid, clid, rule)
+        try:
+            status = executor.get_status()
+        except Exception as e:
+            logger.warning(f"积分状态获取失败 course={cname} error={str(e)}")
+            continue
+        total = status.total
+        logger.info("积分状态 course={} total={} target={}", cname, total, rule.target)
+
+        send_status(status_file,
+                    phase="chaoxing_points",
+                    points_total=total,
+                    points_target=rule.target,
+                    days=1,
+                    course_name=cname,
+                    message=f"[{cname}] 积分 {total}/{rule.target} 今日+{status.day_score}")
+
+        # 积分未达标且有额度 → 选积分视频
+        remaining = executor.get_remaining_today(status)
+        if not executor.check_done(status) and remaining > 0:
+            video_rule = rule.get_item(3)
+            daily_cap = video_rule.daily_cap if video_rule else 0
+            try:
+                knowledge_points = fetch_knowledge_list(session, cid, clid)
+            except Exception as e:
+                logger.warning(f"知识点列表获取失败 course={cname} error={str(e)}")
+                knowledge_points = []
+            video_points = [kp for kp in knowledge_points if kp.get('has_video')]
+            earned = 0
+            for kp in video_points:
+                if earned >= remaining or (daily_cap > 0 and earned >= daily_cap):
+                    break
+                plan["video_points"].append({
+                    "cid": cid, "kid": kp['knowledgeId'], "clid": clid,
+                    "name": kp.get('name', f"知识点{kp['knowledgeId']}"),
+                })
+                earned += min(3, remaining - earned)
+            logger.info(f"积分视频计划 course={cname} 选中={len(plan['video_points'])} 预估积分={earned}")
+
+        # 必学视频（classifyId=1）
+        try:
+            kids = fetch_must_learn_kids(session, cid, clid)
+        except Exception as e:
+            logger.warning(f"必学列表获取失败 course={cname} error={str(e)}")
+            kids = []
+        # personId 预取（quiz 阶段需要）
+        person_id = _fetch_person_id(session, cid)
+        plan["person_ids"][cid] = person_id
+        for kid in kids:
+            plan["must_learn_points"].append({
+                "cid": cid, "kid": kid, "clid": clid, "name": f"必学{kid}",
+            })
+        logger.info(f"必学视频计划 course={cname} count={len(kids)}")
+
+    return plan
+
+
+def _fetch_person_id(session, cid: str) -> str:
+    try:
+        resp = session.get('https://mooc1-api.chaoxing.com/mycourse/backclazzdata?view=json&rss=1')
+        for ch in resp.json().get('channelList', []):
+            content = ch.get('content', {})
+            if isinstance(content, dict):
+                for c in content.get('course', {}).get('data', []):
+                    if str(c.get('id', '')) == cid:
+                        return str(ch.get('cpi', ''))
+    except Exception:
+        pass
+    return ''
+
+
+def _submit_study_to_daemon(plan: dict, session, params: dict, status_file: str) -> bool:
+    """把视频计划合并为一个任务提交给 Rust daemon /submit_cx"""
+    import urllib.request
+    from config import settings
+
+    points = plan["video_points"] + plan["must_learn_points"]
+    if not points:
+        logger.info("无视频任务，跳过 daemon 提交")
+        return False
+
+    order_id = params.get("order_id", os.path.basename(os.path.dirname(status_file)))
+    payload = json.dumps({
+        "order_id": order_id,
+        "cookie_str": session.cookie_str,
+        "uid": session.uid,
+        "fid": session.fid,
+        "ua": session.UA,
+        "course_name": f"{len(plan['person_ids'])}门课程",
+        "points": points,
+        "status_file": status_file,
+        "push_ws": True,
+    }).encode("utf-8")
+    try:
+        req = urllib.request.Request(
+            f"{settings.rust_daemon_url}/submit_cx", data=payload,
+            headers={"Content-Type": "application/json"}, method="POST")
+        resp = json.loads(urllib.request.urlopen(req, timeout=5).read())
+        if resp.get("ok"):
+            logger.info(f"Rust daemon 接手学习通视频 order_id={order_id} points={len(points)}")
+            return True
+        logger.warning(f"daemon 拒绝任务: {resp.get('message')}")
+    except Exception as e:
+        logger.warning(f"daemon 不可用: {e}")
+    return False
+
+
+def _load_plan(status_file: str) -> dict:
+    try:
+        with open(_plan_file(status_file), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _run_quiz_phase(session, plan: dict, courses, status_file) -> None:
+    """quiz 阶段：积分补足（测评/讨论/笔记）+ 必学测评/阅读 + 课程作业/考试。
+    视频已由 daemon 完成。终止语义与完整流程一致（done / daily_done exit 42）。"""
+    from infrastructure.chaoxing.points import ScoreRuleParser, PointsExecutor, PointsRule
+
+    api_key = plan.get("api_key") or _get_api_key()
+    person_ids = plan.get("person_ids", {})
+    all_done = True
+    _any_hit_daily_limit = False
+    total = 0
+    rule = PointsRule()
+
+    for course in courses:
+        if _shutdown_requested:
+            break
+        cid = course.get('courseId', '')
+        clid = course.get('classId', '')
+        cname = course.get('course_name', course.get('name', f'课程{cid}'))
+        if not clid:
+            continue
+
+        try:
+            rule = ScoreRuleParser.fetch_rules(session, cid, clid)
+        except Exception:
+            rule = PointsRule()
+        executor = PointsExecutor(session, cid, clid, rule)
+        try:
+            status = executor.get_status()
+        except Exception as e:
+            logger.warning(f"积分状态获取失败 course={cname} error={str(e)}")
+            all_done = False
+            continue
+        total = status.total
+
+        if not executor.check_done(status):
+            all_done = False
+            remaining = executor.get_remaining_today(status)
+            if remaining <= 0:
+                _any_hit_daily_limit = True
+                logger.info(f"今日积分已满 course={cname}")
+            else:
+                # 视频已由 daemon 刷完，用测评/讨论/笔记补足
+                earned = executor._answer_quizzes(remaining)
+                if earned > 0:
+                    status = executor.get_status()
+                    remaining = executor.get_remaining_today(status)
+                if remaining > 0:
+                    executor._post_discussions(remaining)
+                    status = executor.get_status()
+                    remaining = executor.get_remaining_today(status)
+                if remaining > 0:
+                    executor._post_notes(remaining)
+                send_status(status_file,
+                            phase="chaoxing_points",
+                            points_total=status.total,
+                            points_target=rule.target,
+                            days=plan.get("day_count", 1),
+                            course_name=cname,
+                            message=f"[{cname}] 今日完成，积分 {status.total}/{rule.target}")
+                if executor.get_remaining_today(status) <= 0:
+                    _any_hit_daily_limit = True
+
+        # 必学测评 + 阅读（视频部分已由 daemon 完成）
+        person_id = person_ids.get(cid, '')
+        if api_key and person_id and clid:
+            must_plan = [p for p in plan.get("must_learn_points", []) if p["cid"] == cid]
+            for i, mp in enumerate(must_plan):
+                if _shutdown_requested:
+                    break
+                kname = mp["name"]
+                send_status(status_file,
+                            phase="study_must_learn",
+                            course_name=cname,
+                            study_total=len(must_plan),
+                            study_done=i,
+                            study_failed=0,
+                            message=f"[{cname}] 测评: {kname[:30]}")
+                try:
+                    _solve_tsjy_knowledge_quiz(
+                        session, cid, mp["kid"], clid, person_id, kname, api_key,
+                        status_file, cname, len(must_plan), i, 0)
+                except Exception as e:
+                    logger.warning(f"知识点测评异常 name={kname} error={str(e)}")
+                try:
+                    _do_tsjy_knowledge_read(
+                        session, cid, mp["kid"], clid, person_id, kname, status_file,
+                        cname, len(must_plan), i, 0)
+                except Exception as e:
+                    logger.warning(f"知识点阅读异常 name={kname} error={str(e)}")
+
+        # 课程作业/考试
+        if api_key and clid:
+            try:
+                q_done, q_fail, q_skip = _solve_course_quizzes(
+                    session, cid, clid, cname, status_file, api_key)
+                logger.info(f"答题汇总 course={cname} done={q_done} failed={q_fail} skipped={q_skip}")
+                if q_fail > 0:
+                    all_done = False
+            except Exception as e:
+                logger.warning(f"答题阶段异常 course={cname} error={str(e)}")
+                all_done = False
+
+    if all_done:
+        logger.info("所有课程积分达标！")
+        send_status(status_file, phase="done", done=True, success=True,
+                    message=f"全部达标！共{len(courses)}门课程",
+                    points_total=total,
+                    days=plan.get("day_count", 1),
+                    video_pct=100)
+        return
+
+    if _shutdown_requested:
+        send_status(status_file, push_ws=True, phase="error", message="收到退出信号", done=True, success=False)
+        return
+
+    # 与完整流程一致：今日额度用完 → daily_done，明天调度器重跑
+    send_status(status_file,
+                phase="daily_done", done=True, success=True,
+                points_total=total,
+                points_target=rule.target,
+                days=plan.get("day_count", 1),
+                message=f"今日任务完成 ({total}/{rule.target})，明天继续",
+                need_resume=True)
+    sys.exit(42)
+
+
 def run_task(params_file, status_file):
     with open(params_file, encoding="utf-8") as f:
         params = json.load(f)
 
     from config import init_worker_context
     init_worker_context(params)
+
+    # 阶段模式：full（完整流程，默认）/ crawl（计划+提交 daemon 后退出）/ quiz（考试阶段）
+    phase = params.get("phase", "full")
 
     # 学习通用账号密码登录
     cx_username = params.get("username", "")
@@ -568,7 +862,43 @@ def run_task(params_file, status_file):
 
     logger.info(f"课程数量 count={len(courses)}")
 
-    # 导入积分系统
+    # ── crawl 阶段：构造计划 → 提交 daemon → 立即退出 ──
+    if phase == "crawl":
+        plan = _build_video_plan(session, courses, status_file)
+        plan["api_key"] = _get_api_key()
+        plan["courses"] = courses
+        with open(_plan_file(status_file), "w", encoding="utf-8") as f:
+            json.dump(plan, f, ensure_ascii=False)
+        points = plan["video_points"] + plan["must_learn_points"]
+        if points:
+            daemon_ok = _submit_study_to_daemon(plan, session, params, status_file)
+            send_status(status_file,
+                        phase="study_must_learn",
+                        heavy_done=True,
+                        study_total=len(points),
+                        study_done=0,
+                        study_failed=0,
+                        message=f"开始刷学习通视频 (共{len(points)}个知识点)",
+                        video_total=len(points),
+                        video_done=0)
+            if not daemon_ok:
+                send_status(status_file, phase="error",
+                            message="Rust 刷课守护进程不可用，视频阶段失败", done=True, success=False)
+            return
+        # 无视频任务 → 直接走 quiz 阶段（同进程内继续）
+        phase = "quiz"
+
+    # ── quiz 阶段：daemon 完成视频后由主进程再起本进程 ──
+    if phase == "quiz":
+        plan = _load_plan(status_file)
+        plan["api_key"] = _get_api_key()
+        if plan:
+            _run_quiz_phase(session, plan, plan.get("courses") or courses, status_file)
+        else:
+            send_status(status_file, phase="error", message="学习计划文件丢失", done=True, success=False)
+        return
+
+    # ── full 模式：原完整流程（WORKER_PHASE_SPLIT_CX=false 时）──
     from infrastructure.chaoxing.points import ScoreRuleParser, PointsExecutor
 
     # 多天循环
@@ -639,19 +969,7 @@ def run_task(params_file, status_file):
                             course_name=cname,
                             message=f"[{cname}] 积分达标，开始刷必学内容")
                 # 积分已达标，刷必学视频+做作业/考试
-                _api_key = os.environ.get("DEEPSEEK_API_KEY", "")
-                if not _api_key:
-                    try:
-                        from config import DEEPSEEK_API_KEY
-                        _api_key = DEEPSEEK_API_KEY
-                    except Exception:
-                        pass
-                if not _api_key:
-                    try:
-                        from api.database import db
-                        _api_key = db.config_get('deepseek_api_key') or ''
-                    except Exception:
-                        pass
+                _api_key = _get_api_key()
 
                 must_learn_done = True
                 work_done = True
@@ -721,13 +1039,7 @@ def run_task(params_file, status_file):
                         message=f"[{cname}] 今日完成，积分 {final_status.total}/{rule.target}")
 
             # 积分任务完成后，刷必学视频+做作业/考试
-            _api_key = os.environ.get("DEEPSEEK_API_KEY", "")
-            if not _api_key:
-                try:
-                    from config import DEEPSEEK_API_KEY
-                    _api_key = DEEPSEEK_API_KEY
-                except Exception:
-                    pass
+            _api_key = _get_api_key()
             if clid:
                 try:
                     s_done, s_fail, s_skip = _study_must_learn(
@@ -736,13 +1048,6 @@ def run_task(params_file, status_file):
                         logger.info(f"必学视频汇总 course={cname} done={s_done} failed={s_fail} skipped={s_skip}")
                 except Exception as e:
                     logger.warning(f"必学视频阶段异常 course={cname} error={str(e)}")
-            _api_key = os.environ.get("DEEPSEEK_API_KEY", "")
-            if not _api_key:
-                try:
-                    from config import DEEPSEEK_API_KEY
-                    _api_key = DEEPSEEK_API_KEY
-                except Exception:
-                    pass
             if _api_key and clid:
                 try:
                     q_done, q_fail, q_skip = _solve_course_quizzes(
