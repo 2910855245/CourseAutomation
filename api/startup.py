@@ -4,7 +4,6 @@ import glob
 import json
 import os
 import shutil
-import subprocess
 import threading
 import time
 from datetime import datetime
@@ -135,17 +134,20 @@ def _recovered_monitor(db, order_id, status_file):
                 shutil.rmtree(tmpdir, ignore_errors=True)
                 return
             if data.get("phase") in ("video", "study_running") and stale_seconds >= 300:
+                # 刷课由 Rust daemon 承载：通过 /status 确认任务存活（daemon 不可达时跳过本轮）
                 try:
-                    result = subprocess.run(
-                        ["pgrep", "-f", f"study_worker.*{os.path.basename(tmpdir)}$"],
-                        capture_output=True, text=True, timeout=5
-                    )
-                    if not result.stdout.strip():
+                    import urllib.request
+                    from config import settings as _settings
+                    resp = json.loads(urllib.request.urlopen(
+                        f"{_settings.rust_daemon_url}/status", timeout=5).read())
+                    tasks = resp.get("tasks", [])
+                    task_keys = {order_id, os.path.basename(tmpdir)}
+                    if not tasks or not (task_keys & set(tasks)):
                         db.fail_order(order_id, error="刷课进程已中断，请重新提交")
                         logger.error(f"恢复监控-进程已死 order_id={order_id} status_file={status_file}")
                         shutil.rmtree(tmpdir, ignore_errors=True)
                         return
-                except Exception as e:
+                except Exception:
                     pass
         except FileNotFoundError:
             db.fail_order(order_id, error="状态文件丢失")

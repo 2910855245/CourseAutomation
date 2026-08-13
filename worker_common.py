@@ -1,10 +1,11 @@
-"""worker 三脚本共享样板：状态原子写、WS 推送、信号处理、退出兜底、代理应用。
+"""worker 共享样板：状态原子写、WS 推送、信号处理、退出兜底、代理应用。
 
-三个 worker（worker/study_worker/chaoxing_worker）各自维护过一份 send_status 副本，
-且语义漂移（原子写/终态清理/WS 推送各有缺失）。统一以最完善的版本为基准：
-- 原子写：tmp + fsync + os.replace（修复 study_worker 半写问题）
+两个 worker（worker/chaoxing_worker，study_worker 已退役由 Rust daemon 取代）
+各自维护过一份 send_status 副本，且语义漂移（原子写/终态清理/WS 推送各有缺失）。
+统一以最完善的版本为基准：
+- 原子写：tmp + fsync + os.replace（修复半写问题）
 - 非终态更新自动清除旧的 done/success（防止 TaskRunner 误判完成）
-- push_ws 开关：worker.py 重阶段不推送，study/chaoxing 推送
+- push_ws 开关：worker.py 重阶段不推送，chaoxing 推送
 """
 
 import json

@@ -27,7 +27,6 @@ npm run dev          # Dev server (vite, port 5173)
 ### Workers (subprocess-based, spawned by API)
 ```bash
 python worker.py         # Course crawling worker
-python study_worker.py   # Video study automation worker
 ```
 
 ## Architecture
@@ -53,7 +52,7 @@ Tasks are dispatched as child processes by `task_runner.py`:
 - Workers write status to `/tmp/task_*/status.json` and params to `/tmp/task_*/params.json`
 - Main API monitors these JSON files to track progress and detect failures
 - `worker.py` crawls course structure (videos, chapters)
-- `study_worker.py` simulates video watching by sending periodic study reports
+- Video study runs in the Rust daemon (rust_worker, :17017); study_worker.py is retired
 
 ### Infrastructure Layer (`infrastructure/`)
 Low-level crawling/reporting: `http_session.py` (HTTP wrapper with proxy support), `course_crawler.py` (course data extraction), `captcha.py` (OCR via ddddocr), `anti_test.py` (exam answering)

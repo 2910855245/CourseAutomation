@@ -34,7 +34,6 @@ npm run build                                    # Type check (vue-tsc) + build 
 
 # Workers (auto-started by API as subprocesses)
 python worker.py                                 # Course crawling worker
-python study_worker.py                           # Video study worker
 python chaoxing_worker.py                        # 学习通 worker
 
 ```
@@ -65,11 +64,11 @@ python chaoxing_worker.py                        # 学习通 worker
 
 ### Worker Subprocess Model
 
-`worker_common.py` 提供三 worker 共享样板：`send_status`（原子写+终态清理+WS 推送开关）、`push_ws_update`（X-Worker-Token 鉴权）、`register_signal_handlers`、`ensure_terminal_status`、`apply_proxy`、`bootstrap_worker`。
+`worker_common.py` 提供 worker 共享样板：`send_status`（原子写+终态清理+WS 推送开关）、`push_ws_update`（X-Worker-Token 鉴权）、`register_signal_handlers`、`ensure_terminal_status`、`apply_proxy`、`bootstrap_worker`。
 
 Tasks dispatched as child processes by `task_runner.py`:
 - `worker.py` — Crawls course structure (videos, chapters)
-- `study_worker.py` — Simulates video watching, sends periodic study reports
+- 视频学习由 Rust daemon（rust_worker，:17017）执行，worker.py 提交任务；study_worker.py 已退役
 - `chaoxing_worker.py` — 学习通专用 worker
 
 Workers write status to `{tmp}/task_*/status.json` and params to `/tmp/task_*/params.json`（原子写 + 退出兜底由 worker_common.py 统一）。Main API monitors these files.
@@ -123,5 +122,9 @@ data/
 - Python target: 3.10+
 - Frontend: vue-tsc type check + vite build
 - Logging: loguru (not stdlib logging)
-- HTTP clients: httpx (general), rnet (anti-detection for 学习通), scrapling (web scraping)
+- HTTP clients: httpx (general), rnet (anti-detection for 学习通)
+- HTML parsing: lxml (C 加速 xpath，已替换 scrapling/beautifulsoup4)
+- Sidecar services (systemd units in deploy/):
+  - `rust_worker` (Rust, :17017) — 刷课循环，Python 侧经 worker.py 提交任务
+  - `ocr_sidecar.py` (:17018) — ddddocr 验证码识别独立进程，主进程经 infrastructure/ocr.py HTTP 客户端调用（OcrClient.classification）
 - Platform passwords stored in plaintext (no encryption)

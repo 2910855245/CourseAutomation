@@ -1,4 +1,4 @@
-"""隧道代理配置加载，供 worker.py / study_worker.py 使用，支持多代理轮换"""
+"""隧道代理配置加载，供 worker.py 使用，支持多代理轮换"""
 import json
 import os
 import random

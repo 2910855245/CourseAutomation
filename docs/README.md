@@ -112,7 +112,6 @@ python run.py
 │   ├── study_service.py     # 学习调度
 │   └── multi_platform_auth.py # 多平台登录
 ├── worker.py                # 爬课 Worker (子进程)
-├── study_worker.py          # 刷视频 Worker (子进程)
 ├── run.py                   # 启动入口
 ├── frontend/                # Vue3 前端
 │   └── src/views/
@@ -154,7 +153,7 @@ python run.py
 
 1. 后台 → 代理设置 → 填入隧道代理地址
 2. 购买推荐：芝麻代理、快代理、站大爷（隧道代理 50-100 元/月）
-3. 开启后 worker.py 和 study_worker.py 的所有 HTTP 请求走代理出口
+3. 开启后 worker.py 的所有 HTTP 请求走代理出口（刷课走 Rust daemon）
 
 ## 环境变量
 

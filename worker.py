@@ -1,7 +1,6 @@
 import json
 import os
 import signal
-import subprocess
 import sys
 import time
 import traceback
@@ -227,7 +226,6 @@ def run_task(params_file, status_file):
     video_success = True
     if job_type in ("video", "full", "all") and all_videos:
         task_dir = os.path.dirname(status_file)
-        videos_file = os.path.join(task_dir, "videos.json")
 
         study_params = {
             "base_url": base_url,
@@ -238,11 +236,6 @@ def run_task(params_file, status_file):
         params.update(study_params)
         with open(params_file, "w", encoding="utf-8") as f:
             json.dump(params, f, ensure_ascii=False)
-        with open(videos_file, "w", encoding="utf-8") as f:
-            json.dump(all_videos, f, ensure_ascii=False)
-
-        study_worker_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "study_worker.py")
-        cmd = [sys.executable, study_worker_script, params_file, status_file, videos_file]
 
         current_pid = os.getpid()
         send_status(status_file, phase="study_running", heavy_done=True, study_pid=current_pid,
@@ -302,24 +295,12 @@ def run_task(params_file, status_file):
                 logger.warning("Rust 守护进程不可用，回退 Python 子进程: {}", e)
 
         if not daemon_ok:
-            study_log = os.path.join(task_dir, "study_worker.log")
-            log_fh = open(study_log, "w", encoding="utf-8")
-            logger.info("启动视频刷课子进程...")
-            os.chdir(os.path.dirname(os.path.abspath(__file__)))
-            try:
-                proc = subprocess.Popen(cmd, stdout=log_fh, stderr=subprocess.STDOUT,
-                                        cwd=os.path.dirname(os.path.abspath(__file__)))
-                send_status(status_file, study_pid=proc.pid)
-                proc.wait()
-                logger.info("视频刷课子进程退出，returncode={}", proc.returncode)
-                if proc.returncode != 0:
-                    video_success = False
-                    logger.warning("视频刷课子进程异常退出")
-            except Exception as e:
-                logger.error("视频刷课子进程启动失败: {}", e)
-                video_success = False
-            finally:
-                log_fh.close()
+            # 无 Python 回退：daemon 不可用则视频阶段明确失败（考试阶段仍继续）
+            video_success = False
+            send_status(status_file, phase="video",
+                        message="Rust 刷课守护进程不可用，视频阶段失败",
+                        video_pct=0)
+            logger.error("Rust 刷课守护进程不可用，视频阶段失败（无 Python 回退）")
 
     # ── 第二阶段：考试/作业（视频完成后再执行） ──
     # 重新扫描考试列表（平台可能在刷视频期间更换了考试）

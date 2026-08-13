@@ -1,14 +1,6 @@
 from config import get_random_user_agent
 from infrastructure.http_session import create_sync_client, safe_json_parse
-
-_ocr_instance = None
-
-def _get_ocr():
-    global _ocr_instance
-    if _ocr_instance is None:
-        import ddddocr
-        _ocr_instance = ddddocr.DdddOcr(show_ad=False)
-    return _ocr_instance
+from infrastructure.ocr import get_ocr as _get_ocr
 
 class XCaptchaSolver:
     """点选验证码解析器"""

@@ -59,7 +59,6 @@ Anti-Course Cheating Plugin/
 │   ├── deploy.py                 # 主部署脚本
 │   └── remote.py                 # 远程服务器操作
 ├── worker.py                     # 课程爬取 Worker
-├── study_worker.py               # 视频学习 Worker
 ├── run.py                        # 服务启动入口
 ├── config.py                     # 配置管理
 └── run.py                        # 服务启动入口 (granian/uvicorn)
@@ -103,7 +102,6 @@ POST /api/orders/{id}/accept  # 接单
 - 从目标平台爬取课程结构（视频、章节）
 - 写入状态到 `/tmp/task_*/status.json`
 
-#### `study_worker.py` - 视频学习
 - 模拟视频观看，定期发送学习报告
 - 支持多平台、多账号并发
 
@@ -197,7 +195,6 @@ python manage.py  # 交互式菜单
 ### Worker 启动
 ```bash
 python worker.py        # 课程爬取 Worker
-python study_worker.py  # 视频学习 Worker
 ```
 
 ## 数据流

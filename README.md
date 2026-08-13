@@ -115,7 +115,7 @@ sudo cp deploy/rust-study-daemon.service /etc/systemd/system/ && sudo systemctl 
 ├── frontend/               # Vue3 前端
 │   └── src/views/          # 页面组件
 ├── worker.py               # 课程爬取 Worker
-├── study_worker.py         # 视频学习 Worker
+├── worker.py               # 课程爬取 + 考试 + 提交 Rust daemon
 ├── chaoxing_worker.py      # 学习通 Worker
 ├── deploy/                 # systemd 单元
 ├── run.py                  # 启动入口
