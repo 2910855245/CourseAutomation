@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     vmqpay_url: str = Field(default="", alias="VMQPAY_URL")
     vmqpay_key: str = Field(default="", alias="VMQPAY_KEY")
     cors_origins: str = Field(default="http://localhost:5173", alias="CORS_ORIGINS")
+    worker_token: str = Field(default="", alias="WORKER_TOKEN")
     captcha_ak: str = Field(default="", alias="CAPTCHA_AK")
     captcha_url: str = Field(default="", alias="CAPTCHA_URL")
 

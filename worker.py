@@ -16,35 +16,12 @@ sys.path.insert(0, os.getcwd())
 
 _shutdown_requested = False
 
-
-def send_status(status_file, **kwargs):
-    data = {}
-    if os.path.exists(status_file):
-        try:
-            with open(status_file) as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            pass
-    data.update(kwargs)
-    data["updated_at"] = time.time()
-    tmp_file = status_file + ".tmp"
-    with open(tmp_file, "w") as f:
-        json.dump(data, f, ensure_ascii=False)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_file, status_file)
+from worker_common import ensure_terminal_status, send_status
 
 
 def _apply_proxy(session):
-    """加载隧道代理配置并应用到 session"""
-    try:
-        from services.proxy_config import get_proxy_config
-        cfg = get_proxy_config()
-        if cfg["enabled"]:
-            session.proxies.update(cfg["proxies"])
-            logger.info("已启用隧道代理")
-    except Exception as e:
-        pass
+    from worker_common import apply_proxy
+    apply_proxy(session)
 
 
 def _is_project_work(session, base_url, exam) -> bool:
@@ -411,7 +388,7 @@ if __name__ == "__main__":
             pass
         sys.exit(1)
     finally:
-        # 确保退出前 status.json 有终态
+        # 确保退出前 status.json 有终态（worker_common 统一实现）
         try:
             sf = sys.argv[2]
             if os.path.exists(sf):

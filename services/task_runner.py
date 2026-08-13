@@ -79,6 +79,8 @@ class TaskRunner:
         log_fh = open(self._log_file, "w", encoding="utf-8")
         try:
             worker_env = os.environ.copy()
+            from config import settings
+            worker_env["WORKER_TOKEN"] = settings.worker_token
             worker_env["MALLOC_ARENA_MAX"] = "2"
             worker_env["MALLOC_MMAP_THRESHOLD_"] = "65536"
             worker_env["PYTHONDONTWRITEBYTECODE"] = "1"

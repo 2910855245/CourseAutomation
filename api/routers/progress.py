@@ -6,7 +6,7 @@ import sys
 import threading
 from typing import List
 
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 
 from loguru import logger
 
@@ -285,7 +285,19 @@ def get_live_status():
 
 
 @router.post("/live/push", response_model=ApiResponse)
-async def push_progress_update(data: dict):
-    """接收 worker 推送的进度更新并广播到 WebSocket 客户端"""
+async def push_progress_update(request: Request, data: dict):
+    """接收 worker 推送的进度更新并广播到 WebSocket 客户端
+
+    鉴权：配置 WORKER_TOKEN 后校验 X-Worker-Token（localhost 来源豁免，
+    兼容升级窗口期的旧 worker 进程）。
+    """
+    from config import settings
+    if settings.worker_token:
+        client_host = request.client.host if request.client else ""
+        if client_host not in ("127.0.0.1", "::1", "localhost"):
+            import hmac
+            token = request.headers.get("X-Worker-Token", "")
+            if not token or not hmac.compare_digest(token, settings.worker_token):
+                raise HTTPException(status_code=401, detail="无效的 Worker 凭证")
     await broadcast_progress(data)
     return ApiResponse(message="已推送")
