@@ -128,13 +128,6 @@ def run_task(params_file, status_file):
     password = params["password"]
     website_id = params["website_id"]
 
-    # 解密密码（如果是加密格式）
-    if password and (password.startswith("ENC:") or password.startswith("ENC2:")):
-        try:
-            from api.crypto import decrypt_password
-            password = decrypt_password(password)
-        except Exception:
-            pass
     job_type = params.get("job_type", "full")
     course_ids = params.get("course_ids", [])
     concurrency = params.get("concurrency", 8)

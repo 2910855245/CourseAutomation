@@ -26,7 +26,6 @@ def _resolve_models():
 def _order_to_dict(order) -> dict:
     import json
 
-    from api.crypto import decrypt_password
     return {
         "order_id": order.order_id,
         "out_trade_no": order.out_trade_no,
@@ -38,7 +37,7 @@ def _order_to_dict(order) -> dict:
         "customer_name": order.customer_name,
         "customer_contact": order.customer_contact,
         "username": order.username,
-        "password": decrypt_password(order.password),
+        "password": order.password,
         "website_id": order.website_id,
         "task_type": order.task_type,
         "course_ids": json.loads(order.course_ids) if isinstance(order.course_ids, str) else order.course_ids,
@@ -64,7 +63,6 @@ class OrderDBMixin:
                      task_type="video", course_ids=None, video_count=50,
                      exam_count=0, price=0.0, notes="", user_id="") -> Dict[str, Any]:
         Order, User, WalletTransaction, YpayOrder = _resolve_models()
-        from api.crypto import encrypt_password
         order_id = f"ORD-{uuid.uuid4().hex[:8].upper()}"
         now = datetime.now().isoformat()
         session = self._get_session()
@@ -75,7 +73,7 @@ class OrderDBMixin:
                 customer_name=customer_name,
                 customer_contact=customer_contact,
                 username=username,
-                password=encrypt_password(password),
+                password=password,
                 website_id=website_id,
                 task_type=task_type,
                 course_ids=json.dumps(course_ids or []),

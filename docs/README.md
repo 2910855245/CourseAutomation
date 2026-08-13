@@ -4,7 +4,7 @@ FastAPI + Vue3 全栈在线课程自动化平台，支持多平台视频学习�
 
 ## 技术亮点
 
-- **安全** — AES-256-GCM 密码加密（兼容旧 XOR 格式）、JWT + bcrypt、HMAC 支付验证、滑动窗口限流
+- **安全** — 平台密码明文存储、JWT + bcrypt、HMAC 支付验证、滑动窗口限流
 - **测试** — 112 个后端测试 + 15 个前端测试 + 9 个 E2E 测试
 - **工程化** — Ruff + ESLint 双端 lint、GitHub Actions CI、Docker 多阶段构建
 - **架构** — router → service → db → infrastructure 四层分层，任务队列 + 子进程模型

@@ -20,7 +20,7 @@ Anti-Course Cheating Plugin 是一个在线课程自动化 SaaS 平台，支持�
 Anti-Course Cheating Plugin/
 ├── api/                          # 后端 API 层
 │   ├── main.py                   # FastAPI 入口，注册路由、中间件
-│   ├── auth.py                   # JWT 认证、密码加密
+│   ├── auth.py                   # JWT 认证
 │   ├── database.py               # SQLAlchemy ORM 模型 + 数据库操作
 │   ├── models.py                 # Pydantic 数据模型
 │   ├── routers/                  # 路由处理器

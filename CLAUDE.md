@@ -89,7 +89,6 @@ python run.py
 - **`api/database.py`** — SQLAlchemy ORM models (User, Order, WalletTransaction) + `Database` singleton. SQLite default, MySQL via `DATABASE_URL`. Table/column name whitelisting prevents SQL injection
 - **`api/db/`** — DB submodules: `models.py` (ORM models, dynamic queue job models `SchoolJobModel`/`ChaoxingJobModel`), `order_db.py`, `payment_db.py`, `config_db.py`, `user_db.py`
 - **`api/auth.py`** — JWT create/verify, bcrypt password hashing, token blacklist (memory + Redis fallback)
-- **`api/crypto.py`** — AES-256-GCM password encryption (backward-compatible XOR)
 - **`api/routers/`** — Route handlers by domain: `orders.py`, `payment.py`, `admin.py`, `ypay_routes.py`, `ypay_vmq.py`, `ypay_app.py`, `wallet.py`, `pricing.py`, `users.py`, `captcha.py`, `domain_monitor.py`, `scan.py`, `progress.py`, `queue.py`
 - **`api/services/`** — Business logic: `task_queue.py` (persistent queue, SQLAlchemy-backed, split into `school_queue` + `chaoxing_queue`), `task_runner.py` (subprocess launcher), `ypay_service.py`, `risk.py`, `session_pool.py`, `proxy_config.py`, `job_executor.py`, `order_service.py`
 - **`config.py`** — Pydantic `Settings` from `.env`. Multi-website config (`WEBSITES` dict), per-account data dirs, URL management. `CURRENT_WEBSITE` selects active platform
@@ -175,4 +174,4 @@ FastAPI payment gateway with SQLAlchemy + Alembic. Key files: `app/main.py`, `ap
 - Frontend: ESLint + vue-tsc
 - Logging: loguru (not stdlib logging)
 - HTTP clients: httpx (general), rnet (anti-detection for 学习通), scrapling (web scraping)
-- Password encryption: AES-256-GCM (new) with XOR backward compatibility
+- Platform passwords stored in plaintext (no encryption)

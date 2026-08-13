@@ -30,7 +30,6 @@ class Settings(BaseSettings):
     site_url: str = Field(default="http://localhost:8000", alias="SITE_URL")
     vmqpay_url: str = Field(default="", alias="VMQPAY_URL")
     vmqpay_key: str = Field(default="", alias="VMQPAY_KEY")
-    password_encryption_key: str = Field(default="", alias="PASSWORD_ENCRYPTION_KEY")
     cors_origins: str = Field(default="http://localhost:5173", alias="CORS_ORIGINS")
     captcha_ak: str = Field(default="", alias="CAPTCHA_AK")
     captcha_url: str = Field(default="", alias="CAPTCHA_URL")
@@ -51,8 +50,6 @@ if not settings.jwt_secret_key:
     _missing.append("JWT_SECRET_KEY")
 if not settings.database_url:
     _missing.append("DATABASE_URL")
-if not settings.password_encryption_key:
-    _missing.append("PASSWORD_ENCRYPTION_KEY")
 if _missing:
     import sys
 

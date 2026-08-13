@@ -1,4 +1,5 @@
 import json
+import os
 from contextlib import contextmanager
 from typing import Any, Dict
 
@@ -27,7 +28,7 @@ import re as _re
 
 # 白名单：只允许已知表名，防止 SQL 注入
 _KNOWN_TABLES = {
-    "users", "orders", "wallet_transactions",
+    "users", "orders", "wallet_transactions", "audit_logs",
     "ypay_account", "ypay_order", "ypay_config",
     "pricing_config", "ads", "sub_admins", "login_logs", "risk_config",
     "risk_blacklist", "risk_logs", "task_queue", "study_records",
@@ -91,8 +92,99 @@ def _add_columns_if_missing(table_name: str, columns: dict):
             logger.warning(f"迁移失败 table={table_name} column={col} error={str(e)}")
 
 
+def _migrate_legacy_encrypted_passwords():
+    """一次性迁移：把历史 ENC:/ENC2: 加密的订单密码解密为明文。
+
+    密码已改为明文存储，此迁移只为兼容旧库数据；迁移完成后不再有加解密逻辑。
+    依赖旧的 PASSWORD_ENCRYPTION_KEY 环境变量（若历史 .env 仍保留该键）。
+    """
+    import base64
+    import hashlib
+
+    _key_env = os.environ.get("PASSWORD_ENCRYPTION_KEY", "")
+    if not _key_env:
+        return
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except ImportError:
+        return
+    derived = hashlib.sha256(_key_env.encode()).digest()
+
+    def _decrypt_legacy(stored: str) -> str:
+        if stored.startswith("ENC2:"):
+            raw = base64.b64decode(stored[len("ENC2:"):])
+            nonce, ct = raw[:12], raw[12:]
+            return AESGCM(derived).decrypt(nonce, ct, None).decode("utf-8")
+        if stored.startswith("ENC:"):
+            raw = base64.b64decode(stored[len("ENC:"):])
+            return bytes(b ^ derived[i % len(derived)] for i, b in enumerate(raw)).decode("utf-8")
+        return stored
+
+    try:
+        session = SessionLocal()
+        try:
+            rows = session.scalars(
+                select(Order).filter(
+                    Order.password.like("ENC:%") | Order.password.like("ENC2:%")
+                )
+            ).all()
+            for o in rows:
+                try:
+                    o.password = _decrypt_legacy(o.password)
+                except Exception:
+                    continue  # 解不开的旧行保持原样，不阻塞启动
+            session.commit()
+            if rows:
+                logger.info(f"迁移: 旧加密订单密码已转明文 count={len(rows)}")
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning(f"迁移失败 旧密码转明文 error={str(e)}")
+
+
+def _rebuild_legacy_table(table_model, legacy_cols):
+    """旧库表残留已废弃的 NOT NULL 列（模型已不再写入），重建表以去除。
+
+    - MySQL: 给遗留列补 DEFAULT，避免重建
+    - SQLite: 按当前模型 DDL 重建表并迁移数据
+    """
+    tbl = table_model.__tablename__
+    existing = _get_existing_columns(tbl)
+    hits = [c for c in legacy_cols if c in existing]
+    if not hits:
+        return
+    if USE_MYSQL:
+        try:
+            with engine.connect() as _conn:
+                for c in hits:
+                    _conn.execute(text(f"ALTER TABLE {tbl} MODIFY COLUMN {c} VARCHAR(255) NOT NULL DEFAULT ''"))
+                _conn.commit()
+            logger.info(f"迁移: 表 {tbl} 遗留列已设默认值 columns={hits}")
+        except Exception as e:
+            logger.warning(f"迁移失败 表 {tbl} 遗留列 error={str(e)}")
+        return
+    try:
+        from sqlalchemy.schema import CreateTable
+        ddl = str(CreateTable(table_model.__table__).compile(dialect=engine.dialect))
+        new_ddl = ddl.replace(f"CREATE TABLE {tbl}", f"CREATE TABLE {tbl}_new")
+        keep = [c.name for c in table_model.__table__.columns]
+        cols_sql = ", ".join(f'"{c}"' for c in keep)
+        with engine.connect() as _conn:
+            _conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            _conn.execute(text(new_ddl))
+            _conn.execute(text(f'INSERT INTO {tbl}_new ({cols_sql}) SELECT {cols_sql} FROM {tbl}'))
+            _conn.execute(text(f"DROP TABLE {tbl}"))
+            _conn.execute(text(f"ALTER TABLE {tbl}_new RENAME TO {tbl}"))
+            _conn.commit()
+        logger.info(f"迁移: 表 {tbl} 已重建（移除遗留列 {hits}）")
+    except Exception as e:
+        logger.warning(f"迁移失败 重建表 {tbl} error={str(e)}")
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
+
+    _migrate_legacy_encrypted_passwords()
 
     _add_columns_if_missing("ypay_account", {
         "alipay_appid": "VARCHAR(255) DEFAULT ''",
@@ -127,6 +219,11 @@ def init_db():
             logger.info("迁移: orders.paid_processed 已从 commission_status 拷贝旧值")
         except Exception as e:
             logger.warning(f"迁移失败 paid_processed 拷贝 error={str(e)}")
+
+    # 旧库遗留 NOT NULL 列（commission_status/inviter_code/agent_id）会导致模型插入失败，重建表
+    _rebuild_legacy_table(Order, ("commission_status", "inviter_code"))
+    _rebuild_legacy_table(AuditLog, ("agent_id",))
+
     # Migrate vmq_settings data to ypay_settings if ypay_settings is empty
     try:
         Session = sessionmaker(bind=engine)
@@ -150,9 +247,6 @@ def init_db():
 init_db()
 
 
-from api.crypto import decrypt_password
-
-
 def _order_to_dict(order: Order) -> Dict[str, Any]:
     d = {
         "order_id": order.order_id,
@@ -165,7 +259,7 @@ def _order_to_dict(order: Order) -> Dict[str, Any]:
         "customer_name": order.customer_name,
         "customer_contact": order.customer_contact,
         "username": order.username,
-        "password": decrypt_password(order.password),
+        "password": order.password,
         "website_id": order.website_id,
         "task_type": order.task_type,
         "course_ids": json.loads(order.course_ids) if isinstance(order.course_ids, str) else order.course_ids,

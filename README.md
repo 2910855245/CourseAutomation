@@ -24,7 +24,7 @@ venv/bin/pip install -r requirements.txt
 
 # 3. 配置
 cp .env.example .env
-vi .env   # 至少改 SITE_URL 为你的域名/IP；生产环境建议改 JWT_SECRET_KEY 和 PASSWORD_ENCRYPTION_KEY
+vi .env   # 至少改 SITE_URL 为你的域名/IP；生产环境建议改 JWT_SECRET_KEY
 
 # 4. 构建前端（首次或前端改动后需要）
 cd frontend && npm install && npm run build && cd ..
@@ -120,7 +120,6 @@ CREATE DATABASE anticheat DEFAULT CHARACTER SET utf8mb4;
 |------|------|--------|
 | `JWT_SECRET_KEY` | JWT 签名密钥 | 必填 |
 | `DATABASE_URL` | 数据库连接 | `sqlite:///data/orders.db` |
-| `PASSWORD_ENCRYPTION_KEY` | 密码加密密钥 | 必填 |
 | `REDIS_URL` | Redis 连接 | 自动降级内存模式 |
 | `SITE_URL` | 站点地址（支付回调） | `http://localhost:8000` |
 | `DEEPSEEK_API_KEY` | AI 考试答题 | 可选 |
