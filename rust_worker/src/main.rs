@@ -7,6 +7,7 @@
 //! - SQLite 访问层（rusqlite 直连，与 Python 迁移期共享 data/*.db）
 
 mod api;
+mod cx_scan;
 mod cx_study;
 mod db;
 mod scan;
@@ -86,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/status", get(status))
         .route("/submit", post(submit))
         .route("/submit_cx", post(submit_cx))
+        .route("/submit_cx_full", post(submit_cx_full))
         .route("/submit_full", post(submit_full))
         .route("/cancel/{order_id}", post(cancel))
         .merge(api::router())
@@ -222,6 +224,35 @@ async fn submit_full(
         let result = scan::run_scan_and_study(&task, &push_url, &push_token).await;
         if let Err(e) = result {
             tracing::warn!(order_id = %order_id, error = %e, "full task failed");
+        }
+        tasks.remove(&order_id);
+    });
+
+    state.tasks.insert(oid_resp.clone(), handle);
+    Json(json!({"ok": true, "order_id": oid_resp}))
+}
+
+async fn submit_cx_full(
+    State(state): State<AppState>,
+    Json(task): Json<cx_scan::ScanCxTaskInput>,
+) -> Json<serde_json::Value> {
+    if task.order_id.is_empty() || task.cookie_str.is_empty() || task.uid.is_empty() {
+        return Json(json!({"ok": false, "message": "order_id/cookie_str/uid 不能为空"}));
+    }
+    if state.tasks.contains_key(&task.order_id) {
+        return Json(json!({"ok": false, "message": "任务已存在"}));
+    }
+
+    let push_url = state.push_url.clone();
+    let push_token = state.push_token.clone();
+    let tasks = state.tasks.clone();
+    let order_id = task.order_id.clone();
+    let oid_resp = task.order_id.clone();
+
+    let handle = tokio::spawn(async move {
+        let result = cx_scan::run_cx_scan_and_study(&task, &push_url, &push_token).await;
+        if let Err(e) = result {
+            tracing::warn!(order_id = %order_id, error = %e, "cx full task failed");
         }
         tasks.remove(&order_id);
     });

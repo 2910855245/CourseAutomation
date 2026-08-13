@@ -387,140 +387,6 @@ def _plan_file(status_file: str) -> str:
     return os.path.join(os.path.dirname(status_file), "cx_plan.json")
 
 
-def _build_video_plan(session, courses, status_file) -> dict:
-    """crawl 阶段：为所有课程构造视频刷课计划（积分视频 + 必学视频），
-    并预取 quiz 阶段需要的 person_id。
-
-    选择逻辑与 PointsExecutor._play_videos 一致：
-    每个有视频的知识点计 min(3, remaining-earned) 分，达 remaining 或 daily_cap 停止。
-    """
-    from infrastructure.chaoxing.crawler import fetch_knowledge_list, fetch_must_learn_kids
-    from infrastructure.chaoxing.points import ScoreRuleParser, PointsExecutor, PointsRule
-
-    plan = {
-        "video_points": [],   # [{cid, kid, clid, name}] 积分视频
-        "must_learn_points": [],  # [{cid, kid, clid, name}] 必学视频
-        "person_ids": {},     # {cid: personId}
-        "day_count": 1,
-    }
-    for course in courses:
-        cid = course.get('courseId', '')
-        clid = course.get('classId', '')
-        cname = course.get('course_name', course.get('name', f'课程{cid}'))
-        if not clid:
-            continue
-
-        try:
-            rule = ScoreRuleParser.fetch_rules(session, cid, clid)
-        except Exception:
-            rule = PointsRule()
-        executor = PointsExecutor(session, cid, clid, rule)
-        try:
-            status = executor.get_status()
-        except Exception as e:
-            logger.warning(f"积分状态获取失败 course={cname} error={str(e)}")
-            continue
-        total = status.total
-        logger.info("积分状态 course={} total={} target={}", cname, total, rule.target)
-
-        send_status(status_file,
-                    phase="chaoxing_points",
-                    points_total=total,
-                    points_target=rule.target,
-                    days=1,
-                    course_name=cname,
-                    message=f"[{cname}] 积分 {total}/{rule.target} 今日+{status.day_score}")
-
-        # 积分未达标且有额度 → 选积分视频
-        remaining = executor.get_remaining_today(status)
-        if not executor.check_done(status) and remaining > 0:
-            video_rule = rule.get_item(3)
-            daily_cap = video_rule.daily_cap if video_rule else 0
-            try:
-                knowledge_points = fetch_knowledge_list(session, cid, clid)
-            except Exception as e:
-                logger.warning(f"知识点列表获取失败 course={cname} error={str(e)}")
-                knowledge_points = []
-            video_points = [kp for kp in knowledge_points if kp.get('has_video')]
-            earned = 0
-            for kp in video_points:
-                if earned >= remaining or (daily_cap > 0 and earned >= daily_cap):
-                    break
-                plan["video_points"].append({
-                    "cid": cid, "kid": kp['knowledgeId'], "clid": clid,
-                    "name": kp.get('name', f"知识点{kp['knowledgeId']}"),
-                })
-                earned += min(3, remaining - earned)
-            logger.info(f"积分视频计划 course={cname} 选中={len(plan['video_points'])} 预估积分={earned}")
-
-        # 必学视频（classifyId=1）
-        try:
-            kids = fetch_must_learn_kids(session, cid, clid)
-        except Exception as e:
-            logger.warning(f"必学列表获取失败 course={cname} error={str(e)}")
-            kids = []
-        # personId 预取（quiz 阶段需要）
-        person_id = _fetch_person_id(session, cid)
-        plan["person_ids"][cid] = person_id
-        for kid in kids:
-            plan["must_learn_points"].append({
-                "cid": cid, "kid": kid, "clid": clid, "name": f"必学{kid}",
-            })
-        logger.info(f"必学视频计划 course={cname} count={len(kids)}")
-
-    return plan
-
-
-def _fetch_person_id(session, cid: str) -> str:
-    try:
-        resp = session.get('https://mooc1-api.chaoxing.com/mycourse/backclazzdata?view=json&rss=1')
-        for ch in resp.json().get('channelList', []):
-            content = ch.get('content', {})
-            if isinstance(content, dict):
-                for c in content.get('course', {}).get('data', []):
-                    if str(c.get('id', '')) == cid:
-                        return str(ch.get('cpi', ''))
-    except Exception:
-        pass
-    return ''
-
-
-def _submit_study_to_daemon(plan: dict, session, params: dict, status_file: str) -> bool:
-    """把视频计划合并为一个任务提交给 Rust daemon /submit_cx"""
-    import urllib.request
-    from config import settings
-
-    points = plan["video_points"] + plan["must_learn_points"]
-    if not points:
-        logger.info("无视频任务，跳过 daemon 提交")
-        return False
-
-    order_id = params.get("order_id", os.path.basename(os.path.dirname(status_file)))
-    payload = json.dumps({
-        "order_id": order_id,
-        "cookie_str": session.cookie_str,
-        "uid": session.uid,
-        "fid": session.fid,
-        "ua": session.UA,
-        "course_name": f"{len(plan['person_ids'])}门课程",
-        "points": points,
-        "status_file": status_file,
-        "push_ws": True,
-    }).encode("utf-8")
-    try:
-        req = urllib.request.Request(
-            f"{settings.rust_daemon_url}/submit_cx", data=payload,
-            headers={"Content-Type": "application/json"}, method="POST")
-        resp = json.loads(urllib.request.urlopen(req, timeout=5).read())
-        if resp.get("ok"):
-            logger.info(f"Rust daemon 接手学习通视频 order_id={order_id} points={len(points)}")
-            return True
-        logger.warning(f"daemon 拒绝任务: {resp.get('message')}")
-    except Exception as e:
-        logger.warning(f"daemon 不可用: {e}")
-    return False
-
-
 def _load_plan(status_file: str) -> dict:
     try:
         with open(_plan_file(status_file), encoding="utf-8") as f:
@@ -730,31 +596,45 @@ def run_task(params_file, status_file):
 
     logger.info(f"课程数量 count={len(courses)}")
 
-    # ── crawl 阶段：构造计划 → 提交 daemon → 立即退出 ──
+    # ── crawl 阶段：扫描+计划+刷视频全链 Rust（/submit_cx_full），登录留在本进程（rnet 指纹）──
     if phase == "crawl":
-        plan = _build_video_plan(session, courses, status_file)
-        plan["api_key"] = _get_api_key()
-        plan["courses"] = courses
-        with open(_plan_file(status_file), "w", encoding="utf-8") as f:
-            json.dump(plan, f, ensure_ascii=False)
-        points = plan["video_points"] + plan["must_learn_points"]
-        if points:
-            daemon_ok = _submit_study_to_daemon(plan, session, params, status_file)
-            send_status(status_file,
-                        phase="study_must_learn",
-                        heavy_done=True,
-                        study_total=len(points),
-                        study_done=0,
-                        study_failed=0,
-                        message=f"开始刷学习通视频 (共{len(points)}个知识点)",
-                        video_total=len(points),
-                        video_done=0)
-            if not daemon_ok:
-                send_status(status_file, phase="error",
-                            message="Rust 刷课守护进程不可用，视频阶段失败", done=True, success=False)
+        import urllib.request as _ur
+        from config import settings as _rust_cfg
+        _cids = [str(_c.get("course_id") or _c.get("courseId") or "") if isinstance(_c, dict) else str(_c)
+                 for _c in course_ids]
+        _cids = [c for c in _cids if c]
+        _payload = json.dumps({
+            "order_id": params.get("order_id", os.path.basename(os.path.dirname(status_file))),
+            "cookie_str": session.cookie_str,
+            "uid": session.uid,
+            "fid": session.fid,
+            "ua": session.UA,
+            "course_ids": _cids,
+            "status_file": status_file,
+            "push_ws": True,
+        }).encode("utf-8")
+        try:
+            _req = _ur.Request(f"{_rust_cfg.rust_daemon_url}/submit_cx_full", data=_payload,
+                               headers={"Content-Type": "application/json"}, method="POST")
+            _resp = json.loads(_ur.urlopen(_req, timeout=5).read())
+            if _resp.get("ok"):
+                send_status(status_file,
+                            phase="study_must_learn",
+                            heavy_done=True,
+                            study_total=0,
+                            study_done=0,
+                            study_failed=0,
+                            message="学习通扫描+刷课已提交 Rust daemon")
+                logger.info("Rust daemon 接手学习通扫描+刷课 order_id={}", params.get("order_id", ""))
+                return
+            send_status(status_file, phase="error",
+                        message=f"Rust daemon 拒绝任务: {_resp.get('message')}",
+                        done=True, success=False)
             return
-        # 无视频任务 → 直接走 quiz 阶段（同进程内继续）
-        phase = "quiz"
+        except Exception as e:
+            send_status(status_file, phase="error",
+                        message=f"Rust daemon 不可用: {e}", done=True, success=False)
+            return
 
     # ── quiz 阶段：daemon 完成视频后由主进程再起本进程 ──
     if phase == "quiz":

@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::Mutex;
 
@@ -26,7 +26,7 @@ const VIDEO_REFERER: &str =
 const SPEED_FAST: &[(u64, (f64, f64))] =
     &[(60, (5.0, 10.0)), (300, (10.0, 20.0)), (600, (15.0, 30.0)), (99999, (20.0, 40.0))];
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CxPoint {
     pub cid: String, // course_id
     pub kid: String, // knowledge_id
