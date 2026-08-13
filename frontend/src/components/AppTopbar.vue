@@ -24,11 +24,7 @@ function closeMobileMenu() {
 }
 
 const store = useAppStore()
-const isAdmin = computed(() => {
-  const u = store.userInfo as any
-  if (!u) return false
-  return u.role === 'admin' || u.is_admin
-})
+const isAdmin = computed(() => store.isAdminLoggedIn)
 const primaryRole = computed(() => {
   if (isAdmin.value) return 'admin'
   return ''

@@ -10,7 +10,7 @@ export function useAuth() {
   const adminPass = ref('')
   const loginErr = ref('')
   const currentRole = ref<'admin'>('admin')
-  const isLoggedIn = ref(!!store.adminToken || !!store.userToken)
+  const isLoggedIn = ref(!!store.adminToken)
   const pwForm = reactive({ old_password: '', new_password: '', confirm_password: '' })
   const changingPw = ref(false)
 
@@ -40,13 +40,8 @@ export function useAuth() {
         captcha_token: captchaToken.value,
         captcha_answer: captchaAnswer.value.trim(),
       })
-      const role = r.data?.role
-      if (role === 'admin') {
-        store.setAdminToken(r.data.token)
-        currentRole.value = 'admin'
-      } else {
-        loginErr.value = '需要管理员账号'; return
-      }
+      store.setAdminToken(r.data.token)
+      currentRole.value = 'admin'
       isLoggedIn.value = true
     } catch (err: any) {
       loginErr.value = err?.message || '登录失败，请稍后重试'
@@ -65,7 +60,7 @@ export function useAuth() {
     if (pwForm.new_password !== pwForm.confirm_password) { store.toast('两次密码不一致', 'warning'); return }
     changingPw.value = true
     try {
-      await api.users.changePassword({ old_password: pwForm.old_password, new_password: pwForm.new_password })
+      await api.admin.changePassword({ old_password: pwForm.old_password, new_password: pwForm.new_password })
       store.toast('密码修改成功，请重新登录', 'success')
       logout()
     } catch (e: any) { store.toast(e?.message || '操作失败', 'error') }

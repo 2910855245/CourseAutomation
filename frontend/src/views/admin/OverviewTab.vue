@@ -5,7 +5,6 @@ const { getPlatformName } = useAdminStore().state().ui
 const { dash, dashError, fmtMoney, fmtShortDate, loadDashboard, loadingDash, maxBarOrders, maxBarRevenue, maxStatusCount, orderStatusClass, orderStatusLabel, totalPlatformOrders } = useAdminStore().state().dashboard
 const { orders } = useAdminStore().state().orders
 const { platformColors, taskTypeNames } = useAdminStore().state().sysConfig
-const { users } = useAdminStore().state().users
 </script>
 
 <template>

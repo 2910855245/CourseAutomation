@@ -11,7 +11,6 @@ import { defineStore } from 'pinia'
 import { useAuth } from '@/composables/useAuth'
 import { useDashboard } from '@/composables/useDashboard'
 import { useOrders } from '@/composables/useOrders'
-import { useUsers } from '@/composables/useUsers'
 import { usePayments } from '@/composables/usePayments'
 import { useSystemConfig } from '@/composables/useSystemConfig'
 import { useYpayAdmin } from '@/composables/useYpayAdmin'
@@ -24,7 +23,6 @@ export interface AdminStateContainer {
   auth: ReturnType<typeof useAuth>
   dashboard: ReturnType<typeof useDashboard>
   orders: ReturnType<typeof useOrders>
-  users: ReturnType<typeof useUsers>
   payments: ReturnType<typeof usePayments>
   sysConfig: ReturnType<typeof useSystemConfig>
   ypay: ReturnType<typeof useYpayAdmin>

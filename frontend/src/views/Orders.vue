@@ -40,7 +40,6 @@ const pageSize = 50
 const detailOrder = ref<OrderItem | null>(null)
 const auditLogs = ref<{ event: string; detail: string; created_at: string }[]>([])
 const taskTypeNames: Record<string, string> = { video: '视频', exam: '考试', full: '全包', chaoxing_points: '学习通积分' }
-const isGuest = ref(false)
 const guestOrderIds = ref<string[]>([])
 const guestOrderTokens: Record<string, string> = {}
 
@@ -90,8 +89,8 @@ function goPage(p: number) {
 
 async function load() {
   try {
-    // 仅游客模式：用sessionStorage的ID逐个查询
-    if (isGuest.value && guestOrderIds.value.length > 0) {
+    // 用 sessionStorage 的订单 ID 逐个查询（view token 鉴权）
+    if (guestOrderIds.value.length > 0) {
       const items: OrderItem[] = []
       for (const oid of guestOrderIds.value) {
         try {
@@ -105,8 +104,7 @@ async function load() {
         return
       }
     }
-    // 游客无ID：显示空
-    if (isGuest.value && guestOrderIds.value.length === 0) {
+    if (guestOrderIds.value.length === 0) {
       orders.value = []
       totalOrders.value = 0
       return
@@ -132,8 +130,7 @@ async function load() {
   } catch (e: any) {
     // If auth fails and we have guest IDs, retry as guest
     if (guestOrderIds.value.length > 0) {
-      isGuest.value = true
-      load()
+            load()
       return
     }
     store.toast(e?.message || '加载订单失败', 'error')
@@ -148,19 +145,16 @@ onMounted(async () => {
     const routeId = route.params.id as string || ''
 
     if (hasToken) {
-      isGuest.value = false
-    } else if (routeId) {
+          } else if (routeId) {
       guestOrderIds.value = [routeId]
-      isGuest.value = true
-    } else {
+          } else {
       const urlIds = (route.query.ids as string) || ''
       const storedIds = sessionStorage.getItem('last_order_ids') || localStorage.getItem('last_order_ids') || ''
       const idsStr = urlIds || storedIds
       if (idsStr) {
         guestOrderIds.value = idsStr.split(',').filter(Boolean)
       }
-      isGuest.value = true
-    }
+          }
 
     loadGuestTokens()
     await load()

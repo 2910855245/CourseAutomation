@@ -11,21 +11,9 @@ export function useHomeState() {
   const isPrivileged = computed(() => !!userRole.value)
   const isRegularUser = ref(false)
 
-  async function detectUserRole() {
-    // 管理员在后台登录后，adminToken 已存入 localStorage
-    // store 初始化时会自动 setAdminApiToken，所以 api.users.me() 会带上 admin token
-    if (store.isAdminLoggedIn) {
-      userRole.value = 'admin'
-      return
-    }
-    if (store.isUserLoggedIn) {
-      try {
-        const r = await api.users.me()
-        const role = r?.data?.role
-        if (role === 'admin') { userRole.value = 'admin'; return }
-        isRegularUser.value = true
-      } catch {}
-    }
+  function detectUserRole() {
+    // 管理员徽章：仅检查 admin token（用户体系已删除）
+    userRole.value = store.isAdminLoggedIn ? 'admin' : null
   }
 
   function handleVisibilityChange() {

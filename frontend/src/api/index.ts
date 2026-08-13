@@ -3,8 +3,6 @@ const API_BASE = ''
 let adminToken = ''
 export function setAdminApiToken(t: string) { adminToken = t }
 
-let userToken = ''
-export function setUserApiToken(t: string) { userToken = t }
 
 const FETCH_TIMEOUT_MS = 30000  // 30 秒超时，防止按钮永久卡住
 
@@ -13,8 +11,6 @@ async function request<T = any>(method: string, path: string, body?: any): Promi
   const adminOnlyPrefixes = ['/api/admin', '/api/queue', '/api/ypay', '/api/health']
   if (adminOnlyPrefixes.some(p => path.startsWith(p)) && adminToken) {
     headers['Authorization'] = `Bearer ${adminToken}`
-  } else if (userToken) {
-    headers['Authorization'] = `Bearer ${userToken}`
   } else if (adminToken) {
     headers['Authorization'] = `Bearer ${adminToken}`
   }
@@ -75,7 +71,6 @@ export interface OrderItem {
   created_at: string; updated_at?: string; accepted_at?: string; started_at?: string; finished_at?: string;
 }
 export interface DashboardStats {
-  users: { total: number; new_today: number; new_week: number }
   orders: { total: number; today: number; week: number; completed: number; pending: number; running: number; failed: number; completion_rate: number }
   revenue: { total: number; today: number; week: number }
   platform_distribution: { website_id: number; count: number; revenue: number }[]
@@ -129,16 +124,9 @@ export const api = {
     balancePay: (_order_id: string) => post<ApiResponse<any>>('/api/orders/pay'),
   },
   admin: {
-    login: (d: { username: string; password: string; captcha_token?: string; captcha_answer?: string }) => post<ApiResponse<any>>('/api/users/login', d),
+    login: (d: { username: string; password: string; captcha_token?: string; captcha_answer?: string }) => post<ApiResponse<any>>('/api/admin/login', d),
     dashboard: () => get<ApiResponse<DashboardStats>>('/api/admin/dashboard'),
-  },
-  users: {
-    register: (d: { username: string; password: string; nickname?: string; contact?: string; captcha_token?: string; captcha_answer?: string }) => post<ApiResponse<any>>('/api/users/register', d),
-    login: (d: { username: string; password: string; captcha_token?: string; captcha_answer?: string }) => post<ApiResponse<any>>('/api/users/login', d),
-    me: () => get<ApiResponse<any>>('/api/users/me'),
-    changePassword: (d: { old_password: string; new_password: string }) => post<ApiResponse<any>>('/api/users/change-password', d),
-    updateProfile: (d: { nickname?: string; contact?: string }) => put<ApiResponse<any>>('/api/users/profile', d),
-    logout: () => post<ApiResponse<any>>('/api/users/logout'),
+    changePassword: (d: { old_password: string; new_password: string }) => post<ApiResponse<any>>('/api/admin/change-password', d),
   },
   system: {
     status: () => get<SystemStatus>('/api/system/status'),

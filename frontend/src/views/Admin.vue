@@ -6,14 +6,12 @@ import { useAdminStore } from '@/stores/admin'
 import { useAuth } from '@/composables/useAuth'
 import { useDashboard } from '@/composables/useDashboard'
 import { useOrders } from '@/composables/useOrders'
-import { useUsers } from '@/composables/useUsers'
 import { usePayments } from '@/composables/usePayments'
 import { useSystemConfig } from '@/composables/useSystemConfig'
 import { useYpayAdmin } from '@/composables/useYpayAdmin'
 import AppTopbar from '@/components/AppTopbar.vue'
 import OverviewTab from '@/views/admin/OverviewTab.vue'
 import OrdersTab from '@/views/admin/OrdersTab.vue'
-import UsersTab from '@/views/admin/UsersTab.vue'
 import QueueTab from '@/views/admin/QueueTab.vue'
 import ProxyTab from '@/views/admin/ProxyTab.vue'
 import SecurityTab from '@/views/admin/SecurityTab.vue'
@@ -29,10 +27,7 @@ const { adminUser, adminPass, loginErr, currentRole, isLoggedIn, pwForm, changin
 const dashboard = useDashboard()
 const { allSidebarItems, visibleSidebarGroups, sidebarGroups, sidebarCollapsed, mobileSidebarOpen, loadingDash, dash, dashError, fmtDate, fmtShortDate, fmtMoney, loadDashboard, statusLabel, statusClass, orderStatusLabel, orderStatusClass, maxStatusCount, maxBarRevenue, maxBarOrders, totalPlatformOrders } = dashboard
 const orders = useOrders()
-const users = useUsers()
 const payments = usePayments()
-// 模板内 Topup modal 直接使用 users 切片状态
-const { showTopupModal, toppupMode, topupTarget, topupAmount, topupNote, toppingUp, doTopup } = users
 const sysConfig = useSystemConfig()
 const ypayAdmin = useYpayAdmin()
 
@@ -40,7 +35,7 @@ const ypayAdmin = useYpayAdmin()
 const { load: loadPlatformNames, getName: getPlatformName, platformNames } = usePlatformNames()
 
 // ── Tab switching (orchestrates across composables) ──
-type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'users' | 'pricing' | 'ypay' | 'proxy' | 'announcement' | 'risk' | 'security'
+type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'pricing' | 'ypay' | 'proxy' | 'announcement' | 'risk' | 'security'
 const activeTab = ref<SidebarKey>('overview')
 const expandedSidebarItems = ref<string[]>(['queue'])
 
@@ -54,10 +49,7 @@ function switchTab(tab: SidebarKey) {
   activeTab.value = tab
   if (tab === 'overview') dashboard.loadDashboard(currentRole.value)
   if (tab === 'orders') orders.loadOrders()
-  if (tab === 'users') {
-    if (currentRole.value === 'admin') { users.loadUsers() }
-  }
-  // queue 数据由 watch(activeTab) → setQueueFilter 统一加载，此处不重复调用
+    // queue 数据由 watch(activeTab) → setQueueFilter 统一加载，此处不重复调用
   if (tab === 'security') { pwForm.old_password = ''; pwForm.new_password = ''; pwForm.confirm_password = ''; if (currentRole.value === 'admin') { sysConfig.loadDeepseekKey(); sysConfig.loadRiskData() } }
   if (tab === 'pricing') sysConfig.loadPricing()
   if (tab === 'ypay') ypayAdmin.loadYpay()
@@ -124,7 +116,6 @@ useAdminStore().init({
   auth: { adminUser, adminPass, loginErr, currentRole, isLoggedIn, pwForm, changingPw, captchaToken, captchaAnswer, captchaImage, captchaLoading, doLogin, logout, changeAdminPassword, loadCaptcha },
   dashboard,
   orders,
-  users,
   payments,
   sysConfig,
   ypay: ypayAdmin,
@@ -293,7 +284,6 @@ useAdminStore().init({
           <OrdersTab v-if="activeTab === 'orders'" />
 
           <!-- Users Tab -->
-          <UsersTab v-if="activeTab === 'users'" />
 
           <!-- Queue Tab -->
           <QueueTab v-if="activeTab === 'queue' || activeTab === 'queue_school' || activeTab === 'queue_chaoxing'" />
@@ -335,44 +325,13 @@ useAdminStore().init({
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
           <span>队列</span>
         </button>
-        <button :class="['mbn-item', { active: activeTab === 'users' }]" @click="switchTab('users')">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
-          <span>用户</span>
-        </button>
         <button :class="['mbn-item', { active: activeTab === 'security' || activeTab === 'pricing' || activeTab === 'ypay' || activeTab === 'proxy' }]" @click="mobileSidebarOpen = true">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
           <span>更多</span>
         </button>
       </nav>
     </div>
-
-    <!-- Topup Modal -->
-    <div v-if="showTopupModal" class="modal-overlay" @click.self="showTopupModal = false">
-      <div class="modal">
-        <h3>{{ toppupMode === 'topup' ? '用户充值' : '用户扣费' }}</h3>
-        <p v-if="topupTarget" class="modal-sub">
-          用户: {{ topupTarget.nickname || topupTarget.username }} ({{ topupTarget.user_id }})
-          当前余额: {{ fmtMoney(topupTarget.balance) }}
-        </p>
-        <div class="field">
-          <label>金额</label>
-          <input v-model.number="topupAmount" type="number" min="0" step="0.01" placeholder="请输入金额" />
-        </div>
-        <div class="field">
-          <label>备注</label>
-          <input v-model="topupNote" placeholder="可选" />
-        </div>
-        <div class="modal-actions">
-          <button class="btn btn-ghost" @click="showTopupModal = false">
-取消
-</button>
-          <button class="btn btn-primary" :disabled="toppingUp" @click="doTopup">
-            {{ toppingUp ? '处理中...' : (toppupMode === 'topup' ? '确认充值' : '确认扣费') }}
-          </button>
-        </div>
-      </div>
-    </div>
-</div>
+  </div>
 </template>
 
 <style>

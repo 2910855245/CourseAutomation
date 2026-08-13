@@ -62,6 +62,24 @@ def admin_list_orders(
     return ApiResponse(data={"total": total, "items": [_mask_pwd(o) for o in enriched]})
 
 
+class ChangePasswordRequest(BaseModel):
+    old_password: str = Field(..., max_length=200)
+    new_password: str = Field(..., min_length=6, max_length=200)
+
+
+@router.post("/change-password", response_model=ApiResponse)
+def change_admin_password(req: ChangePasswordRequest, admin: dict = Depends(_require_admin)):
+    """管理员改密（原用户体系 change-password 迁移）"""
+    from api.auth import hash_password, verify_password
+    user = db.get_user(admin["user_id"])
+    if not user:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    if not verify_password(req.old_password, user["password_hash"]):
+        raise HTTPException(status_code=400, detail="原密码不正确")
+    db.update_user(admin["user_id"], password_hash=hash_password(req.new_password))
+    return ApiResponse(message="密码修改成功")
+
+
 @router.post("/orders/{order_id}/accept", response_model=ApiResponse)
 def accept_order(order_id: str, req: AcceptOrderRequest = AcceptOrderRequest(),
                  admin: dict = Depends(_require_admin)):
