@@ -11,6 +11,7 @@ mod auth;
 mod cx_scan;
 mod cx_study;
 mod db;
+mod exam;
 mod login;
 mod queue;
 mod scan;
@@ -95,6 +96,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/submit_cx", post(submit_cx))
         .route("/submit_cx_full", post(submit_cx_full))
         .route("/submit_full", post(submit_full))
+        .route("/submit_exam", post(submit_exam))
         .route("/cancel/{order_id}", post(cancel))
         .merge(api::router(state.clone()))
         .nest_service("/static", ServeDir::new("static").append_index_html_on_directories(true))
@@ -266,6 +268,64 @@ async fn submit_cx_full(
 
     state.tasks.insert(oid_resp.clone(), handle);
     Json(json!({"ok": true, "order_id": oid_resp}))
+}
+
+#[derive(serde::Deserialize)]
+struct ExamTask {
+    order_id: String,
+    base_url: String,
+    cookie_str: String,
+    work_id: String,
+    #[serde(default)]
+    course_id: String,
+    #[serde(default)]
+    node_id: String,
+    api_key: String,
+    #[serde(default = "default_model")]
+    model: String,
+    #[serde(default)]
+    item_type: String,
+    status_file: String,
+}
+
+fn default_model() -> String {
+    "deepseek-v4-flash".to_string()
+}
+
+async fn submit_exam(
+    State(state): State<AppState>,
+    Json(task): Json<ExamTask>,
+) -> Json<serde_json::Value> {
+    if task.order_id.is_empty() || task.api_key.is_empty() || task.work_id.is_empty() {
+        return Json(json!({"ok": false, "message": "order_id/api_key/work_id 不能为空"}));
+    }
+    let resp_id = task.order_id.clone();
+    let resp_id2 = task.order_id.clone();
+    tokio::spawn(async move {
+        let result = exam::solve_exam(
+            &task.base_url, &task.cookie_str, &task.work_id,
+            &task.course_id, &task.node_id, &task.api_key, &task.model,
+            if task.item_type.is_empty() { "work" } else { &task.item_type },
+        ).await;
+        match result {
+            Ok(r) => {
+                tracing::info!(order_id = %resp_id, result = %r, "考试完成");
+                let done = r["success"].as_bool().unwrap_or(false);
+                let _ = tokio::fs::write(&task.status_file, json!({
+                    "phase": "exam", "done": true, "success": done,
+                    "message": format!("考试完成 提交{}/{}", r["submitted"], r["total"]),
+                }).to_string()).await;
+            }
+            Err(e) => {
+                tracing::warn!(order_id = %resp_id, error = %e, "考试失败");
+                let _ = tokio::fs::write(&task.status_file, json!({
+                    "phase": "exam", "done": true, "success": false,
+                    "message": format!("考试失败: {e}"),
+                }).to_string()).await;
+            }
+        }
+    });
+    Json(json!({"ok": true, "order_id": resp_id2}))
 }
 
 async fn submit_cx(
