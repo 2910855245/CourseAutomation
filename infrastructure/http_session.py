@@ -13,7 +13,10 @@ from config import get_account_cookies_path, get_base_url, get_random_user_agent
 _SSL_SKIP_DOMAINS = {
     "cdcas.suwankj.com",
     "cdcas.taiskeji.com",
+    "cdcass.taiskeji.com",
+    "cdcas.duxingkej.com",
     "cdcas.chaoxiankeji.com",
+    "cdcas.fanruikji.com",
 }
 
 

@@ -20,7 +20,7 @@ from config import (
 )
 from infrastructure.course_crawler import extract_student_name
 from infrastructure.http_session import check_cookie_valid, safe_request
-from services.multi_platform_auth import load_platform_cookie, login_single_platform, save_platform_cookie
+from services.multi_platform_auth import load_platform_cookie, login_single_platform, login_teacher_platform, save_platform_cookie
 
 
 MAX_POOL_SIZE = 200
@@ -204,6 +204,49 @@ class SessionPool:
                 return cached
             self.remove(username, website_id)
         return self.login(username, password, website_id)
+
+    def login_teacher(self, username: str, password: str, website_id: int) -> SessionInfo:
+        """教师端登录"""
+        wid, ok, session, msg = login_teacher_platform(website_id, username, password)
+        if not ok or not session:
+            raise Exception(f"教师端登录失败: {msg}")
+
+        student_name = ""
+        try:
+            set_current_website(website_id)
+            set_current_account(username)
+            update_url_config()
+            update_paths_for_current_account()
+            resp = safe_request(session, f"{get_base_url()}/user/index")
+            if resp:
+                student_name = extract_student_name(resp.text) or ""
+        except Exception as e:
+            pass
+
+        save_platform_cookie(username, website_id, session)
+
+        session_info = SessionInfo(
+            session=session,
+            username=username,
+            website_id=website_id,
+            password_hash=hashlib.sha256(password.encode()).hexdigest(),
+            student_name=student_name,
+        )
+        key = self._make_key(username, website_id)
+        with self._lock:
+            self._evict_lru()
+            self._pool[key] = session_info
+        logger.info(f"教师端会话登录 username={username} website_id={website_id}")
+        return session_info
+
+    def get_or_login_teacher(self, username: str, password: str, website_id: int) -> SessionInfo:
+        """获取缓存或教师端登录"""
+        cached = self.get(username, website_id)
+        if cached:
+            if cached.password_hash == hashlib.sha256(password.encode()).hexdigest():
+                return cached
+            self.remove(username, website_id)
+        return self.login_teacher(username, password, website_id)
 
     def remove(self, username: str, website_id: int) -> bool:
         key = self._make_key(username, website_id)

@@ -25,6 +25,7 @@ class ScanRequest(BaseModel):
     password: str = Field(..., min_length=1, description="平台密码")
     include_records: bool = Field(default=True, description="是否包含学习记录(较慢)")
     force_refresh: bool = Field(default=False, description="强制刷新，忽略缓存")
+    role: str = Field(default="student", description="登录身份: student 或 teacher")
 
 
 class ReloginRequest(BaseModel):
@@ -32,12 +33,16 @@ class ReloginRequest(BaseModel):
     password: str = Field(..., min_length=1, description="平台新密码")
     website_id: int = Field(..., description="平台ID")
     include_records: bool = Field(default=True, description="是否包含学习记录(较慢)")
+    role: str = Field(default="student", description="登录身份: student 或 teacher")
 
 
 @router.post("/scan", response_model=ApiResponse)
 def scan_platforms(req: ScanRequest, current_user: dict = Depends(get_optional_user)):
+    logger.info(f"扫描请求: role={req.role}, username={req.username}, force_refresh={req.force_refresh}")
+    logger.info(f"调用 scan_all_platforms 参数: role={req.role}")
     results = scan_all_platforms(req.username, req.password, req.include_records,
-                                  force_refresh=req.force_refresh)
+                                  force_refresh=req.force_refresh, role=req.role)
+    logger.info(f"扫描结果: {len(results)} 个平台")
 
     total_courses = sum(len(r["courses"]) for r in results)
     ok_platforms = sum(1 for r in results if r["status"] == "ok")
@@ -54,7 +59,7 @@ def relogin_platform(req: ReloginRequest, current_user: dict = Depends(get_optio
     from api.services.session_pool import pool as session_pool
     session_pool.remove(req.username, req.website_id)
 
-    result = scan_platform(req.username, req.password, req.website_id, req.include_records)
+    result = scan_platform(req.username, req.password, req.website_id, req.include_records, role=req.role)
     return ApiResponse(
         message=f"平台{'登录成功' if result['status'] == 'ok' else '登录失败'}",
         data={"platform": result},
