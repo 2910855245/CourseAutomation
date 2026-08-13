@@ -201,12 +201,19 @@ def load_course_cache(username: str, website_id: int, course_id: str) -> Optiona
 def scan_platform(username: str, password: str, website_id: int,
                   include_records: bool = True,
                   platform_name: str = None,
-                  force_refresh: bool = False) -> dict:
+                  force_refresh: bool = False,
+                  session_provider=None) -> dict:
     """扫描单个平台全部课程
 
     返回: {website_id, name, status, student_name, courses, tasks}
+
+    session_provider: 可选会话提供者（get_or_login 可调用对象），
+    由调用方注入（routers/scan.py 传 session_pool），业务层不再依赖框架层。
+    缺省时向后兼容 lazy 导入。
     """
-    from api.services.session_pool import pool as session_pool
+    if session_provider is None:
+        from api.services.session_pool import pool as session_pool
+        session_provider = session_pool
 
     if not platform_name:
         platform_name = WEBSITES.get(website_id, {}).get("name", f"平台{website_id}")
@@ -225,7 +232,7 @@ def scan_platform(username: str, password: str, website_id: int,
 
     # 1. 登录
     try:
-        info = session_pool.get_or_login(username, password, website_id)
+        info = session_provider.get_or_login(username, password, website_id)
         session = info.session
     except Exception as e:
         logger.error("扫描平台登录失败 - website_id={} user={}: {}", website_id, username, e)
@@ -360,14 +367,20 @@ def scan_platform(username: str, password: str, website_id: int,
     return result
 
 
-def _discover_and_match() -> Dict[int, Dict]:
-    """从 domain_monitor 获取活跃平台列表（统一数据源）
+def _discover_and_match(active_platforms: dict = None) -> Dict[int, Dict]:
+    """获取活跃平台列表（统一数据源）
 
     返回: {website_id: {name, base_url}, ...}
     排除学习通（website_id=4），学习通使用单独的扫描函数
+
+    active_platforms: 调用方注入（routers/scan.py 从 domain_monitor 取），
+    缺省时向后兼容 lazy 导入。
     """
-    from api.services.domain_monitor import get_active_platforms
-    platforms = get_active_platforms()
+    if active_platforms is None:
+        from api.services.domain_monitor import get_active_platforms
+        platforms = get_active_platforms()
+    else:
+        platforms = active_platforms
     if not platforms:
         logger.warning("平台发现失败，使用默认配置")
         return {wid: v for wid, v in WEBSITES.items() if wid != 4}
