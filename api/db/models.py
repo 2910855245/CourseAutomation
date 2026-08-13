@@ -68,9 +68,6 @@ class User(Base):
     nickname: Mapped[str] = mapped_column(S, default="")
     contact: Mapped[str] = mapped_column(S, default="")
     role: Mapped[str] = mapped_column(S, default="customer")
-    balance: Mapped[float] = mapped_column(Float, default=0.0)
-    total_spent: Mapped[float] = mapped_column(Float, default=0.0)
-    order_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[str] = mapped_column(S, nullable=False)
     last_login: Mapped[Optional[str]] = mapped_column(S, nullable=True)
     deleted_at: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
@@ -107,19 +104,6 @@ class Order(Base):
     started_at: Mapped[Optional[str]] = mapped_column(S, nullable=True)
     finished_at: Mapped[Optional[str]] = mapped_column(S, nullable=True)
     deleted_at: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
-
-
-class WalletTransaction(Base):
-    __tablename__ = "wallet_transactions"
-
-    tx_id: Mapped[str] = mapped_column(S, primary_key=True)
-    user_id: Mapped[str] = mapped_column(S, nullable=False, index=True)
-    amount: Mapped[float] = mapped_column(Float, nullable=False)
-    tx_type: Mapped[str] = mapped_column(S, nullable=False)
-    balance_after: Mapped[float] = mapped_column(Float, default=0.0)
-    note: Mapped[str] = mapped_column(Text, default="")
-    order_id: Mapped[Optional[str]] = mapped_column(S, nullable=True)
-    created_at: Mapped[str] = mapped_column(S, nullable=False)
 
 
 class PlatformSetting(Base):

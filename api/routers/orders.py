@@ -35,42 +35,17 @@ def _scan_task_dirs() -> dict:
     return cache
 
 
-def _read_status_from_cache(cache: dict, sf: str) -> Optional[Dict[str, Any]]:
-    """从缓存中读取状态文件的进度信息"""
-    info = cache.get(sf)
-    if not info:
-        return None
-    data = info["data"]
-    if data.get("done") and data.get("success"):
-        return {"progress": 100, "item": "刷课完成"}
-    pct = data.get("video_pct", 0)
-    if pct == 0:
-        done = data.get("video_done", 0)
-        total = data.get("video_total", 0)
-        if total > 0:
-            pct = round(done / total * 100)
-    return {"progress": pct, "item": data.get("message", "")}
-
-
 def _inject_task_progress(orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    from services.task_manager import manager as task_manager
-    from services.task_manager import recovered_order_mappings
+    """订单进度注入：队列任务 → 状态文件两级回退（无 task_manager 后简化）"""
     from services.task_queue import school_queue, chaoxing_queue
+    from api.startup import get_recovered_order_mappings
+    recovered = get_recovered_order_mappings()
 
     task_dir_cache = _scan_task_dirs()
 
     for o in orders:
         if o.get("status") == "running":
             oid = o.get("order_id", "")
-            tid = o.get("task_id", "")
-
-            if tid:
-                task = task_manager.get_task(tid)
-                if task:
-                    o["progress"] = task.progress
-                    o["current_item"] = task.current_item
-                    continue
-
             job = school_queue.get_job_by_order_id(oid) or chaoxing_queue.get_job_by_order_id(oid)
             if job:
                 o["progress"] = job.progress
@@ -78,14 +53,6 @@ def _inject_task_progress(orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 if job.status == "waiting":
                     o["status"] = "waiting"
                 continue
-
-            if oid in recovered_order_mappings:
-                result = _read_status_from_cache(task_dir_cache, recovered_order_mappings[oid])
-                if result:
-                    o["progress"] = result["progress"]
-                    o["current_item"] = result["item"]
-                    continue
-
             o["progress"] = 0
         elif o.get("status") == "completed":
             o["progress"] = 100
@@ -254,15 +221,6 @@ def create_batch_orders(
         },
     )
 
-
-@router.post("/pay", response_model=ApiResponse)
-def pay_orders(current_user: dict = Depends(get_optional_user)):
-    uid = current_user["user_id"] if current_user["user_id"] != "guest" else None
-    if not uid:
-        raise HTTPException(status_code=401, detail="请先登录")
-    result = db.pay_user_orders(uid)
-    if result.get("error"):
-        return ApiResponse(success=False, message=result["error"], data=result)
 
     from services.order_service import enqueue_paid_orders
     enqueue_paid_orders(result.get("paid_order_ids", []))

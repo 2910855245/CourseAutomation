@@ -11,10 +11,6 @@ class TaskType(str, Enum):
     CHAOXING_POINTS = "chaoxing_points"
 
 
-class CaptchaMixin(BaseModel):
-    captcha_token: str = Field(default="", description="验证码token")
-    captcha_answer: str = Field(default="", description="验证码答案")
-
 
 class CreateOrderRequest(BaseModel):
     model_config = {"json_schema_extra": {
@@ -46,30 +42,7 @@ class AcceptOrderRequest(BaseModel):
     admin_note: str = Field(default="", max_length=500, description="管理员备注")
 
 
-class RegisterRequest(CaptchaMixin):
-    model_config = {"json_schema_extra": {
-        "examples": [{
-            "username": "new_user",
-            "password": "mypassword123",
-            "nickname": "小明",
-            "contact": "wx_ming",
-        }]
-    }}
-    username: str = Field(..., min_length=3, max_length=32, description="用户名")
-    password: str = Field(..., min_length=6, max_length=200, description="密码")
-    nickname: str = Field(default="", max_length=50, description="昵称")
-    contact: str = Field(default="", max_length=200, description="联系方式(微信/手机)")
 
-
-class UserLoginRequest(CaptchaMixin):
-    username: str = Field(..., description="用户名")
-    password: str = Field(..., description="密码")
-
-
-class TopUpRequest(BaseModel):
-    user_id: str = Field(..., max_length=30, description="用户ID")
-    amount: float = Field(..., gt=0, description="充值金额(元)")
-    note: str = Field(default="", max_length=500, description="备注")
 
 
 class CourseDetail(BaseModel):

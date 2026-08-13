@@ -60,7 +60,6 @@ from api.auth import get_current_admin
 from api.models import ApiResponse
 from api.routers import (
     admin,
-    admin_users,
     captcha,
     config_admin,
     orders,
@@ -69,7 +68,6 @@ from api.routers import (
     progress,
     queue,
     scan,
-    users,
     ypay_admin,
     ypay_app,
     ypay_routes,
@@ -205,10 +203,8 @@ async def no_cache_middleware(request: Request, call_next):
 
 app.include_router(scan.router)
 app.include_router(progress.router)
-app.include_router(users.router)
 app.include_router(orders.router)
 app.include_router(admin.router)
-app.include_router(admin_users.router)
 app.include_router(queue.router)
 app.include_router(payment.router)
 app.include_router(ypay_routes.router)
@@ -267,25 +263,12 @@ def api_info():
 
 @app.get("/api/system/status")
 def system_status(admin: dict = Depends(get_current_admin)):
-    from services.task_manager import manager as tm
     from services.task_queue import get_combined_stats
-    tasks = tm.list_tasks()
-    running = sum(1 for t in tasks if t.status == "running")
-    pending = sum(1 for t in tasks if t.status == "pending")
-    completed = sum(1 for t in tasks if t.status == "completed")
-    failed = sum(1 for t in tasks if t.status == "failed")
 
     from api.database import db
     order_stats = db.get_stats()
 
     return {
-        "tasks": {
-            "running": running,
-            "pending": pending,
-            "completed": completed,
-            "failed": failed,
-            "total": len(tasks),
-        },
         "queue": get_combined_stats(),
         "orders": order_stats,
         "rate_limit": {

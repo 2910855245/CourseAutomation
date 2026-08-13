@@ -7,20 +7,20 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import delete, select, update, func, or_
 
 from api.db._base import _db_logger
-from api.utils import gen_id
+
 
 logger = _db_logger
 
 # Lazy-loaded model references - resolved at first method call
-_User = _WalletTransaction = None
+_User = None
 
 
 def _resolve_models():
-    global _User, _WalletTransaction
+    global _User
     if _User is None:
-        from api.db.models import User, WalletTransaction
-        _User, _WalletTransaction = User, WalletTransaction
-    return _User, _WalletTransaction
+        from api.db.models import User
+        _User = User
+    return _User, None
 
 
 def _user_to_dict(user) -> Dict[str, Any]:
@@ -91,15 +91,6 @@ class UserDBMixin:
                 select(User).filter(or_(User.user_id == login_name, User.username == login_name))
             ).first()
             return _user_to_dict(user) if user else None
-        finally:
-            session.close()
-
-    def get_user_balance(self, user_id: str) -> float:
-        User, _ = _resolve_models()
-        session = self._get_session()
-        try:
-            user = session.scalars(select(User).filter(User.user_id == user_id)).first()
-            return user.balance if user else 0.0
         finally:
             session.close()
 
@@ -175,78 +166,6 @@ class UserDBMixin:
             if not include_deleted:
                 stmt = stmt.where(User.deleted_at.is_(None))
             return session.scalar(stmt)
-        finally:
-            session.close()
-
-    def get_user_stats(self) -> Dict[str, Any]:
-        User, _ = _resolve_models()
-        session = self._get_session()
-        try:
-            total = session.scalar(select(func.count(User.user_id)))
-            admins = session.scalar(select(func.count(User.user_id)).filter(User.role == "admin"))
-            customers = session.scalar(select(func.count(User.user_id)).filter(User.role == "customer"))
-            total_balance = session.scalar(select(func.coalesce(func.sum(User.balance), 0.0)))
-            total_spent = session.scalar(select(func.coalesce(func.sum(User.total_spent), 0.0)))
-            return {
-                "total": total,
-                "admins": admins,
-                "customers": customers,
-                "total_balance": round(float(total_balance), 2),
-                "total_spent": round(float(total_spent), 2),
-            }
-        finally:
-            session.close()
-
-    def update_user_balance(self, user_id: str, amount: float,
-                            tx_type: str, note: str = "",
-                            order_id: str = None) -> bool:
-        """原子余额变更：条件 UPDATE（SQLite 下 with_for_update 无效，RMW 有竞态）"""
-        User, WalletTransaction = _resolve_models()
-        session = self._get_session()
-        try:
-            # 负数变更需校验余额充足（如扣款），正数无条件累加
-            if amount < 0:
-                updated = session.execute(update(User).filter(
-                    User.user_id == user_id,
-                    User.balance >= -amount,
-                ).values(balance=User.balance + amount)).rowcount
-                if not updated:
-                    session.rollback()
-                    return False
-            else:
-                updated = session.execute(update(User).filter(
-                    User.user_id == user_id,
-                ).values(balance=User.balance + amount)).rowcount
-                if not updated:
-                    session.rollback()
-                    return False
-            balance_after = session.scalar(select(User.balance).filter(User.user_id == user_id))
-            tx_id = gen_id("TX")
-            tx = WalletTransaction(
-                tx_id=tx_id, user_id=user_id, amount=amount, tx_type=tx_type,
-                balance_after=balance_after, note=note, order_id=order_id,
-                created_at=datetime.now().isoformat(),
-            )
-            session.add(tx)
-            session.commit()
-            return True
-        except Exception as e:
-            logger.exception("update_user_balance 失败")
-            session.rollback()
-            raise
-        finally:
-            session.close()
-
-    def get_user_transactions(self, user_id: str, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
-        _, WalletTransaction = _resolve_models()
-        session = self._get_session()
-        try:
-            txs = session.scalars(select(WalletTransaction).filter(
-                WalletTransaction.user_id == user_id
-            ).order_by(WalletTransaction.created_at.desc()).offset(offset).limit(limit)).all()
-            return [{"tx_id": t.tx_id, "user_id": t.user_id, "amount": t.amount,
-                     "tx_type": t.tx_type, "balance_after": t.balance_after,
-                     "note": t.note, "order_id": t.order_id, "created_at": t.created_at} for t in txs]
         finally:
             session.close()
 

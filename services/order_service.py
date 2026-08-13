@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
 from loguru import logger
@@ -163,7 +164,8 @@ def enqueue_order(order_id: str, *, mark_paid: bool = False) -> bool:
     if not order:
         return False
     if mark_paid:
-        db.pay_order(order_id)
+        db.update_order(order_id, paid=True, status="paid", payment_channel="admin_free",
+                        payment_time=datetime.now().isoformat())
         order = db.get_order(order_id)
     elif order.get("status") != "paid":
         return False

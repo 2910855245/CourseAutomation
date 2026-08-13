@@ -37,8 +37,6 @@ def _setup_queue_callbacks(db, queue):
         if job.order_id:
             order = db.get_order(job.order_id)
             if order and order.get("status") not in ("completed", "cancelled"):
-                if order["user_id"]:
-                    db.increment_user_order_stats(order["user_id"], order["price"])
                 db.complete_order(job.order_id)
                 logger.info(f"订单完成 order_id={job.order_id}")
                 _push_event("order_update", {"order_id": job.order_id, "status": "completed"})
@@ -63,8 +61,6 @@ def _setup_queue_callbacks(db, queue):
                 except Exception:
                     pass
             if not has_active_jobs:
-                if order.get("paid") and order["status"] not in ("failed", "completed", "cancelled"):
-                    db.refund_order(job.order_id, note=f"订单 {job.order_id} 失败退款")
                 db.fail_order(job.order_id, error=job.error_message or "任务执行失败")
                 logger.error(f"订单失败 order_id={job.order_id} error={job.error_message}")
                 _push_event("order_update", {"order_id": job.order_id, "status": "failed"})
@@ -161,6 +157,14 @@ def _recovered_monitor(db, order_id, status_file):
     shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+_recovered_order_mappings: dict = {}
+
+
+def get_recovered_order_mappings() -> dict:
+    """订单 → 状态文件路径映射（重启恢复后供进度注入使用）"""
+    return _recovered_order_mappings
+
+
 def _recover_running_orders(db):
     time.sleep(5)
     try:
@@ -168,7 +172,6 @@ def _recover_running_orders(db):
         if not running_orders:
             return
         logger.info(f"恢复运行中订单监控 count={len(running_orders)}")
-        from services.task_manager import recovered_order_mappings
         from services.task_queue import school_queue, chaoxing_queue
         used_status_files = set()
         for order in running_orders:
@@ -179,7 +182,7 @@ def _recover_running_orders(db):
             existing_job = school_queue.get_job_by_order_id(oid) or chaoxing_queue.get_job_by_order_id(oid)
             if existing_job and existing_job.status in ("pending", "running", "retrying"):
                 logger.info(f"恢复跳过-已有队列任务 order_id={oid} job_id={existing_job.job_id}")
-                recovered_order_mappings[oid] = ""
+                _recovered_order_mappings[oid] = ""
                 continue
             matched_status = None
             for sf in glob.glob("/tmp/task_*/status.json"):
@@ -200,7 +203,7 @@ def _recover_running_orders(db):
                     continue
             if matched_status:
                 used_status_files.add(matched_status)
-                recovered_order_mappings[oid] = matched_status
+                _recovered_order_mappings[oid] = matched_status
                 threading.Thread(
                     target=_recovered_monitor,
                     args=(db, oid, matched_status),
@@ -279,9 +282,6 @@ def run_startup(settings):
     # 进程上下文最先初始化（daemon 线程继承此刻的 contextvars）
     from config import init_process_context
     init_process_context()
-
-    from services.task_manager import manager as task_manager
-    task_manager.start()
 
     from services.session_pool import pool as session_pool
     session_pool.start_cleaner()

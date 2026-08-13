@@ -13,15 +13,15 @@ from api.utils import gen_id
 logger = _db_logger
 
 # Lazy-loaded model references
-_Order = _User = _WalletTransaction = _YpayOrder = None
+_Order = _User = _YpayOrder = None
 
 
 def _resolve_models():
-    global _Order, _User, _WalletTransaction, _YpayOrder
+    global _Order, _User, _YpayOrder
     if _Order is None:
-        from api.db.models import Order, User, WalletTransaction, YpayOrder
-        _Order, _User, _WalletTransaction, _YpayOrder = Order, User, WalletTransaction, YpayOrder
-    return _Order, _User, _WalletTransaction, _YpayOrder
+        from api.db.models import Order, User, YpayOrder
+        _Order, _User, _YpayOrder = Order, User, YpayOrder
+    return _Order, _User, _YpayOrder
 
 
 def _order_to_dict(order) -> dict:
@@ -63,7 +63,7 @@ class OrderDBMixin:
                      username: str, password: str, website_id: int,
                      task_type="video", course_ids=None, video_count=50,
                      exam_count=0, price=0.0, notes="", user_id="") -> Dict[str, Any]:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         order_id = gen_id("ORD")
         now = datetime.now().isoformat()
         session = self._get_session()
@@ -96,44 +96,8 @@ class OrderDBMixin:
         finally:
             session.close()
 
-    def deduct_user_balance_for_payment(self, user_id: str, amount: float,
-                                         order_id: str) -> bool:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
-        session = self._get_session()
-        try:
-            count = session.execute(update(User).filter(
-                User.user_id == user_id,
-                User.balance >= amount,
-            ).values(
-                balance=User.balance - amount,
-            )).rowcount
-            if count == 0:
-                session.rollback()
-                return False
-            now = datetime.now().isoformat()
-            tx_id = gen_id("TX")
-            tx = WalletTransaction(
-                tx_id=tx_id,
-                user_id=user_id,
-                amount=-amount,
-                tx_type="order_payment",
-                balance_after=session.scalar(select(User.balance).filter(User.user_id == user_id)),
-                note=f"订单 {order_id} 支付",
-                order_id=order_id,
-                created_at=now,
-            )
-            session.add(tx)
-            session.commit()
-            return True
-        except Exception as e:
-            logger.exception("deduct_user_balance_for_payment 失败")
-            session.rollback()
-            raise
-        finally:
-            session.close()
-
     def get_order(self, order_id: str) -> Optional[Dict[str, Any]]:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         session = self._get_session()
         try:
             order = session.scalars(select(Order).filter(Order.order_id == order_id)).first()
@@ -147,7 +111,7 @@ class OrderDBMixin:
                     sort_by: str = "created_at",
                     sort_dir: str = "desc",
                     limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         _ALLOWED_SORT_FIELDS = {
             "created_at", "updated_at", "price", "status", "username",
             "customer_name", "order_id", "finished_at", "payment_time",
@@ -181,7 +145,7 @@ class OrderDBMixin:
     def count_orders(self, status: Optional[str] = None,
                      user_id: Optional[str] = None,
                      search: Optional[str] = None) -> int:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         session = self._get_session()
         try:
             stmt = select(func.count(Order.order_id))
@@ -201,7 +165,7 @@ class OrderDBMixin:
             session.close()
 
     def update_order(self, order_id: str, **fields) -> bool:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         if not fields:
             return False
         if "course_ids" in fields and isinstance(fields["course_ids"], list):
@@ -220,7 +184,7 @@ class OrderDBMixin:
             session.close()
 
     def _update_order_if_status(self, order_id: str, expected_status, **fields) -> bool:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         fields["updated_at"] = datetime.now().isoformat()
         session = self._get_session()
         try:
@@ -240,7 +204,7 @@ class OrderDBMixin:
             session.close()
 
     def accept_order(self, order_id: str, admin_note: str = "") -> bool:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         return self._update_order_if_status(
             order_id, "pending",
             status="accepted",
@@ -249,7 +213,7 @@ class OrderDBMixin:
         )
 
     def start_order(self, order_id: str, task_id: str) -> bool:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         return self._update_order_if_status(
             order_id, ("paid", "accepted", "queued", "retrying"),
             status="running", task_id=task_id,
@@ -257,7 +221,7 @@ class OrderDBMixin:
         )
 
     def complete_order(self, order_id: str) -> bool:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         # 也允许 cancelled 状态的订单恢复为 completed（任务完成后自动恢复）
         return self._update_order_if_status(
             order_id, ("pending", "running", "paid", "cancelled", "accepted"),
@@ -266,7 +230,7 @@ class OrderDBMixin:
         )
 
     def fail_order(self, order_id: str, error: str = "") -> bool:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         return self._update_order_if_status(
             order_id, ("pending", "running", "paid", "cancelled", "accepted"),
             status="failed",
@@ -275,7 +239,7 @@ class OrderDBMixin:
         )
 
     def cancel_order(self, order_id: str) -> bool:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         return self._update_order_if_status(
             order_id, "pending",
             status="cancelled",
@@ -283,7 +247,7 @@ class OrderDBMixin:
         )
 
     def auto_cancel_expired_pending(self, minutes: int = 5) -> int:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         session = self._get_session()
         try:
             cutoff = (datetime.now() - timedelta(minutes=minutes)).isoformat()
@@ -305,7 +269,7 @@ class OrderDBMixin:
             session.close()
 
     def clear_history_orders(self, user_id: Optional[str] = None) -> int:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         session = self._get_session()
         try:
             now = datetime.now().isoformat()
@@ -330,111 +294,8 @@ class OrderDBMixin:
         finally:
             session.close()
 
-    def pay_order(self, order_id: str) -> bool:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
-        session = self._get_session()
-        try:
-            order = session.scalars(select(Order).filter(Order.order_id == order_id).with_for_update()).first()
-            if not order:
-                return False
-            if order.paid:
-                return True
-            now = datetime.now().isoformat()
-            # user_id 为空时（管理员/匿名下单），直接标记已付，不扣余额
-            if not order.user_id:
-                order.paid = True
-                order.status = "paid"
-                order.payment_channel = "admin_free"
-                order.payment_time = now
-                order.updated_at = now
-                session.commit()
-                return True
-            user = session.scalars(select(User).filter(User.user_id == order.user_id)).first()
-            if not user:
-                return False
-            is_vip = user.role == "admin"
-            if not is_vip:
-                # 原子扣款：SQLite 下 with_for_update 无效，用条件 UPDATE 防超扣
-                updated = session.execute(update(User).filter(
-                    User.user_id == order.user_id,
-                    User.balance >= order.price,
-                ).values(balance=User.balance - order.price)).rowcount
-                if not updated:
-                    session.rollback()
-                    return False
-                session.add(WalletTransaction(
-                    tx_id=f"TX-{uuid.uuid4().hex[:8].upper()}", user_id=order.user_id, amount=-order.price,
-                    tx_type="order_payment",
-                    balance_after=session.scalar(select(User.balance).filter(User.user_id == order.user_id)),
-                    note=f"订单 {order_id} 支付", order_id=order_id, created_at=now,
-                ))
-            order.paid = True
-            order.status = "paid"
-            order.payment_channel = "balance" if not is_vip else "vip_free"
-            order.payment_time = now
-            order.updated_at = now
-            session.commit()
-            return True
-        except Exception as e:
-            logger.exception("pay_order 失败")
-            session.rollback()
-            return False
-        finally:
-            session.close()
-
-    def pay_user_orders(self, user_id: str) -> Dict[str, Any]:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
-        session = self._get_session()
-        try:
-            orders = session.scalars(select(Order).filter(
-                Order.user_id == user_id,
-                Order.paid == False,
-                Order.status == "pending",
-)).all()
-            unpaid = [o for o in orders]
-            if not unpaid:
-                return {"paid": 0, "total_price": 0, "failed": 0}
-            user = session.scalars(select(User).filter(User.user_id == user_id).with_for_update()).first()
-            if not user:
-                return {"paid": 0, "total_price": 0, "failed": 0}
-            is_vip = user.role == "admin"
-            total = sum(o.price for o in unpaid)
-            if not is_vip and user.balance < total:
-                return {"paid": 0, "total_price": round(total, 2), "failed": len(unpaid),
-                        "error": f"余额不足，需要 ¥{total:.2f}，当前余额 ¥{user.balance:.2f}"}
-            paid_order_ids = []
-            now = datetime.now().isoformat()
-            for o in unpaid:
-                if not is_vip:
-                    user.balance -= o.price
-                o.paid = True
-                o.status = "paid"
-                o.payment_time = now
-                o.payment_channel = "balance" if not is_vip else "vip_free"
-                paid_order_ids.append(o.order_id)
-                if not is_vip:
-                    tx = WalletTransaction(
-                        tx_id=f"TX-{uuid.uuid4().hex[:8].upper()}",
-                        user_id=user_id,
-                        amount=-o.price,
-                        tx_type="order_payment",
-                        balance_after=user.balance,
-                        note=f"订单 {o.order_id} 支付",
-                        order_id=o.order_id,
-                        created_at=now,
-                    )
-                    session.add(tx)
-            session.commit()
-            return {"paid": len(unpaid), "total_price": round(total, 2), "failed": 0, "paid_order_ids": paid_order_ids}
-        except Exception as e:
-            logger.exception("pay_user_orders 失败")
-            session.rollback()
-            raise
-        finally:
-            session.close()
-
     def get_stats(self) -> Dict[str, Any]:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         session = self._get_session()
         try:
             rows = session.execute(
@@ -461,20 +322,12 @@ class OrderDBMixin:
             session.close()
 
     def get_dashboard_stats(self) -> Dict[str, Any]:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         session = self._get_session()
         try:
             now = datetime.now()
             today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
             week_start = (now - timedelta(days=7)).isoformat()
-
-            total_users = session.scalar(select(func.count(User.user_id))) or 0
-            new_users_today = session.scalar(select(func.count(User.user_id)).filter(
-                User.created_at >= today_start
-            )) or 0
-            new_users_week = session.scalar(select(func.count(User.user_id)).filter(
-                User.created_at >= week_start
-            )) or 0
 
             total_orders = session.scalar(select(func.count(Order.order_id))) or 0
             orders_today = session.scalar(select(func.count(Order.order_id)).filter(
@@ -559,11 +412,6 @@ class OrderDBMixin:
             )) or 0
 
             return {
-                "users": {
-                    "total": total_users,
-                    "new_today": new_users_today,
-                    "new_week": new_users_week,
-                },
                 "orders": {
                     "total": total_orders,
                     "today": orders_today,
@@ -599,7 +447,7 @@ class OrderDBMixin:
 
     def complete_order_full(self, order_id: str, payment_trade_no: str = "",
                              payment_channel: str = "") -> bool:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         now = datetime.now().isoformat()
         return self.update_order(
             order_id, status="completed", paid=True,
@@ -610,7 +458,7 @@ class OrderDBMixin:
 
     def confirm_payment(self, order_id: str, payment_trade_no: str = "",
                          payment_channel: str = "") -> bool:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         now = datetime.now().isoformat()
         session = self._get_session()
         try:
@@ -634,7 +482,7 @@ class OrderDBMixin:
 
     def claim_payment_processing(self, order_id: str) -> bool:
         """支付处理幂等闸门：unprocessed → processing，并发下只有一次返回 True"""
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         session = self._get_session()
         try:
             updated = session.execute(update(Order).filter(
@@ -651,7 +499,7 @@ class OrderDBMixin:
             session.close()
 
     def mark_payment_processed(self, order_id: str) -> bool:
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         return self.update_order(order_id, paid_processed="processed")
 
     def admin_reset_and_mark_paid(self, order_id: str) -> bool:
@@ -667,20 +515,12 @@ class OrderDBMixin:
                               payment_time=datetime.now().isoformat())
         return True
 
-    def refund_order(self, order_id: str, note: str = "自动退款") -> bool:
-        """已付订单退款（余额退回 + 流水），条件 UPDATE 原子扣款反向操作"""
-        order = self.get_order(order_id)
-        if not order or not order.get("paid") or order["price"] <= 0 or not order.get("user_id"):
-            return False
-        return self.update_user_balance(order["user_id"], order["price"], "order_refund",
-                                        note=note, order_id=order_id)
-
     def recover_stuck_paid_processing(self, minutes: int = 10) -> int:
         """启动时回收卡死的支付处理状态：claim 后进程崩溃会永久停在 processing。
 
         只回收"未支付成功且超过 N 分钟未更新"的订单，避免误伤处理中的回调。
         """
-        Order, User, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, YpayOrder = _resolve_models()
         cutoff = (datetime.now() - timedelta(minutes=minutes)).isoformat()
         session = self._get_session()
         try:

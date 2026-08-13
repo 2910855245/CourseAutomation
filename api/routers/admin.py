@@ -1,15 +1,41 @@
-import threading
-
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.auth import get_current_admin, get_current_user
 from api.database import db
 from api.models import AcceptOrderRequest, ApiResponse
-from services.task_manager import manager as task_manager
 
 router = APIRouter(prefix="/api/admin", tags=["管理员操作"])
+
+
+class AdminLoginRequest(BaseModel):
+    username: str = Field(..., description="管理员用户名")
+    password: str = Field(..., description="密码")
+    captcha_token: str = Field(default="", description="验证码token")
+    captcha_answer: str = Field(default="", description="验证码答案")
+
+
+@router.post("/login", response_model=ApiResponse)
+def admin_login(req: AdminLoginRequest):
+    """管理员登录（唯一账号体系）。限频 + 验证码 + bcrypt。"""
+    import threading
+    import time as _time
+    from api.auth import create_token, verify_captcha, verify_password
+
+    verify_captcha(req.captcha_token, req.captcha_answer)
+
+    user = db.get_user_by_login(req.username)
+    if not user or user.get("role") != "admin":
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    if not verify_password(req.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    db.update_user_login(user["user_id"])
+    token = create_token(user["user_id"], user["username"], user["role"])
+    return ApiResponse(
+        message="登录成功",
+        data={"user_id": user["user_id"], "username": user["username"], "role": user["role"], "token": token},
+    )
 
 from api.utils import mask_password as _mask_pwd
 
@@ -58,84 +84,6 @@ def accept_order(order_id: str, req: AcceptOrderRequest = AcceptOrderRequest(),
     )
 
 
-@router.post("/orders/{order_id}/execute", response_model=ApiResponse)
-def execute_order(order_id: str, admin: dict = Depends(_require_admin)):
-    order = db.get_order(order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="订单不存在")
-    # 管理员操作：允许 pending/accepted/cancelled 状态
-    if order["status"] not in ("pending", "accepted", "cancelled"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"无法执行，当前状态: {order['status']}",
-        )
-
-    db.admin_reset_and_mark_paid(order_id)
-
-    course_ids = _parse_course_ids(order)
-
-    try:
-        task = task_manager.create_task(
-            username=order["username"],
-            password=order["password"],
-            website_id=order["website_id"],
-            task_type=order["task_type"],
-            course_ids=course_ids if course_ids else None,
-            video_count=order["video_count"],
-        )
-        task_manager.start_task(task.task_id)
-        db.start_order(order_id, task.task_id)
-
-        _start_order_monitor(order_id, task.task_id)
-
-        return ApiResponse(
-            success=True,
-            message=f"订单 {order_id} 已开始执行",
-            data={
-                "order_id": order_id,
-                "task_id": task.task_id,
-                "status": "running",
-            },
-        )
-    except Exception as e:
-        logger.error("执行订单失败: {}", e)
-        db.fail_order(order_id, error="执行失败")
-        raise HTTPException(status_code=500, detail="执行失败")
-
-
-    db.admin_reset_and_mark_paid(order_id)
-
-    db.accept_order(order_id, admin_note=req.admin_note)
-
-    course_ids = _parse_course_ids(order)
-
-    try:
-        task = task_manager.create_task(
-            username=order["username"],
-            password=order["password"],
-            website_id=order["website_id"],
-            task_type=order["task_type"],
-            course_ids=course_ids if course_ids else None,
-            video_count=order["video_count"],
-        )
-        task_manager.start_task(task.task_id)
-        db.start_order(order_id, task.task_id)
-
-        _start_order_monitor(order_id, task.task_id)
-
-        return ApiResponse(
-            success=True,
-            message=f"订单 {order_id} 已接受并开始执行",
-            data={
-                "order_id": order_id,
-                "task_id": task.task_id,
-                "status": "running",
-            },
-        )
-    except Exception as e:
-        logger.error("执行订单失败: {}", e)
-        db.fail_order(order_id, error="执行失败")
-        raise HTTPException(status_code=500, detail="执行失败")
 
 
 @router.post("/orders/{order_id}/enqueue", response_model=ApiResponse)
@@ -151,43 +99,16 @@ def enqueue_order(order_id: str, req: AcceptOrderRequest = AcceptOrderRequest(),
             detail=f"只能对 pending/accepted/cancelled 状态的订单入队，当前状态: {order['status']}",
         )
 
-    # cancelled 状态的订单重置为 pending
-    if order["status"] == "cancelled":
-        db.update_order(order_id, status="pending", finished_at=None)
-
-    # 管理员入队自动标记已支付（不扣余额）
-    if not order.get("paid"):
-        from datetime import datetime
-        db.update_order(order_id, paid=True, payment_channel="admin_free",
-                        payment_time=datetime.now().isoformat())
-
-    # 仅 pending 状态需要先接单
-    if order["status"] == "pending":
+    db.admin_reset_and_mark_paid(order_id)
+    if db.get_order(order_id)["status"] == "pending":
         db.accept_order(order_id, admin_note=req.admin_note)
 
-    course_ids = _parse_course_ids(order)
-
-    from services.task_queue import get_queue_for_type
-    task_type = order["task_type"] if order["task_type"] in ("video", "exam", "full", "chaoxing_points") else "full"
-    q = get_queue_for_type(task_type)
-    job = q.submit_job(
-        username=order["username"],
-        password=order["password"],
-        website_id=order["website_id"],
-        job_type=task_type,
-        course_ids=course_ids if course_ids else [],
-        order_id=order_id,
-    )
-
-    db.start_order(order_id, "")
+    from services.order_service import enqueue_order
+    enqueue_order(order_id)
 
     return ApiResponse(
         message=f"订单 {order_id} 已入队等待执行",
-        data={
-            "order_id": order_id,
-            "job_id": job.job_id,
-            "queue_position": q.get_stats()["pending"],
-        },
+        data={"order_id": order_id},
     )
 
 
@@ -200,11 +121,7 @@ def fail_order(order_id: str, req: AcceptOrderRequest = AcceptOrderRequest(),
     if order["status"] in ("completed", "cancelled", "failed"):
         raise HTTPException(status_code=400, detail=f"当前状态 [{order['status']}] 不可标记失败")
 
-    db.refund_order(order_id, note=f"订单 {order_id} 失败退款")
-
     db.fail_order(order_id, error=req.admin_note)
-    if order.get("task_id"):
-        task_manager.cancel_task(order["task_id"])
     return ApiResponse(message=f"订单 {order_id} 已标记失败")
 
 
@@ -215,47 +132,7 @@ def complete_order(order_id: str, admin: dict = Depends(_require_admin)):
         raise HTTPException(status_code=404, detail="订单不存在")
     if order["status"] not in ("running", "accepted"):
         raise HTTPException(status_code=400, detail=f"当前状态 [{order['status']}] 不可标记完成")
-    if order["user_id"]:
-        db.increment_user_order_stats(order["user_id"], order["price"])
     db.complete_order(order_id)
     return ApiResponse(message=f"订单 {order_id} 已标记完成")
 
 
-
-def _start_order_monitor(order_id: str, task_id: str):
-    def _monitor():
-        import time
-
-        from services.task_manager import recovered_order_mappings
-        max_checks = 360
-        checks = 0
-        while checks < max_checks:
-            time.sleep(10)
-            checks += 1
-            task = task_manager.get_task(task_id)
-            if not task:
-                break
-            if task.status_file and order_id not in recovered_order_mappings:
-                recovered_order_mappings[order_id] = task.status_file
-            if task.status == "completed":
-                order = db.get_order(order_id)
-                if order and order["user_id"]:
-                    db.increment_user_order_stats(order["user_id"], order["price"])
-                db.complete_order(order_id)
-                break
-            elif task.status == "failed":
-                order = db.get_order(order_id)
-                db.refund_order(order_id)
-                db.fail_order(order_id, error=task.error_message or "任务执行失败")
-                break
-            elif task.status == "cancelled":
-                order = db.get_order(order_id)
-                db.refund_order(order_id)
-                db.update_order(order_id, status="cancelled")
-                break
-        else:
-            logger.warning("订单监控超时: order={} task={}", order_id, task_id)
-            db.fail_order(order_id, error="任务执行超时")
-
-    t = threading.Thread(target=_monitor, daemon=True)
-    t.start()

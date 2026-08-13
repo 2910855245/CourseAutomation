@@ -28,7 +28,7 @@ import re as _re
 
 # 白名单：只允许已知表名，防止 SQL 注入
 _KNOWN_TABLES = {
-    "users", "orders", "wallet_transactions", "audit_logs",
+    "users", "orders", "audit_logs",
     "ypay_account", "ypay_order", "ypay_config",
     "pricing_config", "ads", "sub_admins", "login_logs", "risk_config",
     "risk_blacklist", "risk_logs", "task_queue", "study_records",
@@ -236,9 +236,6 @@ def _user_to_dict(user: User) -> Dict[str, Any]:
         "nickname": user.nickname,
         "contact": user.contact,
         "role": user.role,
-        "balance": user.balance,
-        "total_spent": user.total_spent,
-        "order_count": user.order_count,
         "created_at": user.created_at,
         "last_login": user.last_login,
     }
