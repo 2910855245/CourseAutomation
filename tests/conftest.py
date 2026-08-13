@@ -102,24 +102,3 @@ def sample_user(db):
         nickname="测试用户",
     )
     return user
-
-
-@pytest.fixture
-def sample_agent(db):
-    """Create a sample agent user."""
-    from api.auth import hash_password
-    from api.database import db as database
-
-    database.create_user(
-        username="testagent",
-        password_hash=hash_password("agent123"),
-        role="user",
-        nickname="测试代理",
-    )
-    # Create agent profile
-    database.create_agent(
-        user_id="testagent",
-        tier_level=1,
-        referral_code="AGENT001",
-    )
-    return "testagent"

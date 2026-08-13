@@ -134,6 +134,50 @@ class TestPaymentIdempotency:
         assert order["status"] == 1
 
 
+class TestPaidProcessedIdempotency:
+    """paid_processed 支付处理幂等列的三段式互斥测试"""
+
+    def _make_order(self, database):
+        return database.create_order(
+            username="idem_user",
+            password="idem_pass",
+            website_id=1,
+            task_type="video",
+            price=10.0,
+        )
+
+    def test_claim_payment_processing_idempotency(self, db):
+        from api.database import db as database
+
+        order = self._make_order(database)
+        order_id = order["order_id"]
+        assert order["paid_processed"] == "unprocessed"
+
+        # 第一次 claim 成功
+        assert database.claim_payment_processing(order_id) is True
+        assert database.get_order(order_id)["paid_processed"] == "processing"
+
+        # 第二次 claim 失败（互斥）
+        assert database.claim_payment_processing(order_id) is False
+
+        # mark 后为 processed
+        assert database.mark_payment_processed(order_id) is True
+        assert database.get_order(order_id)["paid_processed"] == "processed"
+
+        # processed 后 claim 仍失败
+        assert database.claim_payment_processing(order_id) is False
+
+    def test_mark_processed_duplicate_safe(self, db):
+        from api.database import db as database
+
+        order = self._make_order(database)
+        order_id = order["order_id"]
+
+        database.mark_payment_processed(order_id)
+        database.mark_payment_processed(order_id)
+        assert database.get_order(order_id)["paid_processed"] == "processed"
+
+
 class TestYPayAccountManagement:
     def test_create_account(self, db):
         from api.database import db as database
