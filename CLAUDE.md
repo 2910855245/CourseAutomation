@@ -133,4 +133,5 @@ data/
 - Sidecar services (systemd units in deploy/):
   - `rust_worker` (Rust, :17017) — 刷课循环，Python 侧经 worker.py 提交任务
   - `ocr_sidecar.py` (:17018) — ddddocr 验证码识别独立进程，主进程经 infrastructure/ocr.py HTTP 客户端调用（OcrClient.classification）
+  - `worker_pool_master.py` (:17019, 仅 Linux) — fork-COW 进程池：预热导入 worker 依赖后 fork 出任务子进程（每任务 ~35MB 而非 ~100MB）；WORKER_POOL_ENABLED=true 启用，Windows/不可达自动回退 spawn
 - Platform passwords stored in plaintext (no encryption)
