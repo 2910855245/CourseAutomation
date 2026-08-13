@@ -525,8 +525,9 @@ async fn verify_platform_progress(shared: &Shared) -> Option<u64> {
     let mut total: u64 = 0;
     let mut viewed: u64 = 0;
     for item in list {
-        total += item["duration"].as_str().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-        viewed += item["viewedDuration"].as_str().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+        // 时长格式为 "HH:MM:SS"/"MM:SS"/秒数（与 Python _parse_duration_str 一致）
+        total += crate::scan::parse_duration_secs(item["duration"].as_str().unwrap_or("0"));
+        viewed += crate::scan::parse_duration_secs(item["viewedDuration"].as_str().unwrap_or("0"));
     }
     if total == 0 { return Some(0); }
     Some(viewed * 100 / total)

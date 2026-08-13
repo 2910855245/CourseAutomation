@@ -5,6 +5,7 @@
 //! 单进程 N 并发任务内存 ~50MB（对比 Python 每任务 ~100MB 子进程）。
 
 mod cx_study;
+mod scan;
 mod study;
 
 use std::env;
@@ -65,6 +66,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/status", get(status))
         .route("/submit", post(submit))
         .route("/submit_cx", post(submit_cx))
+        .route("/submit_full", post(submit_full))
         .route("/cancel/{order_id}", post(cancel))
         .with_state(state);
 
@@ -124,6 +126,35 @@ async fn submit(
             eprintln!("[rust_worker] task {} failed: {e}", oid_for_task);
         }
         tasks.remove(&oid_for_task);
+    });
+
+    state.tasks.insert(oid_resp.clone(), handle);
+    Json(json!({"ok": true, "order_id": oid_resp}))
+}
+
+async fn submit_full(
+    State(state): State<DaemonState>,
+    Json(task): Json<scan::ScanTaskInput>,
+) -> Json<serde_json::Value> {
+    if task.order_id.is_empty() || task.cookie_str.is_empty() || task.base_url.is_empty() {
+        return Json(json!({"ok": false, "message": "order_id/cookie_str/base_url 不能为空"}));
+    }
+    if state.tasks.contains_key(&task.order_id) {
+        return Json(json!({"ok": false, "message": "任务已存在"}));
+    }
+
+    let push_url = state.push_url.clone();
+    let push_token = state.push_token.clone();
+    let tasks = state.tasks.clone();
+    let order_id = task.order_id.clone();
+    let oid_resp = task.order_id.clone();
+
+    let handle = tokio::spawn(async move {
+        let result = scan::run_scan_and_study(&task, &push_url, &push_token).await;
+        if let Err(e) = result {
+            eprintln!("[rust_worker] full task {} failed: {e}", order_id);
+        }
+        tasks.remove(&order_id);
     });
 
     state.tasks.insert(oid_resp.clone(), handle);

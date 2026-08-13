@@ -128,6 +128,44 @@ def run_task(params_file, status_file):
     from infrastructure.school.course_crawler import get_courses_with_diag
     from services.scan_service import load_course_cache, scan_course
 
+    # WORKER_RUST_SCAN：扫描+刷课全链 Rust（daemon /submit_full），本进程仅登录后提交
+    if phase == "crawl":
+        from config import settings as _rust_cfg
+        if getattr(_rust_cfg, "worker_rust_scan", False):
+            import urllib.request as _ur
+            _cids = []
+            for _c in course_ids:
+                if isinstance(_c, dict):
+                    _cids.append(str(_c.get("course_id") or _c.get("courseId") or ""))
+                else:
+                    _cids.append(str(_c))
+            _cids = [c for c in _cids if c]
+            _payload = json.dumps({
+                "order_id": params.get("order_id", os.path.basename(os.path.dirname(status_file))),
+                "username": username,
+                "password": password,
+                "base_url": base_url,
+                "cookie_str": "; ".join([f"{k}={v}" for k, v in session.cookies.items()]),
+                "course_ids": _cids,
+                "status_file": status_file,
+                "push_ws": True,
+                "ocr_url": f"{_rust_cfg.site_url.rstrip('/')}/api/internal/ocr",
+                "relogin_url": f"{_rust_cfg.site_url.rstrip('/')}/api/internal/relogin",
+            }).encode("utf-8")
+            try:
+                _req = _ur.Request(f"{_rust_cfg.rust_daemon_url}/submit_full", data=_payload,
+                                   headers={"Content-Type": "application/json"}, method="POST")
+                _resp = json.loads(_ur.urlopen(_req, timeout=5).read())
+                if _resp.get("ok"):
+                    send_status(status_file, phase="study_running", heavy_done=True,
+                                video_done=0, video_total=0,
+                                message="扫描+刷课已提交 Rust daemon")
+                    logger.info("Rust daemon 接手扫描+刷课 order_id={}", params.get("order_id", ""))
+                    return
+                logger.warning("daemon 拒绝任务，回退本地扫描: {}", _resp.get("message"))
+            except Exception as e:
+                logger.warning("daemon 不可用，回退本地扫描: {}", e)
+
     # exam 模式：跳过爬取/视频阶段，重拉课程列表后直接进入考试
     if phase == "exam":
         diag = get_courses_with_diag(session)
