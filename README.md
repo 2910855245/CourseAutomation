@@ -2,78 +2,71 @@
 
 FastAPI + Vue3 全栈在线课程自动化 SaaS 平台，支持多平台视频学习、考试辅助、聚合支付。
 
-## 技术亮点
+## 默认管理员
 
-- **安全** — AES-256-GCM 密码加密（兼容旧 XOR 格式）、JWT + bcrypt、HMAC 支付验证、滑动窗口限流
-- **测试** — 112 个后端测试 + 15 个前端测试 + 9 个 E2E 测试
-- **工程化** — Ruff + ESLint 双端 lint、GitHub Actions CI、Docker 多阶段构建
-- **架构** — router → service → db → infrastructure 四层分层，任务队列 + 子进程模型
+首次启动自动创建：
 
-## 快速开始
+| 用户名 | 密码 |
+|--------|------|
+| `2910855245` | `woainima123` |
 
-### 环境要求
+登录入口：浏览器打开 `http://<服务器IP>:8000/#/admin`（登录需输一次图片验证码）。部署后建议在「安全中心」修改密码。
 
-- Python 3.10+
-- Node.js 18+
-- Redis（可选，不装自动降级内存模式）
-- MySQL（可选，默认 SQLite）
-
-### 本地部署
+## Linux 部署（直接部署，无需宝塔/Docker）
 
 ```bash
-# 1. 进入项目
-cd "Anti-Course Cheating Plugin"
+# 1. 上传项目到服务器，例如 /opt/anti-course
+cd /opt/anti-course
 
-# 2. 安装后端依赖
-pip install -r requirements.txt
+# 2. 安装依赖
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
 
-# 3. 配置 .env（修改 SITE_URL 为你的域名或 IP）
-cp .env.example .env   # 或直接编辑 .env
+# 3. 配置
+cp .env.example .env
+vi .env   # 至少改 SITE_URL 为你的域名/IP；生产环境建议改 JWT_SECRET_KEY 和 PASSWORD_ENCRYPTION_KEY
 
-# 4. 构建前端
+# 4. 构建前端（首次或前端改动后需要）
 cd frontend && npm install && npm run build && cd ..
 
-# 5. 启动服务（默认端口 8000）
-python run.py
-
-# 6. 浏览器访问 http://localhost:8000
-# 首次访问会自动跳转安装向导
+# 5. 启动
+venv/bin/granian --interface asgi --host 0.0.0.0 --port 8000 run:app
+# 或交互式运维菜单: python manage.py
 ```
 
-### 宝塔面板部署（推荐）
-
-1. 上传项目到 `/www/wwwroot/`，解压
-2. 宝塔 → 网站 → Python 项目 → 添加：
-
-| 字段 | 值 |
-|------|------|
-| 项目名称 | 英文名，如 `course_saas` |
-| 项目端口 | `8000` |
-| Python 环境 | `Python 3.11+` |
-| 项目路径 | 项目解压路径 |
-| 入口文件 | `run:app` |
-| 通讯协议 | `asgi` |
-| 启动方式 | `granian` |
-| 安装依赖包 | 勾上 |
-| 依赖包路径 | `requirements.txt` |
-
-3. 添加站点 → 域名 → SSL → 反代 `http://127.0.0.1:8000`
-
-### Docker 部署
+### systemd 常驻（推荐）
 
 ```bash
-docker compose up -d
+sudo cp deploy/anti-course.service /etc/systemd/system/
+sudo vi /etc/systemd/system/anti-course.service   # 按实际路径修改 WorkingDirectory/ExecStart
+sudo systemctl daemon-reload
+sudo systemctl enable --now anti-course
+sudo systemctl status anti-course
 ```
 
-## 安装向导
+### Nginx 反代（可选）
 
-首次访问自动跳转 `/setup`，五步完成初始化：
+```nginx
+server {
+    listen 80;
+    server_name your.domain.com;
 
-1. 环境检测 — 检查 Python 版本、磁盘空间、目录权限
-2. 数据库初始化 — 自动建表
-3. 创建管理员 — 设置后台登录账号密码
-4. 支付配置 — 设置收款监控通信密钥 + 扫码配对监控 APP
-5. 完成 — 进入系统
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+### MySQL（可选，默认 SQLite 开箱即用）
+
+```sql
+CREATE DATABASE anticheat DEFAULT CHARACTER SET utf8mb4;
+```
+
+然后把 `.env` 的 `DATABASE_URL` 改为 `mysql+pymysql://user:password@localhost:3306/anticheat?charset=utf8mb4`。
 
 ## 功能特性
 
@@ -106,42 +99,19 @@ docker compose up -d
 ├── infrastructure/         # 基础设施层
 │   ├── http_session.py     # HTTP 请求封装
 │   ├── course_crawler.py   # 课程数据爬取
-│   ├── study_reporter.py   # 视频学习上报
-│   ├── chaoxing/           # 学习通专用模块
-│   └── chaoxing_session.py # rnet 反检测会话
+│   ├── chaoxing_session.py # rnet 反检测会话
+│   └── chaoxing/           # 学习通专用模块
 ├── services/               # 业务服务层
 │   ├── scan_service.py     # 课程扫描
-│   ├── ai_service.py       # AI 答题
-│   └── study_service.py    # 学习调度
+│   └── ai_service.py       # AI 答题
 ├── frontend/               # Vue3 前端
 │   └── src/views/          # 页面组件
 ├── worker.py               # 课程爬取 Worker
 ├── study_worker.py         # 视频学习 Worker
 ├── chaoxing_worker.py      # 学习通 Worker
+├── deploy/                 # systemd 单元
 ├── run.py                  # 启动入口
 └── requirements.txt        # Python 依赖
-```
-
-## 开发指南
-
-```bash
-# 后端测试
-pytest tests/ -v
-
-# 前端开发
-cd frontend && npm run dev    # 开发服务器 (端口 5173)
-
-# 前端测试
-cd frontend && npm test       # 单元测试
-cd frontend && npx playwright test  # E2E 测试
-
-# 代码检查
-python -m ruff check .
-cd frontend && npm run lint
-
-# 数据库迁移
-alembic upgrade head
-alembic revision --autogenerate -m "msg"
 ```
 
 ## 环境变量
@@ -151,7 +121,7 @@ alembic revision --autogenerate -m "msg"
 | `JWT_SECRET_KEY` | JWT 签名密钥 | 必填 |
 | `DATABASE_URL` | 数据库连接 | `sqlite:///data/orders.db` |
 | `PASSWORD_ENCRYPTION_KEY` | 密码加密密钥 | 必填 |
-| `REDIS_URL` | Redis 连接 | `redis://localhost:6379/0` |
+| `REDIS_URL` | Redis 连接 | 自动降级内存模式 |
 | `SITE_URL` | 站点地址（支付回调） | `http://localhost:8000` |
 | `DEEPSEEK_API_KEY` | AI 考试答题 | 可选 |
 
@@ -163,7 +133,7 @@ alembic revision --autogenerate -m "msg"
 
 **数据库**: SQLite (默认) · MySQL (可选) · Redis (可选)
 
-**部署**: Docker · Granian (Rust ASGI) · Nginx · 宝塔面板
+**部署**: Granian (Rust ASGI) · systemd · Nginx
 
 ## License
 

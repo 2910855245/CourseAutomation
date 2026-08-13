@@ -41,10 +41,10 @@ python study_worker.py   # Video study automation worker
 
 ### Backend Layers
 
-- **`api/main.py`** — FastAPI app entry, CORS, rate-limit middleware, SPA fallback, startup hooks (auto-create admin, init prices, start task queue, recover running orders)
+- **`api/main.py`** — FastAPI app entry, CORS, rate-limit middleware, SPA fallback, startup hooks (auto-create default admin 2910855245/woainima123, init prices, start task queue, recover running orders)
 - **`api/database.py`** — SQLAlchemy ORM (User, Order, WalletTransaction models) + all DB operations in a `Database` class. SQLite default, MySQL via `DATABASE_URL`
 - **`api/auth.py`** — JWT token creation/validation, bcrypt password hashing, token blacklist
-- **`api/routers/`** — Route handlers grouped by domain: `orders.py`, `payment.py`, `admin.py`, `courses.py`, `setup.py`, `ypay_routes.py`, etc.
+- **`api/routers/`** — Route handlers grouped by domain: `orders.py`, `payment.py`, `admin.py`, `ypay_routes.py`, etc.
 - **`api/services/`** — Business logic: `task_queue.py` (persistent job queue with SQLAlchemy backend), `task_runner.py` (subprocess spawner for workers), `ypay_service.py` (payment integration), `risk.py` (rate limiting/blacklist), `session_pool.py` (platform session pooling)
 - **`config.py`** — Pydantic `Settings` model loaded from `.env`. Multi-website config (`WEBSITES` dict), per-account data directories, URL management
 
@@ -56,13 +56,13 @@ Tasks are dispatched as child processes by `task_runner.py`:
 - `study_worker.py` simulates video watching by sending periodic study reports
 
 ### Infrastructure Layer (`infrastructure/`)
-Low-level crawling/reporting: `http_session.py` (HTTP wrapper with proxy support), `course_crawler.py` (course data extraction), `study_reporter.py` (video progress reporting), `captcha.py` (OCR via ddddocr), `anti_test.py` (exam answering)
+Low-level crawling/reporting: `http_session.py` (HTTP wrapper with proxy support), `course_crawler.py` (course data extraction), `captcha.py` (OCR via ddddocr), `anti_test.py` (exam answering)
 
 ### Services Layer (`services/`)
-Cross-cutting business services: `auth_service.py`, `multi_platform_auth.py` (multi-site login), `ai_service.py` (DeepSeek API for exam answers), `course_service.py`, `study_service.py`
+Cross-cutting business services: `multi_platform_auth.py` (multi-site login), `ai_service.py` (DeepSeek API for exam answers)
 
 ### Frontend (`frontend/src/`)
-Vue3 SPA with Pinia stores, Vue Router, TypeScript. Views: Home (scan+order+pay), Admin (full admin panel), Orders, Setup (first-run wizard), Payment.
+Vue3 SPA with Pinia stores, Vue Router, TypeScript. Views: Home (scan+order+pay), Admin (full admin panel), Orders, Payment.
 
 ## Key Patterns
 

@@ -37,28 +37,9 @@ cd frontend && npm install && npm run build && cd ..
 python run.py
 
 # 6. 浏览器访问 http://localhost:8000
-# 首次访问会自动跳转安装向导
 ```
 
-### 宝塔面板部署（推荐）
-
-1. 上传项目到 `/www/wwwroot/`，解压
-2. 宝塔 → 网站 → Python 项目 → 添加：
-
-| 字段 | 值 |
-|------|------|
-| 项目名称 | 英文名，如 `anti_course` |
-| 项目端口 | `8000` |
-| Python 环境 | `Python 3.11+` |
-| 项目路径 | 项目解压路径 |
-| 入口文件 | `run:app` |
-| 通讯协议 | `asgi` |
-| 启动方式 | `granian` |
-| 安装依赖包 | ✅ 勾上 |
-| 依赖包路径 | `requirements.txt` |
-
-3. 如果启动失败，终端执行：`bash fix_bt.sh <项目名>`
-4. 添加站点 → 域名 → SSL → 反代 `http://127.0.0.1:8000`
+### 命令行部署
 
 ### 命令行部署
 
@@ -69,15 +50,7 @@ python run.py
 # 或: nohup python run.py > /tmp/app.log 2>&1 &
 ```
 
-## 安装向导
-
-首次访问自动跳转 `/setup`，五步完成初始化：
-
-1. 环境检测 — 检查 Python 版本、磁盘空间、目录权限
-2. 数据库初始化 — 自动建表
-3. 创建管理员 — 设置后台登录账号密码
-4. 支付配置 — 设置收款监控通信密钥 + 扫码配对监控 APP
-5. 完成 — 进入系统
+## 支付通道配置
 
 ## 支付通道配置
 
@@ -108,7 +81,6 @@ python run.py
 │   │   ├── payment.py       # 支付 + 回调处理
 │   │   ├── ypay_routes.py   # YPay 支付通道管理
 │   │   ├── queue.py         # 任务队列
-│   │   ├── setup.py         # 安装向导
 │   │   ├── courses.py       # 课程扫描
 │   │   ├── scan.py          # 平台检测
 │   │   ├── config_admin.py  # 系统配置
@@ -148,7 +120,6 @@ python run.py
 │       ├── Admin.vue        # 管理后台（全部功能）
 
 │       ├── Orders.vue       # 订单查询
-│       ├── Setup.vue        # 安装向导
 │       └── Payment.vue      # 支付页
 ├── static/                  # 前端构建产物
 │   └── ypay-monitor.apk     # 收款监控 APP
@@ -168,7 +139,6 @@ python run.py
 - **任务队列**：实时任务状态、暂停/恢复、最大并发调整
 - **支付收款**：支付通道增删改查、通道测试、配置管理
 - **代理设置**：隧道代理开关、连接测试、使用教程
-- **广告管理**：首页广告位（最多 5 个）
 - **安全设置**：修改密码
 
 ## 手机 APP 配对
@@ -196,28 +166,3 @@ python run.py
 | REDIS_URL | redis://localhost:6379/0 | Redis，留空自动降级 |
 | SITE_URL | http://localhost:8000 | 站点地址（支付回调用） |
 
-## 开发指南
-
-```bash
-# 后端测试（112 个）
-python -m pytest tests/ -v
-
-# 前端单元测试（15 个）
-cd frontend && npm test
-
-# E2E 测试（9 个，需先启动后端）
-cd frontend && npx playwright test
-
-# 代码检查
-python -m ruff check .
-cd frontend && npm run lint
-
-# Docker 构建
-docker compose up -d
-```
-
-### CI 流水线
-
-推送到 `main` 分支或创建 PR 时自动运行：
-- **backend** — ruff check → pip install → pytest
-- **frontend** — npm ci → eslint → vitest → vite build

@@ -90,7 +90,7 @@ python run.py
 - **`api/db/`** — DB submodules: `models.py` (ORM models, dynamic queue job models `SchoolJobModel`/`ChaoxingJobModel`), `order_db.py`, `payment_db.py`, `config_db.py`, `user_db.py`
 - **`api/auth.py`** — JWT create/verify, bcrypt password hashing, token blacklist (memory + Redis fallback)
 - **`api/crypto.py`** — AES-256-GCM password encryption (backward-compatible XOR)
-- **`api/routers/`** — Route handlers by domain: `orders.py`, `payment.py`, `admin.py`, `courses.py`, `setup.py`, `ypay_routes.py`, `ypay_vmq.py`, `ypay_app.py`, `wallet.py`, `pricing.py`, `users.py`, `tasks.py`, `captcha.py`, `domain_monitor.py`, `health.py`, `scan.py`, `progress.py`, `queue.py`, `accounts.py`
+- **`api/routers/`** — Route handlers by domain: `orders.py`, `payment.py`, `admin.py`, `ypay_routes.py`, `ypay_vmq.py`, `ypay_app.py`, `wallet.py`, `pricing.py`, `users.py`, `captcha.py`, `domain_monitor.py`, `scan.py`, `progress.py`, `queue.py`
 - **`api/services/`** — Business logic: `task_queue.py` (persistent queue, SQLAlchemy-backed, split into `school_queue` + `chaoxing_queue`), `task_runner.py` (subprocess launcher), `ypay_service.py`, `risk.py`, `session_pool.py`, `proxy_config.py`, `job_executor.py`, `order_service.py`
 - **`config.py`** — Pydantic `Settings` from `.env`. Multi-website config (`WEBSITES` dict), per-account data dirs, URL management. `CURRENT_WEBSITE` selects active platform
 
@@ -108,10 +108,8 @@ Workers write status to `/tmp/task_*/status.json` and params to `/tmp/task_*/par
 Low-level platform interaction:
 - `http_session.py` — HTTP wrapper with proxy/anti-detection support
 - `course_crawler.py` — Course data extraction
-- `study_reporter.py` — Video progress reporting
 - `captcha.py` — OCR via ddddocr
 - `anti_test.py` — Auto exam answering
-- `platform_health.py` — Platform health monitoring daemon
 - `chaoxing/` — 学习通专用模块 (crawler, scanner, cleaner, task_filter)
 - `chaoxing_session.py` — rnet-based HTTP client with TLS fingerprint spoofing (70+ fingerprints)
 - `chaoxing_quiz.py` — 学习通考试
@@ -121,11 +119,11 @@ Low-level platform interaction:
 
 ### Services Layer (`services/`)
 
-Cross-domain business services: `auth_service.py`, `multi_platform_auth.py` (multi-site login), `ai_service.py` (DeepSeek API for exam answers), `course_service.py`, `study_service.py`, `scan_service.py`, `auto_updater.py`
+Cross-domain business services: `multi_platform_auth.py` (multi-site login), `ai_service.py` (DeepSeek API for exam answers), `scan_service.py`
 
 ### Frontend (`frontend/src/`)
 
-Vue3 SPA with Pinia, Vue Router, TypeScript. Views: Home (scan + order + pay), Admin (full admin panel with tabs), Orders, Setup (first-run wizard), Payment.
+Vue3 SPA with Pinia, Vue Router, TypeScript. Views: Home (scan + order + pay), Admin (full admin panel with tabs), Orders, Payment.
 
 ### Key Design Patterns
 
