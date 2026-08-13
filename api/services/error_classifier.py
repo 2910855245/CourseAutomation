@@ -204,4 +204,4 @@ def correction_loop(running_flag: Callable[[], bool]):
                 break
             ErrorClassifier.auto_correct_errors()
         except Exception as e:
-            logger.error(f"纠错线程异常 exc_info={True}")
+            logger.error(f"纠错线程异常 error={e}")

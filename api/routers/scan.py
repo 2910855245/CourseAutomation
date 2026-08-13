@@ -84,8 +84,5 @@ def scan_chaoxing(req: ChaoxingScanRequest, current_user: dict = Depends(get_opt
             data={"platform": result},
         )
     else:
-        return ApiResponse(
-            code=400,
-            message=result.get("error", "扫描失败"),
-            data={"platform": result},
-        )
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=result.get("error", "扫描失败"))

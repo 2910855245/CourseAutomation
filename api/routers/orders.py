@@ -1,4 +1,5 @@
 import json
+import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -12,10 +13,11 @@ from api.services.risk import risk_control
 
 
 def _scan_task_dirs() -> dict:
-    """扫描 /tmp/task_*/status.json，返回 {路径: {data, username}} 缓存"""
+    """扫描临时目录 task_*/status.json，返回 {路径: {data, username}} 缓存"""
     import glob as _glob
+    import tempfile as _tempfile
     cache = {}
-    for d in _glob.glob("/tmp/task_*/status.json"):
+    for d in _glob.glob(os.path.join(_tempfile.gettempdir(), "task_*", "status.json")):
         try:
             with open(d, encoding="utf-8") as f:
                 data = json.load(f)

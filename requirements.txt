@@ -26,6 +26,7 @@ ddddocr>=1.4.0                 # 验证码 OCR
 
 # --- 日志/配置 ---
 loguru>=0.7.0
+psutil>=5.9.0                   # 子进程存活探测（任务恢复）
 python-dotenv>=1.0.0
 
 # --- CLI/UI ---

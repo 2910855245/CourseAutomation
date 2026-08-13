@@ -76,6 +76,7 @@ def _verify_videos(crawler, course_id: str) -> Dict:
 
 def _verify_exams(crawler, course_id: str, job_type: str) -> Dict:
     """核查考试/作业是否已提交"""
+    label = "作业" if job_type == "work" else "考试"
     try:
         record_type = "work" if job_type == "work" else "exam"
         records = crawler.fetch_all_records(course_id, record_type)
@@ -92,7 +93,6 @@ def _verify_exams(crawler, course_id: str, job_type: str) -> Dict:
                 submitted += 1
 
         pending = total - submitted
-        label = "作业" if job_type == "work" else "考试"
 
         if pending == 0:
             return {"verified": True, "detail": f"全部 {total} 个{label}已提交"}

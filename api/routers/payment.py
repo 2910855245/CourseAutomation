@@ -113,7 +113,8 @@ def _payment_notify_sync(params: dict) -> str:
     trade_no = ypay_order["trade_no"]
 
     if ypay_order["status"] != 1:
-        db.ypay_mark_paid(trade_no)
+        if not db.ypay_mark_paid(trade_no):
+            logger.error(f"标记支付单失败，继续处理业务订单 trade_no={trade_no}")
 
     out_trade_no = ypay_order.get("out_trade_no", trade_no)
     channel_name = {"1": "wechat", "2": "alipay", "3": "lkl"}.get(pay_type, "unknown")

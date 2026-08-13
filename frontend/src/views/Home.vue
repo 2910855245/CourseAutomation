@@ -494,7 +494,7 @@ AI智能答题考试
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
             <h3>系统公告</h3>
           </div>
-          <div class="announcement-body" v-html="announcementContent"></div>
+          <div class="announcement-body">{{ announcementContent }}</div>
           <button class="btn btn-primary btn-block announcement-confirm" @click="dismissAnnouncement">
 我知道了
 </button>
@@ -1450,6 +1450,7 @@ AI智能答题考试
 }
 .announcement-body {
   padding: 16px 24px 24px;
+  white-space: pre-line;
   font-size: 14px;
   color: var(--c-text-secondary, #475569);
   line-height: 1.7;

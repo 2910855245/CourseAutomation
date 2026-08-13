@@ -298,6 +298,15 @@ class JobExecutor:
             semaphore.release()
             if tmpdir and os.path.exists(tmpdir):
                 try:
+                    # 失败任务的 worker.log 转存到 data/logs 供事后排查
+                    log_file = os.path.join(tmpdir, "worker.log")
+                    if os.path.exists(log_file):
+                        logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "logs")
+                        os.makedirs(logs_dir, exist_ok=True)
+                        shutil.move(log_file, os.path.join(logs_dir, f"worker_{job_id}.log"))
+                except Exception:
+                    pass
+                try:
                     shutil.rmtree(tmpdir, ignore_errors=True)
                 except Exception as e:
                     pass

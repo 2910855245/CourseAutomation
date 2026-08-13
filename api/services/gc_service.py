@@ -68,7 +68,7 @@ def cleanup_old_queue_jobs(days: int = 7) -> int:
         return 0
 
 
-def cleanup_stale_account_dirs(max_age_days: int = 90) -> int:
+def cleanup_stale_account_dirs(max_age_days: int = 180) -> int:
     try:
         from config import ACCOUNTS_DIR
         accounts_dir = ACCOUNTS_DIR
@@ -133,7 +133,7 @@ def _gc_loop():
                 cleanup_old_orders(days=30)
                 cleanup_old_log_files(max_age_days=30)
             if cycle % 144 == 0:
-                cleanup_stale_account_dirs(max_age_days=90)
+                cleanup_stale_account_dirs(max_age_days=180)
         except Exception as e:
             logger.error(f"GC 循环异常 error={str(e)}")
         cycle += 1

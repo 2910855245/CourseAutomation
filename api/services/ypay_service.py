@@ -265,7 +265,7 @@ class YPayService:
                     if resp.status_code == 200:
                         text = resp.text.strip().lower()
                         if text in ("success", "ok", "1", "true"):
-                            logger.info(f"ypay_callback_success trade_no={pay_id} attempt={{attempt + 1}}")
+                            logger.info(f"ypay_callback_success trade_no={pay_id} attempt={attempt + 1}")
                             return
                         logger.warning(f"ypay_callback_bad_response trade_no={pay_id} attempt={attempt + 1} body={text[:100]}")
                     else:
@@ -291,7 +291,7 @@ class YPayService:
                 if attempt < max_retries - 1:
                     _time.sleep(2 ** (attempt + 1))
             except Exception as e:
-                logger.warning(f"ypay_async_notify_retry attempt={{attempt + 1}} error={str(e)}")
+                logger.warning(f"ypay_async_notify_retry attempt={attempt + 1} error={str(e)}")
                 if attempt < max_retries - 1:
                     _time.sleep(2 ** (attempt + 1))
         logger.error(f"ypay_async_notify_failed url={url}")
