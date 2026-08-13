@@ -111,8 +111,6 @@ const roleBadge = computed(() => {
   letter-spacing: 0.5px; white-space: nowrap;
 }
 .topbar-role-badge.role-admin { background: #fef2f2; color: #dc2626; }
-.topbar-role-badge.role-sub_admin { background: #fefce8; color: #ca8a04; }
-.topbar-role-badge.role-agent { background: #ecfdf5; color: #059669; }
 
 .hamburger {
   display: none;
@@ -159,8 +157,6 @@ const roleBadge = computed(() => {
   padding: 3px 10px; border-radius: 10px;
 }
 .mn-badge.role-admin { background: #fef2f2; color: #dc2626; }
-.mn-badge.role-sub_admin { background: #fefce8; color: #ca8a04; }
-.mn-badge.role-agent { background: #ecfdf5; color: #059669; }
 
 .slide-down-enter-active, .slide-down-leave-active { transition: all .2s ease; }
 .slide-down-enter-from, .slide-down-leave-to { opacity: 0; transform: translateY(-8px); }
