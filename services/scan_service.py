@@ -14,9 +14,9 @@ from config import (
     update_paths_for_current_account,
     update_url_config,
 )
-from infrastructure.course_crawler import get_course_nodes_from_api, get_courses
-from infrastructure.data_cleaner import clean_course_data
-from infrastructure.task_filter import get_all_actionable
+from infrastructure.school.course_crawler import get_course_nodes_from_api, get_courses
+from infrastructure.school.data_cleaner import clean_course_data
+from infrastructure.school.task_filter import get_all_actionable
 
 
 _config_lock = threading.Lock()
@@ -34,7 +34,7 @@ def _verify_exam_exists(session, base_url: str, work_id, node_id, course_id, cha
     注意：不调用 start_work，避免消耗有限的答题机会。
     """
     from infrastructure.http_session import safe_request
-    from infrastructure.exam_login import normalize_base_url
+    from infrastructure.school.exam_login import normalize_base_url
     base = normalize_base_url(base_url)
 
     wid = int(work_id) if str(work_id).isdigit() else work_id
@@ -449,7 +449,7 @@ _COOKIE_CACHE_TTL = 1800  # Cookie 缓存 30 分钟
 
 def _try_cached_session(username: str, password: str):
     """尝试用缓存的 cookie 创建会话（跳过登录）"""
-    from infrastructure.chaoxing_session import ChaoxingSession
+    from infrastructure.chaoxing.session import ChaoxingSession
 
     # 检查内存 cookie 缓存
     if username in _chaoxing_cookies:
@@ -491,7 +491,7 @@ def scan_chaoxing(username: str, password: str, account_name: str = "",
 
     返回: {website_id, name, status, student_name, courses, tasks}
     """
-    from infrastructure.chaoxing_session import ChaoxingSession
+    from infrastructure.chaoxing.session import ChaoxingSession
     from infrastructure.chaoxing.scanner import scan_chaoxing as _scan
 
     cache_key = account_name or username

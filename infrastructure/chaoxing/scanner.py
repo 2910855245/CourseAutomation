@@ -2,7 +2,7 @@
 import concurrent.futures
 from loguru import logger
 
-from infrastructure.chaoxing_session import ChaoxingSession
+from infrastructure.chaoxing.session import ChaoxingSession
 from infrastructure.chaoxing.crawler import (
     fetch_course_list,
     fetch_knowledge_list,
@@ -13,8 +13,8 @@ from infrastructure.chaoxing.crawler import (
 )
 from infrastructure.chaoxing.cleaner import clean_courses, clean_course_full
 from infrastructure.chaoxing.task_filter import get_actionable_tasks, get_done_courses, get_no_points_courses
-from infrastructure.chaoxing_quiz import get_work_list
-from infrastructure.chaoxing_points import ScoreRuleParser, PointsRule
+from infrastructure.chaoxing.quiz import get_work_list
+from infrastructure.chaoxing.points import ScoreRuleParser, PointsRule
 
 
 

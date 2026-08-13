@@ -147,7 +147,7 @@ def run_task(params_file, status_file):
 
     send_status(status_file, phase="crawl", message="正在获取课程...")
 
-    from infrastructure.course_crawler import get_courses_with_diag
+    from infrastructure.school.course_crawler import get_courses_with_diag
     from services.scan_service import load_course_cache, scan_course
 
     diag = get_courses_with_diag(session)

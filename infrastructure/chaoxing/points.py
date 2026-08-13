@@ -14,7 +14,7 @@ from loguru import logger
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Callable
 
-from infrastructure.chaoxing_session import ChaoxingSession
+from infrastructure.chaoxing.session import ChaoxingSession
 
 
 # 积分类型映射
@@ -339,7 +339,7 @@ class PointsExecutor:
                      on_progress: Callable = None) -> int:
         """刷视频赚积分"""
         from infrastructure.chaoxing.crawler import fetch_knowledge_list
-        from infrastructure.chaoxing_reporter import process_knowledge_videos
+        from infrastructure.chaoxing.reporter import process_knowledge_videos
 
         knowledge_points = fetch_knowledge_list(self.session, self.course_id, self.class_id)
         video_points = [kp for kp in knowledge_points if kp['has_video']]
@@ -382,7 +382,7 @@ class PointsExecutor:
 
     def _answer_quizzes(self, remaining: int) -> int:
         """答题赚积分"""
-        from infrastructure.chaoxing_quiz import get_work_list, solve_quiz, load_ref_hashes, AnswerCache
+        from infrastructure.chaoxing.quiz import get_work_list, solve_quiz, load_ref_hashes, AnswerCache
 
         works = get_work_list(self.session, self.course_id, self.class_id)
         if not works:
@@ -439,7 +439,7 @@ class PointsExecutor:
 
     def _post_discussions(self, remaining: int) -> int:
         """发讨论赚积分"""
-        from infrastructure.chaoxing_discuss import post_discussion
+        from infrastructure.chaoxing.discuss import post_discussion
 
         # 检查讨论积分上限
         discuss_rule = self.rule.get_item(2)
@@ -462,7 +462,7 @@ class PointsExecutor:
             return 0
 
         # 获取讨论区bbsid
-        from infrastructure.chaoxing_discuss import get_discuss_bbsid
+        from infrastructure.chaoxing.discuss import get_discuss_bbsid
         bbsid = get_discuss_bbsid(self.session, self.course_id, self.class_id,
                                    knowledge_points[0]['knowledgeId'])
         if not bbsid:
@@ -501,7 +501,7 @@ class PointsExecutor:
 
     def _post_notes(self, remaining: int) -> int:
         """写笔记赚积分"""
-        from infrastructure.chaoxing_discuss import post_note
+        from infrastructure.chaoxing.discuss import post_note
 
         # 检查笔记积分上限
         note_rule = self.rule.get_item(4)

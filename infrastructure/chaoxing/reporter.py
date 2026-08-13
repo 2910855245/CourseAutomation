@@ -11,7 +11,7 @@ import random
 import hashlib
 from loguru import logger
 
-from infrastructure.chaoxing_session import ChaoxingSession
+from infrastructure.chaoxing.session import ChaoxingSession
 
 
 ENC_SECRET = 'd_yHJ!$pdA~5'

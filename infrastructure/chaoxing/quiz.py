@@ -14,7 +14,7 @@ from loguru import logger
 from io import BytesIO
 from hashlib import sha1, md5
 
-from infrastructure.chaoxing_session import ChaoxingSession
+from infrastructure.chaoxing.session import ChaoxingSession
 
 
 BASE_URL = 'https://mooc1.chaoxing.com'

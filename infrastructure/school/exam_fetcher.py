@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 class TopicFetcher:
     def __init__(self, session: httpx.Client, base_url: str):
         self.session = session
-        from infrastructure.exam_login import normalize_base_url
+        from infrastructure.school.exam_login import normalize_base_url
         self.base_url = normalize_base_url(base_url)
         self._submit_type = 'work'
 

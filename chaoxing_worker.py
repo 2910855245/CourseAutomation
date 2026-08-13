@@ -31,7 +31,7 @@ def _solve_tsjy_knowledge_quiz(session, cid, kid, clid, cpi, kname, api_key,
     """解答tsjy知识点测评（quiz）"""
     import re
     import json as _json
-    from infrastructure.chaoxing_quiz import solve_quiz, load_ref_hashes, AnswerCache
+    from infrastructure.chaoxing.quiz import solve_quiz, load_ref_hashes, AnswerCache
 
     # 获取知识点卡片页面（num=2 = 测评/作业）
     cards_url = (f'https://mooc1-1.chaoxing.com/mooc-ans/knowledge/cards'
@@ -271,7 +271,7 @@ def _do_tsjy_knowledge_read(session, cid, kid, clid, cpi, kname,
 def _study_must_learn(session, cid, clid, cname, status_file, api_key=''):
     """刷"必学"知识点视频+测评，返回 (done, failed, skipped) 计数"""
     import re
-    from infrastructure.chaoxing_reporter import process_knowledge_videos
+    from infrastructure.chaoxing.reporter import process_knowledge_videos
 
     done, failed, skipped = 0, 0, 0
 
@@ -402,7 +402,7 @@ def _study_must_learn(session, cid, clid, cname, status_file, api_key=''):
 
 def _solve_course_quizzes(session, cid, clid, cname, status_file, api_key):
     """为单个课程做作业/考试，返回 (done, failed, skipped) 计数"""
-    from infrastructure.chaoxing_quiz import get_work_list, solve_quiz, load_ref_hashes, AnswerCache
+    from infrastructure.chaoxing.quiz import get_work_list, solve_quiz, load_ref_hashes, AnswerCache
 
     done, failed, skipped = 0, 0, 0
 
@@ -561,7 +561,7 @@ def run_task(params_file, status_file):
 
     send_status(status_file, phase="login", message="正在登录学习通...")
 
-    from infrastructure.chaoxing_session import ChaoxingSession
+    from infrastructure.chaoxing.session import ChaoxingSession
 
     # 先尝试用缓存的 Cookie（跳过登录）
     session = None
@@ -615,7 +615,7 @@ def run_task(params_file, status_file):
     logger.info(f"课程数量 count={len(courses)}")
 
     # 导入积分系统
-    from infrastructure.chaoxing_points import ScoreRuleParser, PointsExecutor
+    from infrastructure.chaoxing.points import ScoreRuleParser, PointsExecutor
 
     # 多天循环
     day_count = 0
@@ -650,7 +650,7 @@ def run_task(params_file, status_file):
                 logger.info(f"积分规则 course={cname} target={rule.target} daily_limit={rule.daily_limit} video_min={rule.video_min}")
             except Exception as e:
                 logger.warning(f"获取积分规则失败，使用默认值 error={str(e)}")
-                from infrastructure.chaoxing_points import PointsRule
+                from infrastructure.chaoxing.points import PointsRule
                 rule = PointsRule()
 
             # 创建执行器

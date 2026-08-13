@@ -49,7 +49,7 @@ class AIService:
     def solve_exam(self, work_id: str, course_id: str = None,
                    node_id: str = None, auto_submit: bool = True,
                    is_final_exam: bool = False) -> Dict:
-        from infrastructure.anti_test import (
+        from infrastructure.school.anti_test import (
             AIAnswerer,
             OnlineHeartbeat,
             TopicFetcher,
@@ -219,7 +219,7 @@ class AIService:
                            question_text: str = "", student_id: str = "",
                            student_name: str = "") -> Dict:
         """解决项目提交题（简答+文件上传）"""
-        from infrastructure.project_solver import ProjectSolver
+        from infrastructure.school.project_solver import ProjectSolver
 
         if not self.api_key:
             return {"success": False, "error": "DEEPSEEK_API_KEY 未配置"}

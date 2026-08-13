@@ -238,7 +238,7 @@ def _trigger_full_scan(username: str, password: str, course_ids: list = None):
 
     def _scan():
         try:
-            from infrastructure.chaoxing_session import ChaoxingSession
+            from infrastructure.chaoxing.session import ChaoxingSession
             from infrastructure.chaoxing.scanner import scan_chaoxing, _process_single_course, _fetch_cpi_map
 
             session = ChaoxingSession()

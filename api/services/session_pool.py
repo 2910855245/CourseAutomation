@@ -18,7 +18,7 @@ from config import (
     update_paths_for_current_account,
     update_url_config,
 )
-from infrastructure.course_crawler import extract_student_name
+from infrastructure.school.course_crawler import extract_student_name
 from infrastructure.http_session import check_cookie_valid, safe_request
 from services.multi_platform_auth import load_platform_cookie, login_single_platform, save_platform_cookie
 

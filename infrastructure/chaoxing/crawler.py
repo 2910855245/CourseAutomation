@@ -6,7 +6,7 @@ import time
 from loguru import logger
 from scrapling.parser import Adaptor
 
-from infrastructure.chaoxing_session import ChaoxingSession
+from infrastructure.chaoxing.session import ChaoxingSession
 
 
 

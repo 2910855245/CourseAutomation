@@ -171,7 +171,7 @@ class WorkSubmitter:
     def __init__(self, session: httpx.Client, base_url: str, work_id: int,
                  referer_url: str = '', submit_type: str = 'work', node_id: str = ''):
         self.session = session
-        from infrastructure.exam_login import normalize_base_url
+        from infrastructure.school.exam_login import normalize_base_url
         self.base_url = normalize_base_url(base_url)
         self.work_id = work_id
         self.referer_url = referer_url or self.base_url
@@ -332,7 +332,7 @@ class AIWorkRunner:
                  username: Optional[str] = None,
                  password: Optional[str] = None,
                  model: str = "deepseek-v4-flash"):
-        from infrastructure.exam_login import LoginHelper, normalize_base_url
+        from infrastructure.school.exam_login import LoginHelper, normalize_base_url
         self.base_url = normalize_base_url(base_url)
         self.api_key = api_key
         self.model = model
@@ -365,7 +365,7 @@ class AIWorkRunner:
             raise ValueError("必须提供 cookie_str 或 (username, password)。")
 
     def run(self, work_id: int, course_id: int, node_id: int, auto_submit: bool = False):
-        from infrastructure.exam_login import OnlineHeartbeat
+        from infrastructure.school.exam_login import OnlineHeartbeat
         heartbeat = OnlineHeartbeat(
             session=self.session,
             online_url=f'{self.base_url}/user/online',

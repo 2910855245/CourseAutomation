@@ -20,7 +20,7 @@ class ProjectSolver:
     def __init__(self, session: httpx.Client, base_url: str, api_key: str,
                  student_id: str = "", student_name: str = "",
                  model: str = "deepseek-chat"):
-        from infrastructure.exam_login import normalize_base_url
+        from infrastructure.school.exam_login import normalize_base_url
         self.session = session
         self.base_url = normalize_base_url(base_url)
         self.api_key = api_key

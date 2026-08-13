@@ -35,7 +35,7 @@ def verify_task_completion(username: str, website_id: int,
 
         base_url = get_base_url()
 
-        from infrastructure.study_record_crawler import StudyRecordCrawler
+        from infrastructure.school.study_record_crawler import StudyRecordCrawler
         crawler = StudyRecordCrawler(session, base_url)
 
         for cid in course_ids:

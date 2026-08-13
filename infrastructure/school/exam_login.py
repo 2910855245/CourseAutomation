@@ -39,7 +39,7 @@ class LoginHelper:
         resp = self.session.get(f"{self.base_url}/captcha", timeout=15)
         if resp.status_code == 200:
             try:
-                from infrastructure.captcha import recognize_captcha
+                from infrastructure.school.captcha import recognize_captcha
                 return recognize_captcha(resp.content)
             except Exception as e:
                 return "0000"

@@ -263,7 +263,7 @@ def get_course_progress(course_id: str, username: str = Query(...), password: st
 
 @router.post("/sync", response_model=ApiResponse)
 def sync_progress(username: str = Query(...), password: str = Query(...), website_id: int = Query(...)):
-    from infrastructure.study_record_crawler import get_all_study_records
+    from infrastructure.school.study_record_crawler import get_all_study_records
     from services.data_loader import DataLoader
     info = _get_session(username, password, website_id)
     try:

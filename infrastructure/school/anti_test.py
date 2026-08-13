@@ -6,12 +6,12 @@ AI 自动答题模块（兼容层）
   - exam_fetcher.py  — TopicFetcher
   - exam_answerer.py — AIAnswerer, WorkSubmitter, AIWorkRunner
 
-本文件仅做 re-export，保持 `from infrastructure.anti_test import ...` 不变。
+本文件仅做 re-export，保持 `from infrastructure.school.anti_test import ...` 不变。
 """
 
-from infrastructure.exam_answerer import AIAnswerer, AIWorkRunner, WorkSubmitter
-from infrastructure.exam_fetcher import TopicFetcher
-from infrastructure.exam_login import LoginHelper, OnlineHeartbeat, normalize_base_url
+from infrastructure.school.exam_answerer import AIAnswerer, AIWorkRunner, WorkSubmitter
+from infrastructure.school.exam_fetcher import TopicFetcher
+from infrastructure.school.exam_login import LoginHelper, OnlineHeartbeat, normalize_base_url
 
 __all__ = [
     'normalize_base_url', 'LoginHelper', 'OnlineHeartbeat',
