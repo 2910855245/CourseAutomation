@@ -25,6 +25,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenvy = "0.15"
 regex = "1.13.1"
+bcrypt = "0.15"
+jsonwebtoken = "9"
 
 [profile.release]
 # 终极性能：最大优化 + 全程序 LTO（二进制略大，换取运行时速度）

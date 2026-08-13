@@ -81,6 +81,11 @@ impl Db {
         &self.pool
     }
 
+    /// 连接池克隆（spawn_blocking 闭包用）
+    pub fn clone_pool(&self) -> Pool<SqliteConnectionManager> {
+        self.pool.clone()
+    }
+
     /// 通用表计数（队列统计用）
     pub async fn table_count(&self, table: &'static str) -> Result<i64> {
         let pool = self.pool.clone();

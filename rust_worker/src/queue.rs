@@ -39,7 +39,7 @@ pub struct QueueJob {
     pub retry_count: i64,
 }
 
-fn now_str() -> String {
+pub(crate) fn now_str() -> String {
     SystemTime::now().duration_since(UNIX_EPOCH)
         .map(|d| chrono_lite(d.as_secs()))
         .unwrap_or_default()

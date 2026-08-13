@@ -7,6 +7,7 @@
 //! - SQLite 访问层（rusqlite 直连，与 Python 迁移期共享 data/*.db）
 
 mod api;
+mod auth;
 mod cx_scan;
 mod cx_study;
 mod db;
@@ -95,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/submit_cx_full", post(submit_cx_full))
         .route("/submit_full", post(submit_full))
         .route("/cancel/{order_id}", post(cancel))
-        .merge(api::router())
+        .merge(api::router(state.clone()))
         .nest_service("/static", ServeDir::new("static").append_index_html_on_directories(true))
         .fallback(spa_fallback)
         .layer(middleware::from_fn(cache_headers))
