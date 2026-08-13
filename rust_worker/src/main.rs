@@ -14,6 +14,7 @@ mod db;
 mod exam;
 mod login;
 mod order;
+mod pay;
 mod queue;
 mod scan;
 mod study;

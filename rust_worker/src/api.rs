@@ -27,9 +27,53 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/api/system/status", get(system_status))
         .route("/api/jobs/submit", post(submit_job))
         .route("/api/orders/batch", post(batch_orders))
+        .route("/api/ypay/vmq/heart", post(vmq_heart))
+        .route("/api/ypay/vmq/push", post(vmq_push))
         .route("/api/admin/login", post(crate::auth::admin_login))
         .route("/health", get(health))
         .merge(protected)
+}
+
+/// VMQ 心跳（签名验证，对齐 ypay_vmq.vmq_heart 的 success/fail 纯文本协议）
+async fn vmq_heart(
+    State(state): State<AppState>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    let mut params = q;
+    if let Ok(text) = String::from_utf8(body.to_vec()) {
+        for pair in text.split('&') {
+            if let Some((k, v)) = pair.split_once('=') {
+                params.entry(k.to_string()).or_insert_with(|| v.to_string());
+            }
+        }
+    }
+    let t = params.get("t").cloned().unwrap_or_default();
+    let sign = params.get("sign").cloned().unwrap_or_default();
+    let ok = crate::pay::verify_heart_sign(&state.db, &t, &sign).await;
+    axum::response::Response::new(if ok { "success" } else { "fail" }.into())
+}
+
+/// VMQ 支付推送（签名验证，对齐 ypay_vmq.vmq_push）
+async fn vmq_push(
+    State(state): State<AppState>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    let mut params = q;
+    if let Ok(text) = String::from_utf8(body.to_vec()) {
+        for pair in text.split('&') {
+            if let Some((k, v)) = pair.split_once('=') {
+                params.entry(k.to_string()).or_insert_with(|| v.to_string());
+            }
+        }
+    }
+    let ptype = params.get("type").cloned().unwrap_or_default();
+    let price = params.get("price").cloned().unwrap_or_default();
+    let t = params.get("t").cloned().unwrap_or_default();
+    let sign = params.get("sign").cloned().unwrap_or_default();
+    let resp = crate::pay::vmq_push_response(&state.db, &ptype, &price, &t, &sign).await;
+    axum::response::Response::new(resp.into())
 }
 
 /// 批量下单（写路径，与 Python 双跑对照验收）
