@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     worker_token: str = Field(default="", alias="WORKER_TOKEN")
     rust_daemon_url: str = Field(default="http://127.0.0.1:17017", alias="RUST_DAEMON_URL")
     ocr_service_url: str = Field(default="http://127.0.0.1:17018", alias="OCR_SERVICE_URL")
+    worker_phase_split: bool = Field(default=True, alias="WORKER_PHASE_SPLIT")
     captcha_ak: str = Field(default="", alias="CAPTCHA_AK")
     captcha_url: str = Field(default="", alias="CAPTCHA_URL")
 

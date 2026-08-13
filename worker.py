@@ -111,6 +111,9 @@ def run_task(params_file, status_file):
     job_type = params.get("job_type", "full")
     course_ids = params.get("course_ids", [])
     concurrency = params.get("concurrency", 8)
+    # 阶段模式：full（完整流程）/ crawl（爬取+提交 daemon 后立即退出，主进程监控学习）/
+    # exam（独立考试阶段：重登 + 重扫 + 考试）
+    phase = params.get("phase", "full")
 
     send_status(status_file, phase="login", message="正在登录...")
 
@@ -125,102 +128,115 @@ def run_task(params_file, status_file):
     from infrastructure.school.course_crawler import get_courses_with_diag
     from services.scan_service import load_course_cache, scan_course
 
-    diag = get_courses_with_diag(session)
-    courses = diag["courses"]
-    logger.info("获取到 {} 门课程 (http={}, err={})", len(courses), diag.get("http_code"), diag.get("error"))
+    # exam 模式：跳过爬取/视频阶段，重拉课程列表后直接进入考试
+    if phase == "exam":
+        diag = get_courses_with_diag(session)
+        courses = diag["courses"]
+        if not courses:
+            send_status(status_file, phase="error",
+                        message=diag.get("error") or "获取课程列表失败", done=True, success=False)
+            return
+        all_videos = []
+        all_exams = []
+        cookie_str = "; ".join([f"{k}={v}" for k, v in session.cookies.items()])
+    else:
+        # full / crawl 模式：爬取课程
+        diag = get_courses_with_diag(session)
+        courses = diag["courses"]
+        logger.info("获取到 {} 门课程 (http={}, err={})", len(courses), diag.get("http_code"), diag.get("error"))
 
-    # Cookie 过期 → 删除缓存，重新登录，验证 session 有效才继续
-    if not courses and diag.get("error") and ("失效" in diag["error"] or "登录" in diag["error"]):
-        logger.info("Cookie 过期，尝试重新登录...")
-        send_status(status_file, phase="crawl", message="Cookie过期，重新登录中...")
-        try:
-            from config import get_account_cookies_path, WEBSITES
-            from services.multi_platform_auth import login_single_platform, save_platform_cookie
-            cookie_file = get_account_cookies_path(username, WEBSITES.get(website_id, {}).get("name"))
-            if os.path.exists(cookie_file):
-                os.remove(cookie_file)
-
-            # 直接调用登录，不用 load_session（避免用了坏缓存）
-            wid, ok, new_session, msg = login_single_platform(website_id, username, password)
-            if not ok:
-                logger.error("重新登录失败: {}", msg)
-                diag["error"] = f"重新登录失败: {msg}"
-            else:
-                # 立即验证新 session 能否获取课程
-                diag2 = get_courses_with_diag(new_session)
-                if diag2["courses"]:
-                    # 新 session 有效，保存 cookie 并继续
-                    session = new_session
-                    courses = diag2["courses"]
-                    save_platform_cookie(username, website_id, session)
-                    logger.info("重新登录成功，获取到 {} 门课程", len(courses))
-                else:
-                    # 新 session 也不能用，报告具体原因
-                    logger.error("重新登录后仍无法获取课程: {}", diag2.get("error"))
-                    diag["error"] = diag2.get("error") or "重新登录后仍无法获取课程"
-        except Exception as e:
-            logger.error("重新登录异常: {}", e)
-
-    if not courses:
-        err_msg = diag.get("error") or "未知原因"
-        send_status(status_file, phase="error", message=err_msg, done=True, success=False)
-        return
-
-    all_videos = []
-    all_exams = []
-
-    for i, course in enumerate(courses):
-        cid = course.get("course_id", "")
-        if course_ids and cid not in course_ids:
-            continue
-        cname = course.get("name", "")
-
-        # 优先用课程缓存（下单前扫描的详细结果，30分钟内有效）
-        cached = load_course_cache(username, website_id, cid)
-        videos_from_cache = False
-        if cached:
-            send_status(status_file, phase="crawl", message=f"缓存命中 {i+1}/{len(courses)}: {cname}")
-            logger.info("课程缓存命中: {} (id={})", cname, cid)
-            all_videos.extend(cached.get("videos", []))
-            videos_from_cache = True
-            cached_exams = cached.get("exams", []) + cached.get("works", [])
-            non_done_exams = [e for e in cached_exams if not e.get("is_done") and not e.get("is_deleted") and e.get("time_status", "进行中") == "进行中"]
-            skipped = len([e for e in cached_exams if not e.get("is_done") and not e.get("is_deleted")]) - len(non_done_exams)
-            if non_done_exams:
-                all_exams.extend(non_done_exams)
-                logger.info("  缓存考试: {} 个可考, {} 个未到/已过期", len(non_done_exams), skipped)
-            else:
-                logger.info("  缓存无可用考试数据，将实时获取")
-                cached = None  # 回退到实时扫描（仅重新获取考试，视频已从缓存加载）
-
-        if not cached:
-            send_status(status_file, phase="crawl", message=f"解析课程 {i+1}/{len(courses)}: {cname}")
-            logger.info("处理课程: {} (id={})", cname, cid)
-
+        # Cookie 过期 → 删除缓存，重新登录，验证 session 有效才继续
+        if not courses and diag.get("error") and ("失效" in diag["error"] or "登录" in diag["error"]):
+            logger.info("Cookie 过期，尝试重新登录...")
+            send_status(status_file, phase="crawl", message="Cookie过期，重新登录中...")
             try:
-                result = scan_course(session, cid, cname)
-                if not videos_from_cache:
-                    all_videos.extend(result.get("videos", []))
-                fresh_exams = result.get("exams", []) + result.get("works", [])
-                non_done = [e for e in fresh_exams if not e.get("is_done") and not e.get("is_deleted") and e.get("time_status", "进行中") == "进行中"]
-                skipped = len([e for e in fresh_exams if not e.get("is_done") and not e.get("is_deleted")]) - len(non_done)
-                all_exams.extend(non_done)
+                from config import get_account_cookies_path, WEBSITES
+                from services.multi_platform_auth import login_single_platform, save_platform_cookie
+                cookie_file = get_account_cookies_path(username, WEBSITES.get(website_id, {}).get("name"))
+                if os.path.exists(cookie_file):
+                    os.remove(cookie_file)
 
-                logger.info("  视频=%d 考试=%d 作业=%d 可考=%d 跳过=%d",
-                            len(result.get("videos", [])),
-                            len(result.get("exams", [])),
-                            len(result.get("works", [])),
-                            len(non_done), skipped)
+                # 直接调用登录，不用 load_session（避免用了坏缓存）
+                wid, ok, new_session, msg = login_single_platform(website_id, username, password)
+                if not ok:
+                    logger.error("重新登录失败: {}", msg)
+                    diag["error"] = f"重新登录失败: {msg}"
+                else:
+                    # 立即验证新 session 能否获取课程
+                    diag2 = get_courses_with_diag(new_session)
+                    if diag2["courses"]:
+                        # 新 session 有效，保存 cookie 并继续
+                        session = new_session
+                        courses = diag2["courses"]
+                        save_platform_cookie(username, website_id, session)
+                        logger.info("重新登录成功，获取到 {} 门课程", len(courses))
+                    else:
+                        # 新 session 也不能用，报告具体原因
+                        logger.error("重新登录后仍无法获取课程: {}", diag2.get("error"))
+                        diag["error"] = diag2.get("error") or "重新登录后仍无法获取课程"
             except Exception as e:
-                logger.error("处理课程 {} 失败: {}", cname, e)
+                logger.error("重新登录异常: {}", e)
 
-    logger.info("汇总: 视频={}, 考试/作业={}", len(all_videos), len(all_exams))
+        if not courses:
+            err_msg = diag.get("error") or "未知原因"
+            send_status(status_file, phase="error", message=err_msg, done=True, success=False)
+            return
 
-    if not all_videos and not all_exams:
-        send_status(status_file, phase="error", message="未找到任何视频或考试", done=True, success=False)
-        return
+        all_videos = []
+        all_exams = []
 
-    cookie_str = "; ".join([f"{k}={v}" for k, v in session.cookies.items()])
+        for i, course in enumerate(courses):
+            cid = course.get("course_id", "")
+            if course_ids and cid not in course_ids:
+                continue
+            cname = course.get("name", "")
+
+            # 优先用课程缓存（下单前扫描的详细结果，30分钟内有效）
+            cached = load_course_cache(username, website_id, cid)
+            videos_from_cache = False
+            if cached:
+                send_status(status_file, phase="crawl", message=f"缓存命中 {i+1}/{len(courses)}: {cname}")
+                logger.info("课程缓存命中: {} (id={})", cname, cid)
+                all_videos.extend(cached.get("videos", []))
+                videos_from_cache = True
+                cached_exams = cached.get("exams", []) + cached.get("works", [])
+                non_done_exams = [e for e in cached_exams if not e.get("is_done") and not e.get("is_deleted") and e.get("time_status", "进行中") == "进行中"]
+                skipped = len([e for e in cached_exams if not e.get("is_done") and not e.get("is_deleted")]) - len(non_done_exams)
+                if non_done_exams:
+                    all_exams.extend(non_done_exams)
+                    logger.info("  缓存考试: {} 个可考, {} 个未到/已过期", len(non_done_exams), skipped)
+                else:
+                    logger.info("  缓存无可用考试数据，将实时获取")
+                    cached = None  # 回退到实时扫描（仅重新获取考试，视频已从缓存加载）
+
+            if not cached:
+                send_status(status_file, phase="crawl", message=f"解析课程 {i+1}/{len(courses)}: {cname}")
+                logger.info("处理课程: {} (id={})", cname, cid)
+
+                try:
+                    result = scan_course(session, cid, cname)
+                    if not videos_from_cache:
+                        all_videos.extend(result.get("videos", []))
+                    fresh_exams = result.get("exams", []) + result.get("works", [])
+                    non_done = [e for e in fresh_exams if not e.get("is_done") and not e.get("is_deleted") and e.get("time_status", "进行中") == "进行中"]
+                    skipped = len([e for e in fresh_exams if not e.get("is_done") and not e.get("is_deleted")]) - len(non_done)
+                    all_exams.extend(non_done)
+
+                    logger.info("  视频=%d 考试=%d 作业=%d 可考=%d 跳过=%d",
+                                len(result.get("videos", [])),
+                                len(result.get("exams", [])),
+                                len(result.get("works", [])),
+                                len(non_done), skipped)
+                except Exception as e:
+                    logger.error("处理课程 {} 失败: {}", cname, e)
+
+        logger.info("汇总: 视频={}, 考试/作业={}", len(all_videos), len(all_exams))
+
+        if not all_videos and not all_exams:
+            send_status(status_file, phase="error", message="未找到任何视频或考试", done=True, success=False)
+            return
+
+        cookie_str = "; ".join([f"{k}={v}" for k, v in session.cookies.items()])
 
     # ── 第一阶段：刷视频（必须在考试之前完成） ──
     video_success = True
@@ -271,6 +287,11 @@ def run_task(params_file, status_file):
                     daemon_ok = True
                     send_status(status_file, study_pid=0)
                     logger.info("Rust 守护进程接手刷课 order_id={}", params.get("order_id", ""))
+                    if phase == "crawl":
+                        # 阶段拆分：子进程立即退出（省去数小时空转内存），
+                        # 主进程 monitor_study 等待学习完成后再起考试阶段子进程
+                        logger.info("crawl 阶段完成，退出并由主进程监控学习进度")
+                        return
                     # 等待 daemon 写完终态（视频完成后 worker 才进入考试阶段）
                     total_dur = sum(v.get("duration", 0) for v in all_videos)
                     timeout_sec = max(600, total_dur * 2.5 + 120)

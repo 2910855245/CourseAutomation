@@ -56,7 +56,17 @@ class JobExecutor:
                 website_id=job.website_id,
                 on_progress=lambda p, s, n: self._on_job_progress(job_id, p, s, n),
             )
-            result = runner.run(job_type=job.job_type, course_ids=job.course_ids, order_id=job.order_id)
+            # 阶段拆分：学校任务爬取后即退出（学习由 Rust daemon 承载、主进程监控），
+            # 学习完成后再起独立考试子进程——学习期（数小时）无 Python 子进程空转占内存
+            from config import settings as _cfg
+            phase = "full"
+            if job.website_id != 4 and _cfg.worker_phase_split:
+                if job.job_type in ("video", "full", "all"):
+                    phase = "crawl"
+                elif job.job_type == "exam":
+                    phase = "exam"
+            result = runner.run(job_type=job.job_type, course_ids=job.course_ids,
+                                order_id=job.order_id, phase=phase)
 
             if isinstance(result, dict) and not result.get("success", True):
                 raise Exception(result.get("message", "任务失败"))
@@ -248,11 +258,23 @@ class JobExecutor:
                     actual_pct = data.get("video_pct", video_pct)
                     if actual_pct < 95:
                         raise Exception(f"平台实际进度仅{actual_pct}%，未达到完成标准(95%)")
+                    job = self._db_get(job_id)
+                    # 阶段拆分：学校任务学习完成后，起考试阶段子进程（复用同一 status_file）
+                    if job and job.website_id != 4 and (job.job_type or "") in ("exam", "full", "all"):
+                        from config import settings as _cfg
+                        if _cfg.worker_phase_split:
+                            logger.info(f"学习完成，启动考试阶段 job_id={job_id}")
+                            exam_result = self._run_exam_phase(job, status_file)
+                            if isinstance(exam_result, dict) and not exam_result.get("success", True):
+                                raise Exception(exam_result.get("message", "考试阶段失败"))
+                            final_status = self._read_status_data(status_file)
+                            actual_pct = final_status.get("video_pct", actual_pct)
                     self._db_update(job_id, status=QueueJobStatus.COMPLETED,
                                     progress=float(actual_pct), finished_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
                                     current_step_name="刷课完成")
                     self._clear_password(job_id)
-                    job = self._db_get(job_id)
+                    if job is None:
+                        job = self._db_get(job_id)
                     if job:
                         self._start_verification(job_id, job)
                         if self._on_complete:
@@ -310,6 +332,43 @@ class JobExecutor:
                     shutil.rmtree(tmpdir, ignore_errors=True)
                 except Exception as e:
                     pass
+
+    def _read_status_data(self, status_file: str) -> dict:
+        try:
+            with open(status_file, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _run_exam_phase(self, job, status_file: str) -> dict:
+        """学习完成后执行考试阶段：起独立短命子进程（复用同一 tmpdir/status_file）。
+
+        密码优先取任务行（学习通保留），缺失时从订单恢复。
+        tmpdir 清理由 monitor_study 的 finally 统一负责（保留 worker.log 供事后排查）。
+        """
+        from services.task_runner import TaskRunner
+
+        password = job.password
+        if not password and job.order_id:
+            try:
+                from api.database import db
+                order = db.get_order(job.order_id)
+                if order:
+                    password = order.get("password", "")
+            except Exception:
+                pass
+
+        tmpdir = os.path.dirname(status_file)
+        runner = TaskRunner(
+            username=job.username,
+            password=password,
+            website_id=job.website_id,
+            on_progress=lambda p, s, n: self._on_job_progress(job.job_id, p, s, n),
+        )
+        return runner.run(job_type=job.job_type, course_ids=job.course_ids,
+                          order_id=job.order_id, phase="exam",
+                          status_file=status_file, tmpdir=tmpdir,
+                          heavy_timeout=4 * 3600)
 
     def _on_job_progress(self, job_id: str, progress: float, step: int, step_name: str):
         self._db_update(job_id, progress=progress, completed_steps=step, current_step_name=step_name)

@@ -71,6 +71,12 @@ Tasks dispatched as child processes by `task_runner.py`:
 - 视频学习由 Rust daemon（rust_worker，:17017）执行，worker.py 提交任务；study_worker.py 已退役
 - `chaoxing_worker.py` — 学习通专用 worker
 
+**阶段拆分**（WORKER_PHASE_SPLIT=true，学校任务）：
+- `phase=crawl`：worker.py 登录/爬取 → 提交 Rust daemon → 写 heavy_done → **立即退出**
+- 主进程 monitor_study 线程监控 daemon 的 status.json（学习期数小时，无 Python 子进程空转）
+- 学习完成后 monitor_study 起 `phase=exam` 短命子进程（复用同一 tmpdir/status_file，重登走 cookie 缓存）
+- 回滚：WORKER_PHASE_SPLIT=false → phase=full 完整流程
+
 Workers write status to `{tmp}/task_*/status.json` and params to `/tmp/task_*/params.json`（原子写 + 退出兜底由 worker_common.py 统一）。Main API monitors these files.
 
 ### Infrastructure Layer (`infrastructure/`)

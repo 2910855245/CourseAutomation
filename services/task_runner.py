@@ -42,7 +42,9 @@ class TaskRunner:
         self._status_file: Optional[str] = None
         self._tmpdir: Optional[str] = None
 
-    def run(self, job_type: str = "full", course_ids: list = None, order_id: str = None) -> Dict[str, Any]:
+    def run(self, job_type: str = "full", course_ids: list = None, order_id: str = None,
+            phase: str = "full", status_file: str = None, tmpdir: str = None,
+            heavy_timeout: int = 30 * 60) -> Dict[str, Any]:
         course_ids = course_ids or []
         self._running = True
 
@@ -55,13 +57,17 @@ class TaskRunner:
             "job_type": job_type,
             "course_ids": course_ids,
             "concurrency": 8,
+            "phase": phase,
         }
         if order_id:
             params["order_id"] = order_id
 
-        self._tmpdir = tempfile.mkdtemp(prefix="task_")
+        if tmpdir is None:
+            self._tmpdir = tempfile.mkdtemp(prefix="task_")
+        else:
+            self._tmpdir = tmpdir
         self._params_file = os.path.join(self._tmpdir, "params.json")
-        self._status_file = os.path.join(self._tmpdir, "status.json")
+        self._status_file = status_file or os.path.join(self._tmpdir, "status.json")
         self._log_file = os.path.join(self._tmpdir, "worker.log")
 
         with open(self._params_file, "w", encoding="utf-8") as f:
@@ -97,8 +103,7 @@ class TaskRunner:
         self._log_fh = log_fh
 
         # 重阶段（登录/爬取）整体超时：防止网络卡死永久占用 worker 槽位
-        HEAVY_PHASE_TIMEOUT = 30 * 60
-        deadline = time.monotonic() + HEAVY_PHASE_TIMEOUT
+        deadline = time.monotonic() + heavy_timeout
         heavy_timed_out = False
         try:
             while self._running and self._process.poll() is None:
@@ -108,7 +113,7 @@ class TaskRunner:
                     logger.info("重阶段完成，刷课进程已在后台运行")
                     break
                 if time.monotonic() > deadline:
-                    logger.error("重阶段超时，终止子进程 timeout={}s", HEAVY_PHASE_TIMEOUT)
+                    logger.error("重阶段超时，终止子进程 timeout={}s", heavy_timeout)
                     heavy_timed_out = True
                     self.cancel()
                     break
@@ -123,7 +128,7 @@ class TaskRunner:
             return {
                 "platform": platform_name,
                 "success": False,
-                "message": f"重阶段超时（>{HEAVY_PHASE_TIMEOUT // 60}分钟），已终止子进程",
+                "message": f"重阶段超时（>{heavy_timeout // 60}分钟），已终止子进程",
             }
 
         status_data = self._read_status()
