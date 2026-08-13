@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 from api.auth import get_optional_user
 from api.database import db
 from api.models import ApiResponse
-from api.redis_client import redis_client
 from services.ypay_service import ypay
 from config import settings
 

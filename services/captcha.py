@@ -10,7 +10,6 @@ from typing import Optional, Tuple
 from loguru import logger
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-from api.redis_client import redis_client
 
 # 去除易混淆字符
 _CHARS = "2345678ABCDEFGHJKMNPQRTUVWXYabcdefghjkmnpqrtuvwxy"
@@ -42,7 +41,7 @@ _FONT_PATH = _find_font()
 
 
 class CaptchaService:
-    """图片验证码，Redis做存储，降级为内存"""
+    """图片验证码（纯内存存储）"""
 
     def __init__(self):
         self._memory_store: dict = {}
@@ -62,26 +61,16 @@ class CaptchaService:
                     del self._memory_store[k]
 
     def _set(self, token: str, code: str, ttl: int = 300):
-        if redis_client.available:
-            redis_client.set(f"captcha:{token}", code.upper(), ex=ttl)
-        else:
-            with self._lock:
-                self._memory_store[token] = {"code": code.upper(), "exp": time.time() + ttl}
+        with self._lock:
+            self._memory_store[token] = {"code": code.upper(), "exp": time.time() + ttl}
 
     def _get_and_delete(self, token: str) -> Optional[str]:
-        if redis_client.available:
-            val = redis_client.get(f"captcha:{token}")
-            if val is not None:
-                redis_client.delete(f"captcha:{token}")
-                return val
-            return None
-        else:
-            with self._lock:
-                entry = self._memory_store.pop(token, None)
-                if entry and time.time() < entry["exp"]:
-                    return entry["code"]
-            self._cleanup_memory()
-            return None
+        with self._lock:
+            entry = self._memory_store.pop(token, None)
+            if entry and time.time() < entry["exp"]:
+                return entry["code"]
+        self._cleanup_memory()
+        return None
 
     def _draw_text_with_font(self, draw, text, xy, font_size, color):
         """尝试用 truetype 字体，失败则用默认字体"""

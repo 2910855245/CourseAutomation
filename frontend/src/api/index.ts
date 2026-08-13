@@ -104,7 +104,6 @@ export const api = {
     get: (id: string, token?: string) => get<ApiResponse<OrderItem>>('/api/orders/' + id + (token ? '?token=' + encodeURIComponent(token) : '')),
     cancel: (id: string, token?: string) => del<ApiResponse<any>>('/api/orders/' + id + (token ? '?token=' + encodeURIComponent(token) : '')),
     clearHistory: () => post<ApiResponse<any>>('/api/orders/clear-history'),
-    exportCsv: (params?: Record<string, any>) => `/api/orders/export-csv` + buildQuery(params),
     auditLog: (id: string) => get<ApiResponse<{ event: string; detail: string; created_at: string }[]>>('/api/orders/audit-log/' + id),
     notifications: () => get<ApiResponse<{ type: string; message: string; time: string; order_id: string }[]>>('/api/orders/notifications'),
     activeCourses: (username: string) => get<ApiResponse<string[]>>('/api/orders/active-courses?username=' + encodeURIComponent(username)),

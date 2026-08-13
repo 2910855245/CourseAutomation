@@ -7,7 +7,6 @@ from typing import Any, Dict
 
 from loguru import logger
 
-from api.redis_client import redis_client
 
 
 RATE_LIMIT_ORDER_PER_USER = 30
@@ -26,6 +25,7 @@ class RiskControl:
     def __init__(self):
         self._mem_counters: Dict[str, list] = defaultdict(list)
         self._mem_dedup: Dict[str, float] = {}
+        self._mem_blacklist: Dict[str, str] = {}
         self._mem_lock = threading.Lock()
 
     def _mem_rate_check(self, key: str, max_count: int, window_sec: int) -> bool:
@@ -55,14 +55,7 @@ class RiskControl:
             return False
 
     def check_rate_limit(self, key: str, max_count: int, window_sec: int) -> bool:
-        if not redis_client.available:
-            return self._mem_rate_check(key, max_count, window_sec)
-        count = redis_client.incr(key)
-        if count is None:
-            return self._mem_rate_check(key, max_count, window_sec)
-        if count == 1:
-            redis_client.expire(key, window_sec)
-        return count <= max_count
+        return self._mem_rate_check(key, max_count, window_sec)
 
     def can_create_order(self, user_id: str = "", ip: str = "") -> Dict[str, Any]:
         if user_id:
@@ -96,11 +89,6 @@ class RiskControl:
         if not user_id or not course_id:
             return True
         key = f"order:dedup:{user_id}:{course_id}"
-        if redis_client.available:
-            if redis_client.exists(key):
-                return False
-            redis_client.set(key, "1", ex=86400)
-            return True
         return not self._mem_dedup_exists(key)
 
     def validate_order_params(self, *, course_count: int = 0, order_amount: float = 0.0,
@@ -121,34 +109,32 @@ class RiskControl:
         return {"valid": True, "errors": []}
 
     def is_blacklisted(self, user_id: str = "", ip: str = "") -> bool:
-        if user_id and redis_client.available and redis_client.exists(f"blacklist:user:{user_id}"):
-            return True
-        if ip and redis_client.available and redis_client.exists(f"blacklist:ip:{ip}"):
-            return True
+        with self._mem_lock:
+            if user_id and user_id in self._mem_blacklist:
+                return True
+            if ip and ip in self._mem_blacklist:
+                return True
         return False
 
     def add_blacklist(self, user_id: str = "", ip: str = "", reason: str = ""):
-        if user_id:
-            redis_client.set(f"blacklist:user:{user_id}", reason)
-        if ip:
-            redis_client.set(f"blacklist:ip:{ip}", reason)
+        with self._mem_lock:
+            if user_id:
+                self._mem_blacklist[user_id] = reason
+            if ip:
+                self._mem_blacklist[ip] = reason
         logger.warning(f"风控黑名单 user_id={user_id} ip={ip} reason={reason}")
 
     def remove_blacklist(self, user_id: str = "", ip: str = ""):
-        if user_id:
-            redis_client.delete(f"blacklist:user:{user_id}")
-        if ip:
-            redis_client.delete(f"blacklist:ip:{ip}")
+        with self._mem_lock:
+            self._mem_blacklist.pop(user_id, None)
+            self._mem_blacklist.pop(ip, None)
 
     def list_blacklist(self) -> list:
-        result = []
-        for key, reason in redis_client.scan_keys("blacklist:ip:*"):
-            ip = key.replace("blacklist:ip:", "")
-            result.append({"type": "ip", "value": ip, "reason": reason or ""})
-        for key, reason in redis_client.scan_keys("blacklist:user:*"):
-            uid = key.replace("blacklist:user:", "")
-            result.append({"type": "user", "value": uid, "reason": reason or ""})
-        return result
+        with self._mem_lock:
+            return [{"type": "ip" if k.startswith("ip:") else "user",
+                     "value": k.replace("ip:", "").replace("user:", ""),
+                     "reason": v or ""}
+                    for k, v in self._mem_blacklist.items()]
 
     def log_audit(self, event_type: str, operator: str = "system", detail: str = "",
                   order_id: str = "", agent_id: str = "", user_id: str = ""):

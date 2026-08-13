@@ -130,21 +130,6 @@ class PlatformSetting(Base):
     updated_at: Mapped[str] = mapped_column(S, nullable=False)
 
 
-class Channel(Base):
-    __tablename__ = "channels"
-    channel_id: Mapped[str] = mapped_column(S, primary_key=True)
-    name: Mapped[str] = mapped_column(S, nullable=False)
-    service_type: Mapped[str] = mapped_column(S, nullable=False)
-    settle_price: Mapped[float] = mapped_column(Float, default=0.0)
-    current_load: Mapped[int] = mapped_column(Integer, default=0)
-    max_load: Mapped[int] = mapped_column(Integer, default=10)
-    completion_rate: Mapped[float] = mapped_column(Float, default=1.0)
-    avg_speed: Mapped[float] = mapped_column(Float, default=0.0)
-    score: Mapped[float] = mapped_column(Float, default=5.0)
-    status: Mapped[str] = mapped_column(S, default="active")
-    created_at: Mapped[str] = mapped_column(S, nullable=False)
-
-
 class SystemConfig(Base):
     __tablename__ = "system_config"
     config_key: Mapped[str] = mapped_column(S, primary_key=True)
@@ -163,32 +148,6 @@ class AuditLog(Base):
     created_at: Mapped[str] = mapped_column(S, nullable=False)
 
 
-class VmqPayOrder(Base):
-    __tablename__ = "vmq_pay_orders"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    pay_id: Mapped[str] = mapped_column(S, nullable=False, index=True)
-    order_id: Mapped[str] = mapped_column(S, default="")
-    param: Mapped[str] = mapped_column(S, default="")
-    pay_type: Mapped[int] = mapped_column(Integer, default=1)
-    price: Mapped[float] = mapped_column(Float, nullable=False)
-    really_price: Mapped[float] = mapped_column(Float, default=0.0)
-    state: Mapped[int] = mapped_column(Integer, default=0)
-    is_auto: Mapped[int] = mapped_column(Integer, default=1)
-    qrcode_url: Mapped[str] = mapped_column(Text, default="")
-    notify_url: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[str] = mapped_column(S, nullable=False)
-    paid_at: Mapped[Optional[str]] = mapped_column(S, nullable=True)
-    closed_at: Mapped[Optional[str]] = mapped_column(S, nullable=True)
-
-
-class TmpPrice(Base):
-    __tablename__ = "tmp_price"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    price: Mapped[float] = mapped_column(Float, unique=True, nullable=False, index=True)
-    oid: Mapped[str] = mapped_column(S, default="")
-    created_at: Mapped[str] = mapped_column(S, nullable=False)
-
-
 class VmqSetting(Base):
     __tablename__ = "vmq_settings"
     key: Mapped[str] = mapped_column(S, primary_key=True)
@@ -204,17 +163,6 @@ class VmqSetting(Base):
     MONITOR_VERSION = "monitor_version"
     MONITOR_LAST_HEART = "monitor_last_heart"
     MONITOR_STATUS = "monitor_status"
-
-
-class VmqQrcode(Base):
-    __tablename__ = "vmq_qrcodes"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    qrcode_id: Mapped[str] = mapped_column(S, nullable=False, index=True)
-    price: Mapped[float] = mapped_column(Float, default=0.0)
-    pay_type: Mapped[int] = mapped_column(Integer, default=1)
-    qrcode_content: Mapped[str] = mapped_column(Text, default="")
-    status: Mapped[int] = mapped_column(Integer, default=1)
-    created_at: Mapped[str] = mapped_column(S, nullable=False)
 
 
 class YpaySetting(Base):

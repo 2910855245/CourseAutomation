@@ -22,7 +22,6 @@ class Settings(BaseSettings):
     debug: bool = Field(default=False, alias="DEBUG")
     db_path: str = Field(default="data/orders.db", alias="DB_PATH")
     database_url: str = Field(default="", alias="DATABASE_URL")
-    redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
     rate_limit_requests: int = Field(default=600, alias="RATE_LIMIT_REQUESTS")
     rate_limit_window_seconds: int = Field(default=60, alias="RATE_LIMIT_WINDOW_SECONDS")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")

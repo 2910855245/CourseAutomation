@@ -58,13 +58,8 @@ def blacklist_token(token: str):
     except jwt.InvalidTokenError:
         return
 
-    from api.redis_client import redis_client
-    if redis_client.available:
-        redis_client.set(_blacklist_key(token_jti), "1", ex=max(ttl, 60))
-        logger.info(f"Token 已加入 Redis 黑名单 jti={token_jti[:16]}")
-    else:
-        _add_to_blacklist_in_memory(token_jti, ttl)
-        logger.info(f"Token 已加入内存黑名单 jti={token_jti[:16]}")
+    _add_to_blacklist_in_memory(token_jti, ttl)
+    logger.info(f"Token 已加入内存黑名单 jti={token_jti[:16]}")
 
 
 def is_token_blacklisted(token: str) -> bool:
@@ -76,9 +71,6 @@ def is_token_blacklisted(token: str) -> bool:
     except jwt.InvalidTokenError:
         return False
 
-    from api.redis_client import redis_client
-    if redis_client.available:
-        return redis_client.exists(_blacklist_key(token_jti))
     return _is_blacklisted_in_memory(token_jti)
 
 

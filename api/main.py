@@ -167,37 +167,24 @@ async def rate_limit_middleware(request: Request, call_next):
     window = settings.rate_limit_window_seconds
     max_requests = settings.rate_limit_requests
 
-    from api.redis_client import redis_client
-    if redis_client.available:
-        try:
-            allowed = redis_client.rate_limit_lua(key, max_requests, window)
-            if not allowed:
-                return JSONResponse(
-                    status_code=429,
-                    content={"detail": "请求过于频繁，请稍后再试"},
-                    headers={"Retry-After": str(window)},
-                )
-        except Exception as e:
-            pass
-    else:
-        cutoff = now - window
-        with _rate_limit_lock:
-            entries = _rate_limit_counters.get(key, [])
-            filtered = [t for t in entries if t > cutoff]
-            if len(filtered) >= max_requests:
-                return JSONResponse(
-                    status_code=429,
-                    content={"detail": "请求过于频繁，请稍后再试"},
-                    headers={"Retry-After": str(window)},
-                )
-            filtered.append(now)
-            _rate_limit_counters[key] = filtered
-            if len(_rate_limit_counters) > 10000:
-                cutoff_cleanup = now - window * 2
-                expired_keys = [k for k, v in _rate_limit_counters.items()
-                                if not v or v[-1] < cutoff_cleanup]
-                for k in expired_keys:
-                    del _rate_limit_counters[k]
+    cutoff = now - window
+    with _rate_limit_lock:
+        entries = _rate_limit_counters.get(key, [])
+        filtered = [t for t in entries if t > cutoff]
+        if len(filtered) >= max_requests:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "请求过于频繁，请稍后再试"},
+                headers={"Retry-After": str(window)},
+            )
+        filtered.append(now)
+        _rate_limit_counters[key] = filtered
+        if len(_rate_limit_counters) > 10000:
+            cutoff_cleanup = now - window * 2
+            expired_keys = [k for k, v in _rate_limit_counters.items()
+                            if not v or v[-1] < cutoff_cleanup]
+            for k in expired_keys:
+                del _rate_limit_counters[k]
 
     return await call_next(request)
 
@@ -278,12 +265,6 @@ def api_info():
     }
 
 
-@app.get("/api/redis/health")
-def redis_health(admin: dict = Depends(get_current_admin)):
-    from api.redis_client import redis_client
-    return redis_client.health_check()
-
-
 @app.get("/api/system/status")
 def system_status(admin: dict = Depends(get_current_admin)):
     from services.task_manager import manager as tm
@@ -297,9 +278,6 @@ def system_status(admin: dict = Depends(get_current_admin)):
     from api.database import db
     order_stats = db.get_stats()
 
-    from api.redis_client import redis_client
-    redis_status = redis_client.health_check()
-
     return {
         "tasks": {
             "running": running,
@@ -310,11 +288,9 @@ def system_status(admin: dict = Depends(get_current_admin)):
         },
         "queue": get_combined_stats(),
         "orders": order_stats,
-        "redis": redis_status,
         "rate_limit": {
             "max_requests": settings.rate_limit_requests,
             "window_seconds": settings.rate_limit_window_seconds,
-            "enabled": redis_client.available,
         },
     }
 
