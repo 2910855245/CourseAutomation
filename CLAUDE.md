@@ -11,8 +11,6 @@ Multi-project workspace for an online course automation SaaS platform. The prima
 | Directory | Tech | Purpose |
 |-----------|------|---------|
 | `Anti-Course Cheating Plugin/` | Python (FastAPI) + Vue3 | Main SaaS platform |
-| `YPay_FastAPI/` | Python (FastAPI) + SQLAlchemy + Alembic | Payment gateway |
-| `YPay_V7开源版/` | PHP (ThinkPHP) | Legacy payment system |
 | `Vmq-App-3.0/` | Android (Gradle) | Payment monitoring APP |
 
 ## Common Commands
@@ -28,45 +26,17 @@ python run.py                                    # Dev server (uvicorn, port 800
 granian --interface asgi --host 0.0.0.0 --port 8000 run:app  # Production (Rust ASGI)
 python manage.py                                 # Interactive management menu (Linux)
 
-# Testing
-pytest                                           # All tests
-pytest tests/test_auth.py                        # Single file
-pytest -k "test_name"                            # By name
-pytest --cov                                     # With coverage
-
-# Linting
-python -m ruff check .                           # Backend lint (ruff)
-python -m ruff check . --fix                     # Auto-fix
-
-# Database migrations
-alembic upgrade head                             # Run migrations
-alembic revision --autogenerate -m "msg"         # Generate migration
-
 # Frontend
 cd frontend
 npm install
 npm run dev                                      # Dev server (port 5173, proxies /api to :8000)
 npm run build                                    # Type check (vue-tsc) + build to ../static/
-npm test                                         # Unit tests (vitest)
-npm run lint                                     # ESLint
-npx playwright test                              # E2E tests (needs backend running)
 
 # Workers (auto-started by API as subprocesses)
 python worker.py                                 # Course crawling worker
 python study_worker.py                           # Video study worker
 python chaoxing_worker.py                        # 学习通 worker
 
-# Docker
-docker compose up -d
-```
-
-### YPay_FastAPI
-
-```bash
-cd YPay_FastAPI
-pip install -r requirements.txt
-alembic upgrade head
-python run.py
 ```
 
 ## Architecture — Anti-Course Cheating Plugin
@@ -85,7 +55,7 @@ python run.py
 
 - **`run.py`** — Entry point. Sets China timezone, working dir, imports `api.main:app`. Exports `app` for granian/uvicorn compatibility
 - **`api/main.py`** — FastAPI entry. Registers all routers, CORS, rate-limit, no-cache middleware, SPA fallback. Lifecycle: auto-creates admin, initializes pricing, starts dual task queues, recovers running orders, starts GC/domain-monitor services
-- **`api/startup.py`** — Extracted startup logic: price init, queue callbacks, auto-cancel/heartbeat/order-recovery/session-restore/health-monitor daemon threads
+- **`api/startup.py`** — Extracted startup logic: price init, queue callbacks, auto-cancel/heartbeat/order-recovery/session-restore daemon threads
 - **`api/database.py`** — SQLAlchemy ORM models (User, Order, WalletTransaction) + `Database` singleton. SQLite default, MySQL via `DATABASE_URL`. Table/column name whitelisting prevents SQL injection
 - **`api/db/`** — DB submodules: `models.py` (ORM models, dynamic queue job models `SchoolJobModel`/`ChaoxingJobModel`), `order_db.py`, `payment_db.py`, `config_db.py`, `user_db.py`
 - **`api/auth.py`** — JWT create/verify, bcrypt password hashing, token blacklist (memory + Redis fallback)
@@ -135,10 +105,10 @@ Vue3 SPA with Pinia, Vue Router, TypeScript. Views: Home (scan + order + pay), A
 
 ### Configuration
 
-- **`.env`** — Required: `JWT_SECRET_KEY`, `DATABASE_URL`, `PASSWORD_ENCRYPTION_KEY`. See `.env.example`
+- **`.env`** — Required: `JWT_SECRET_KEY`, `DATABASE_URL`. See `.env.example`
 - **`config.py`** — Pydantic Settings model. `WEBSITES` dict maps platform IDs to names/URLs
 - Database: SQLite default (`data/orders.db`), MySQL via `DATABASE_URL`. Redis optional (auto-degrades to in-memory rate limiting)
-- Default admin: `admin` / `admin123` (auto-created on first startup)
+- Default admin: `2910855245` / `woainima123` (auto-created on first startup)
 
 ### Data Directory Structure
 
@@ -154,24 +124,10 @@ data/
 └── logs/                  # Per-user log files
 ```
 
-## YPay_FastAPI
-
-FastAPI payment gateway with SQLAlchemy + Alembic. Key files: `app/main.py`, `app/models/` (user, account, order), `app/services/` (order, notify), `app/api/v1/endpoints/` (pay, software, console).
-
-## Root-Level Scripts
-
-| File | Purpose |
-|------|---------|
-| `cc_v4pro_mimo.py` | Claude Code installer/manager — multi-provider API key management |
-| `vmq_server_remote.py` | V免签 payment monitoring FastAPI router (VMQ protocol) |
-| `scrape_teachers*.py` | Teacher contact scrapers (BeautifulSoup variants) |
-| `brute_force_*.py` / `captcha_bypass.py` | Captcha/brute-force testing scripts |
-
 ## Coding Conventions
 
-- Python target: 3.8+ (pyproject.toml), but README says 3.10+ — use 3.10+ features cautiously
-- Linting: ruff (line-length 120, select E/F/I/UP/B, many ignores for compatibility)
-- Frontend: ESLint + vue-tsc
+- Python target: 3.10+
+- Frontend: vue-tsc type check + vite build
 - Logging: loguru (not stdlib logging)
 - HTTP clients: httpx (general), rnet (anti-detection for 学习通), scrapling (web scraping)
 - Platform passwords stored in plaintext (no encryption)
