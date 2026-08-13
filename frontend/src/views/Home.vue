@@ -23,9 +23,9 @@ const {
   calcCoursePrice, fetchBackendPrices, saveSession,
   paying, showPayModal, payTotal, submitSuccess, payError, payQrCode, payPollTimer,
   selectedPayMethod, payOrders, payQrCodes, payReallyPrices, payBatchIds, payBatchOutTradeNos,
-  payBatchId, payBatchOutTradeNo, showPaySuccess, footerAds, paySuccessAmount, payTimedOut,
+  payBatchId, payBatchOutTradeNo, showPaySuccess, paySuccessAmount, payTimedOut,
   handleOrderSuccess, goToOrders, submitAndPay, onPaySuccessDone, closePay, savePayQr, switchPayMethod,
-  danmakuList, pct, pctClass, LS_KEY,
+  pct, pctClass, LS_KEY,
   showAnnouncement, announcementContent, checkAnnouncement, dismissAnnouncement,
 } = useHomeState()
 
@@ -70,7 +70,6 @@ onMounted(async () => {
       }
     }
   } catch {}
-  try { const adRes = await api.ads.listPublic(); if (adRes.data) footerAds.value = adRes.data } catch {}
   if (scanDone.value && username.value.trim()) {
     try { const r = await api.orders.activeCourses(username.value.trim()); const activeIds: string[] = r?.data || []; for (const cid of activeIds) submittedCourseIds.value.add(cid) } catch {}
   }
@@ -504,16 +503,7 @@ AI智能答题考试
     </Teleport>
 
     <footer class="page-footer" :class="{ 'hide-on-mobile-results': scanDone }">
-      <div class="footer-divider-wrap">
-        <div class="footer-divider"></div>
-        <div class="danmaku-layer">
-          <span v-for="(d, i) in danmakuList" :key="i" class="danmaku-item" :style="{ '--x': d.x, '--delay': d.delay, '--dur': d.dur }">{{ d.text }}</span>
-        </div>
-      </div>
-      <div v-if="footerAds.length" class="footer-ads">
-        <a v-for="ad in footerAds" :key="ad.id" :href="'/api/ads/' + ad.id + '/page'" target="_blank" class="footer-ad-link">{{ ad.name }}</a>
-      </div>
-      <div v-else class="footer-brand">
+      <div class="footer-brand">
         <span>FUCK<strong>文理网课</strong> · 专业解决你的需求</span>
       </div>
     </footer>
@@ -643,30 +633,7 @@ AI智能答题考试
   font-weight: 600;
 }
 
-.danmaku-layer {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  overflow: hidden;
-  pointer-events: none;
-  z-index: 0;
-}
 
-.danmaku-item {
-  position: absolute;
-  left: var(--x);
-  bottom: -40px;
-  font-size: 16px;
-  font-weight: 700;
-  color: rgba(79,110,247,0.18);
-  opacity: 0;
-  white-space: nowrap;
-  letter-spacing: 1px;
-  animation: danmakuFloatUp var(--dur) ease-in-out infinite;
-  animation-delay: var(--delay);
-}
 
 .login-card {
   background: var(--c-surface);
@@ -1428,65 +1395,6 @@ AI智能答题考试
   padding: 0 24px 12px;
   margin-top: 20px;
 }
-.footer-divider-wrap {
-  position: relative;
-  height: 1px;
-  overflow: visible;
-}
-.footer-divider {
-  height: 1px;
-  background: var(--c-border);
-}
-.footer-divider-wrap .danmaku-layer {
-  position: absolute;
-  top: -400px;
-  left: 0;
-  right: 0;
-  height: 400px;
-  overflow: hidden;
-  pointer-events: none;
-  z-index: 0;
-}
-.footer-divider-wrap .danmaku-item {
-  bottom: 0;
-  top: auto;
-  animation: danmakuFloatUp var(--dur) ease-in-out infinite;
-  animation-delay: var(--delay);
-}
-@keyframes danmakuFloatUp {
-  0% {
-    opacity: 0;
-    transform: translateY(0);
-  }
-  10% {
-    opacity: 1;
-  }
-  90% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-    transform: translateY(-350px);
-  }
-}
-.footer-ads {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 10px 0 0;
-  flex-wrap: wrap;
-}
-.footer-ad-link {
-  font-size: 12px;
-  color: var(--c-text-muted);
-  text-decoration: none;
-  padding: 3px 12px;
-  border-radius: 20px;
-  background: var(--c-bg);
-  transition: all .15s;
-}
-.footer-ad-link:hover { color: var(--c-primary); background: var(--c-primary-bg); text-decoration: none; }
 .footer-brand {
   padding: 10px 0 0;
   font-size: 12px;
@@ -1501,124 +1409,6 @@ AI智能答题考试
   .plan-grid { grid-template-columns: 1fr; }
   .summary-bar { flex-direction: column; gap: 12px; }
   .sb-left, .sb-right { width: 100%; justify-content: center; }
-  .danmaku-layer { display: none; }
-
-  .content-wrapper { padding: 0 12px; }
-
-  .landing-center {
-    padding: 24px 12px 0;
-    justify-content: center;
-    gap: 0;
-  }
-  .lc-title { font-size: 24px; margin-bottom: 8px; }
-  .lc-subtitle { font-size: 12px; margin-bottom: 14px; }
-  .lc-pills { gap: 6px; margin-bottom: 18px; }
-  .pill { padding: 3px 10px; font-size: 11px; }
-  .login-card { max-width: 100%; padding: 20px 16px; margin-top: 20px; }
-  .login-card .field { margin-bottom: 14px; }
-  .login-card .btn-lg { padding: 12px 20px; font-size: 15px; }
-
-  /* 结果页：顶栏固定 + 底栏固定 + 列表滚动 */
-  .results {
-    display: flex;
-    flex-direction: column;
-    padding: 12px 0 140px;
-    position: relative;
-    min-height: 100vh;
-  }
-  .results-topbar {
-    flex-shrink: 0;
-    flex-wrap: wrap;
-    gap: 8px;
-    padding: 10px 12px;
-    margin-bottom: 6px;
-  }
-  .rt-student { font-size: 12px; padding: 3px 10px; }
-  .rt-actions { width: 100%; justify-content: center; }
-  .rt-info { flex-wrap: wrap; gap: 4px; }
-  .rt-pill { font-size: 11px; padding: 2px 8px; }
-  .partial-warning, .submitted-banner {
-    flex-shrink: 0;
-    font-size: 12px;
-    padding: 8px 12px;
-  }
-  .plan-select {
-    margin-bottom: 6px;
-  }
-  .plan-card.single { max-width: 100%; margin: 0; }
-  .plan-card { padding: 14px 12px; }
-  .ppr-price { font-size: 18px; }
-  .scenario-banner { padding: 10px 14px; gap: 10px; font-size: 12px; margin-bottom: 6px; }
-
-  .platform-block {
-    padding: 12px 14px;
-    margin-bottom: 6px;
-  }
-  .pb-header { gap: 8px; margin-bottom: 8px; }
-  .pb-count { font-size: 11px; }
-  .course-row {
-    padding: 8px 0;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-  .cr-name { font-size: 13px; flex: 1 1 100%; order: -1; }
-  .cr-check { order: 0; }
-  .cr-meta { gap: 4px; flex-wrap: wrap; flex: 1; }
-  .cr-bar { width: 40px; }
-  .cr-pct { font-size: 10px; min-width: 28px; }
-  .cr-pill { font-size: 10px; padding: 1px 6px; }
-
-  .summary-bar {
-    position: fixed;
-    bottom: 0; left: 0; right: 0;
-    flex-direction: column;
-    gap: 10px;
-    padding: 12px 16px;
-    border-radius: 0;
-    border: none;
-    border-top: 1px solid var(--c-border);
-    background: var(--c-surface);
-    box-shadow: 0 -4px 16px rgba(0,0,0,.08);
-    z-index: 50;
-    margin-bottom: 0;
-  }
-  .sb-left { gap: 12px; }
-  .sb-item { font-size: 12px; }
-  .sb-right { flex-direction: column; align-items: center; gap: 8px; width: 100%; }
-  .sb-detail { flex-direction: row; flex-wrap: wrap; gap: 6px; justify-content: center; }
-  .sb-detail-item { font-size: 11px; }
-  .sb-price { font-size: 20px; }
-  .sb-right .btn-lg { width: 100%; }
-
-  .results .plan-select,
-  .results .platform-block {
-    margin-bottom: 6px;
-  }
-
-  .page-footer { padding: 12px 16px 16px; margin-top: 0; }
-  .page-footer.hide-on-mobile-results { display: none; }
-
-  /* 支付弹窗 */
-  .modal-box.pay-modal {
-    width: 92vw;
-    max-width: none;
-    padding: 24px 20px;
-    border-radius: var(--radius-lg);
-  }
-  .modal-amount { font-size: 32px; }
-  .pay-qr-img { width: 180px; height: 180px; }
-  .pay-qr-placeholder { width: 180px; height: 180px; }
-
-  /* Done/error cards */
-  .done-card { padding: 32px 20px; }
-  .done-card h1 { font-size: 22px; }
-  .all-done-wrapper { padding: 24px 16px; min-height: auto; }
-
-  /* Relogin dialog */
-  .relogin-box { width: 90vw; }
-  .relogin-header { padding: 16px 18px 0; }
-  .relogin-body { padding: 12px 18px; }
-  .relogin-footer { padding: 10px 18px 16px; }
 }
 
 /* 系统公告弹窗 */

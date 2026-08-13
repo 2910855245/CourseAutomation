@@ -21,7 +21,6 @@ import SecurityTab from '@/views/admin/SecurityTab.vue'
 import RiskTab from '@/views/admin/RiskTab.vue'
 import PricingTab from '@/views/admin/PricingTab.vue'
 import YpayTab from '@/views/admin/YpayTab.vue'
-import AdsTab from '@/views/admin/AdsTab.vue'
 import AnnouncementTab from '@/views/admin/AnnouncementTab.vue'
 
 const store = useAppStore()
@@ -40,7 +39,7 @@ const ypayAdmin = useYpayAdmin()
 const { load: loadPlatformNames, getName: getPlatformName, platformNames } = usePlatformNames()
 
 // ── Tab switching (orchestrates across composables) ──
-type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'users' | 'pricing' | 'ypay' | 'ads' | 'proxy' | 'announcement' | 'risk' | 'security'
+type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'users' | 'pricing' | 'ypay' | 'proxy' | 'announcement' | 'risk' | 'security'
 const activeTab = ref<SidebarKey>('overview')
 const expandedSidebarItems = ref<string[]>(['queue'])
 
@@ -61,7 +60,6 @@ function switchTab(tab: SidebarKey) {
   if (tab === 'security') { pwForm.old_password = ''; pwForm.new_password = ''; pwForm.confirm_password = ''; if (currentRole.value === 'admin') { sysConfig.loadDeepseekKey(); sysConfig.loadRiskData() } }
   if (tab === 'pricing') sysConfig.loadPricing()
   if (tab === 'ypay') ypayAdmin.loadYpay()
-  if (tab === 'ads') ypayAdmin.loadAds()
   if (tab === 'proxy') { sysConfig.loadProxySettings(); sysConfig.fetchServerPublicIp() }
 }
 
@@ -331,7 +329,6 @@ const adminState = initAdminState({
           <YpayTab v-if="activeTab === 'ypay'" />
 
 
-          <AdsTab v-if="activeTab === 'ads'" />
 </div>
       </main>
 
@@ -353,7 +350,7 @@ const adminState = initAdminState({
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
           <span>用户</span>
         </button>
-        <button :class="['mbn-item', { active: activeTab === 'security' || activeTab === 'pricing' || activeTab === 'ypay' || activeTab === 'ads' || activeTab === 'proxy' }]" @click="mobileSidebarOpen = true">
+        <button :class="['mbn-item', { active: activeTab === 'security' || activeTab === 'pricing' || activeTab === 'ypay' || activeTab === 'proxy' }]" @click="mobileSidebarOpen = true">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
           <span>更多</span>
         </button>

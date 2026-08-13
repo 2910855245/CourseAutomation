@@ -111,9 +111,6 @@ export function useSystemConfig() {
   }
 
   // ── Pricing ──
-  const marketForm = reactive({ avgPrice: 5, maxPrice: 6, minPrice: 0, myCost: 0.5, extraInfo: '' })
-  const recommending = ref(false)
-  const recommendResult = ref<any>(null)
   const applyingPackage = ref(false)
   const packagePricing = reactive({
     priceSmall: 3, priceMedium: 5, priceLarge: 6,
@@ -145,41 +142,6 @@ export function useSystemConfig() {
       Object.assign(editPricing, { ...packagePricing })
     } catch (e: any) {
       store.toast('加载定价配置失败: ' + (e?.message || '网络错误'), 'error')
-    }
-  }
-
-  async function getRecommendation() {
-    if (marketForm.avgPrice <= 0 || marketForm.maxPrice <= 0) {
-      store.toast('请填写市场平均价和最高价', 'warning')
-      return
-    }
-    recommending.value = true
-    recommendResult.value = null
-    try {
-      const res = await api.pricing.recommend({
-        avg_price: marketForm.avgPrice,
-        max_price: marketForm.maxPrice,
-        min_price: marketForm.minPrice || undefined,
-        my_cost_per_course: marketForm.myCost,
-        extra_info: marketForm.extraInfo || undefined,
-      })
-      recommendResult.value = res.data
-      const r = res.data.recommended
-      packagePricing.priceSmall = r.priceSmall
-      packagePricing.priceMedium = r.priceMedium
-      packagePricing.priceLarge = r.priceLarge
-      packagePricing.discount25 = r.discount25
-      packagePricing.discount50 = r.discount50
-      packagePricing.discount75 = r.discount75
-      packagePricing.priceMinimum = r.priceMinimum
-      packagePricing.priceExamOnly = r.priceExamOnly || 5
-      packagePricing.priceHomeworkOnly = r.priceHomeworkOnly || 3
-      Object.assign(editPricing, { ...packagePricing })
-      store.toast('AI 推荐方案已生成', 'success')
-    } catch (e: any) {
-      store.toast('推荐失败: ' + (e?.message || '网络错误'), 'error')
-    } finally {
-      recommending.value = false
     }
   }
 
@@ -264,26 +226,7 @@ export function useSystemConfig() {
   const riskIntervalInput = ref(3600)
   const showAddDomainModal = ref(false)
   const addDomainForm = reactive({ domain: '', name: '', url: '' })
-  const healthSummary = ref<any>(null)
-  const loadingHealth = ref(false)
-  const healthChecking = ref(false)
   const riskCheckStep = ref('')
-  const healthIntervalInput = ref(3600)
-  const healthIntervalSaving = ref(false)
-  const healthAccountInput = ref('')
-  const healthPasswordInput = ref('')
-  const healthAccountSaving = ref(false)
-  const healthChaoxingAccountInput = ref('')
-  const healthChaoxingPasswordInput = ref('')
-  const healthChaoxingSaving = ref(false)
-  const healthSchoolSaved = ref(false)
-  const healthChaoxingSaved = ref(false)
-  const healthSchoolSwitched = ref(false)
-  const healthChaoxingSwitched = ref(false)
-  const showHealthSettings = ref(false)
-  const riskLoginForm = reactive({ username: '', password: '' })
-  const riskLoginLoading = ref(false)
-  const riskNeedLogin = ref(false)
   const riskChecks = ref<any[]>([])
 
   const riskScore = computed(() => {
@@ -345,33 +288,20 @@ export function useSystemConfig() {
     const interval = riskIntervalInput.value || 3600
     checks.push({ id: 'interval', name: '自动检查', expanded: false, desc: `每 ${Math.floor(interval / 60)} 分钟自动检查一次`, status: interval >= 300 ? 'pass' : 'warn' })
 
-    const hChecks = healthSummary.value?.checks || {}
-    const hNameMap: Record<string, string> = { auth: '登录态', courses: '课程列表', study_report: '学习上报', exam_api: '考试接口' }
-    for (const key of ['auth', 'courses', 'study_report', 'exam_api']) {
-      const val = hChecks[key]
-      if (val) {
-        const st = val.status === 'healthy' ? 'pass' : val.status === 'warning' ? 'warn' : 'fail'
-        checks.push({ id: `health_${key}`, name: hNameMap[key] || key, expanded: false, desc: val.message || '', status: st })
-      } else {
-        checks.push({ id: `health_${key}`, name: hNameMap[key] || key, expanded: false, desc: '未检测，点击"全面检查"执行', status: 'unknown' })
-      }
-    }
     riskChecks.value = checks
   }
 
   async function loadRiskData() {
     loadingRisk.value = true
     try {
-      const [ds, js, health, alerts, hSummary] = await Promise.all([
+      const [ds, js, health, alerts] = await Promise.all([
         api.adminDomainMonitor.status(), api.adminDomainMonitor.jsStatus(),
         api.adminDomainMonitor.health(), api.adminDomainMonitor.alerts(30),
-        api.healthMonitor.summary().catch(() => ({ data: null })),
       ])
       riskDomainStatus.value = ds.data; riskJsStatus.value = js.data
       riskHealth.value = health.data; riskAlerts.value = alerts.data || []
       riskIntervalInput.value = ds.data?.interval || 3600
-      healthSummary.value = hSummary.data
-      buildRiskChecks(); loadHealthInterval(); loadHealthAccount()
+      buildRiskChecks()
     } catch (e: any) { store.toast(e.message || '加载风险数据失败', 'error') }
     finally { loadingRisk.value = false }
   }
@@ -404,72 +334,8 @@ export function useSystemConfig() {
     catch (e: any) { store.toast(e.message, 'error') }
   }
 
-  async function runHealthCheck(websiteId?: number) {
-    healthChecking.value = true
-    try {
-      if (websiteId !== undefined) await api.healthMonitor.check(websiteId)
-      else await api.healthMonitor.checkAll()
-      const [hSummary, healthRes] = await Promise.all([
-        api.healthMonitor.summary().catch(() => ({ data: null })),
-        api.adminDomainMonitor.health().catch(() => ({ data: null })),
-      ])
-      healthSummary.value = hSummary.data
-      if (healthRes.data) riskHealth.value = healthRes.data
-    } catch (e: any) { throw e }
-    finally { healthChecking.value = false }
-  }
-
-  async function saveHealthInterval() {
-    healthIntervalSaving.value = true
-    try { await api.healthMonitor.setInterval(healthIntervalInput.value); store.toast(`检查间隔已设为 ${healthIntervalInput.value} 秒`, 'success') }
-    catch (e: any) { store.toast(e?.message || '保存失败', 'error') }
-    finally { healthIntervalSaving.value = false }
-  }
-
-  async function loadHealthInterval() {
-    try { const res = await api.healthMonitor.getInterval(); if (res.data?.interval) healthIntervalInput.value = res.data.interval } catch {}
-  }
-
-  async function saveHealthAccount(websiteType: string = 'school') {
-    const isChaoxing = websiteType === 'chaoxing'
-    const username = isChaoxing ? healthChaoxingAccountInput.value.trim() : healthAccountInput.value.trim()
-    const password = isChaoxing ? healthChaoxingPasswordInput.value : healthPasswordInput.value
-    if (!username || !password) { store.toast('请输入检测账号和密码', 'error'); return }
-    if (isChaoxing) healthChaoxingSaving.value = true
-    else healthAccountSaving.value = true
-    try {
-      // 检测是否是切换账号（之前已有保存的账号）
-      const prevSaved = isChaoxing ? healthChaoxingSaved.value : healthSchoolSaved.value
-      await api.healthMonitor.setAccount(username, password, websiteType)
-      if (isChaoxing) {
-        healthChaoxingSaved.value = true
-        healthChaoxingSwitched.value = prevSaved
-      } else {
-        healthSchoolSaved.value = true
-        healthSchoolSwitched.value = prevSaved
-      }
-      store.toast(prevSaved ? '检测账号已切换' : '检测账号已保存', 'success')
-      await loadHealthAccount()
-    } catch (e: any) { store.toast(e?.message || '保存失败', 'error') }
-    finally {
-      if (isChaoxing) healthChaoxingSaving.value = false
-      else healthAccountSaving.value = false
-    }
-  }
-
-  async function loadHealthAccount() {
-    try {
-      const res = await api.healthMonitor.getAccount()
-      const accounts = res.data?.accounts || []
-      const school = accounts.find((a: any) => (a.website_type || 'school') === 'school' && a.active) || accounts.find((a: any) => (a.website_type || 'school') === 'school')
-      const chaoxing = accounts.find((a: any) => a.website_type === 'chaoxing' && a.active) || accounts.find((a: any) => a.website_type === 'chaoxing')
-      if (school) { healthAccountInput.value = school.username; healthPasswordInput.value = school.password; healthSchoolSaved.value = true }
-      if (chaoxing) { healthChaoxingAccountInput.value = chaoxing.username; healthChaoxingPasswordInput.value = chaoxing.password; healthChaoxingSaved.value = true }
-    } catch {}
-  }
-
   async function runFullRiskCheck() {
-    riskChecking.value = true; riskNeedLogin.value = false
+    riskChecking.value = true
     try {
       riskCheckStep.value = '域名监控'
       const dsRes = await api.adminDomainMonitor.check()
@@ -479,32 +345,11 @@ export function useSystemConfig() {
       riskCheckStep.value = 'JS 反作弊'
       const jsRes = await api.adminDomainMonitor.jsCheck()
       if (jsRes.data?.changes?.length) { store.toast(`检测到 ${jsRes.data.changes.length} 个JS文件变更`, 'warning') }
-      riskCheckStep.value = '平台登录态'
-      try { await runHealthCheck() } catch (e: any) {
-        if (e?.message?.includes('会话') || e?.message?.includes('登录') || e?.response?.status === 400) riskNeedLogin.value = true
-      }
       riskCheckStep.value = '刷新数据'
       await loadRiskData()
-      if (riskNeedLogin.value) { store.toast('需要先登录平台账号才能执行健康检查', 'warning') }
-      else { store.toast('全面检查完成', 'success') }
+      store.toast('全面检查完成', 'success')
     } catch { store.toast('检查失败', 'error') }
     finally { setTimeout(() => { riskChecking.value = false; riskCheckStep.value = '' }, 800) }
-  }
-
-  async function riskLoginAndCheck() {
-    if (!riskLoginForm.username.trim() || !riskLoginForm.password.trim()) { store.toast('请输入账号密码', 'warning'); return }
-    riskLoginLoading.value = true
-    try {
-      const res = await api.courses.scan({ username: riskLoginForm.username.trim(), password: riskLoginForm.password.trim(), include_records: false })
-      const platforms = res.data.platforms || []
-      const okCount = platforms.filter((p: any) => p.status === 'ok').length
-      if (okCount > 0) {
-        store.toast(`登录成功 (${okCount}/${platforms.length} 个平台)`, 'success')
-        riskLoginForm.username = ''; riskLoginForm.password = ''; riskNeedLogin.value = false
-        await runHealthCheck(); buildRiskChecks(); store.toast('全面检查完成', 'success')
-      } else { store.toast('所有平台登录失败，请检查账号密码', 'error') }
-    } catch (e: any) { store.toast(e?.message || '登录失败', 'error') }
-    finally { riskLoginLoading.value = false }
   }
 
   async function addDomain() {
@@ -541,22 +386,19 @@ export function useSystemConfig() {
     testingModel, DEEPSEEK_MODELS,
     loadDeepseekKey, saveDeepseekKey, clearDeepseekKey, testDeepseekApi, saveModels, testModelApi,
     // Pricing
-    marketForm, recommending, recommendResult, applyingPackage, packagePricing,
+    applyingPackage, packagePricing,
     editingPricing, savingPricing, editPricing,
-    loadPricing, getRecommendation, applyPackagePricing, cancelEditPricing, savePricingConfig,
+    loadPricing, applyPackagePricing, cancelEditPricing, savePricingConfig,
     // Proxy
     proxyForm, proxySaving, proxyTesting, proxyTestResult, proxyTestOk, serverPublicIp,
     loadProxySettings, saveProxy, testProxy, fetchServerPublicIp,
-    // Risk / Health
+    // Risk
     riskDomainStatus, riskJsStatus, riskHealth, riskAlerts, loadingRisk, riskChecking,
-    riskIntervalInput, showAddDomainModal, addDomainForm, healthSummary, loadingHealth,
-    healthChecking, riskCheckStep, healthIntervalInput, healthIntervalSaving,
-    healthAccountInput, healthPasswordInput, healthAccountSaving, healthChaoxingAccountInput, healthChaoxingPasswordInput, healthChaoxingSaving, healthSchoolSaved, healthChaoxingSaved, healthSchoolSwitched, healthChaoxingSwitched, showHealthSettings,
-    riskLoginForm, riskLoginLoading, riskNeedLogin, riskChecks,
+    riskIntervalInput, showAddDomainModal, addDomainForm, riskCheckStep,
+    riskChecks,
     riskScore, riskScoreColor, riskScoreLevel, riskScoreText, riskScoreDesc, riskScoreDash,
     buildRiskChecks, loadRiskData, runDomainCheck, runJsCheck, saveRiskInterval,
-    runHealthCheck, saveHealthInterval, loadHealthInterval, saveHealthAccount, loadHealthAccount,
-    runFullRiskCheck, riskLoginAndCheck, addDomain, removeDomain, clearRiskAlerts,
+    runFullRiskCheck, addDomain, removeDomain, clearRiskAlerts,
     // Constants
     platformColors, taskTypeNames, tierNames,
   }

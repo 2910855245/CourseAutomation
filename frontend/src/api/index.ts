@@ -88,8 +88,6 @@ export interface DashboardStats {
 
 export interface SystemStatus { tasks: { running: number; pending: number; completed: number; failed: number; total: number }; queue: { pending: number; running: number; completed: number; failed: number; total: number; active_workers: number }; orders: { total_orders: number; total_revenue: number; by_status: Record<string, { count: number; revenue: number }> } }
 
-export interface AdItem { id: number; slot: number; name: string; html_content: string; is_active: number; create_time: string }
-export interface AdPublicItem { id: number; slot: number; name: string }
 
 export const api = {
   courses: {
@@ -184,15 +182,6 @@ export const api = {
     set: (key: string, value: string) => post<ApiResponse<any>>('/api/admin/config', { key, value }),
     testDeepseek: (model?: string) => post<ApiResponse<any>>('/api/admin/config/test-deepseek', { model: model || 'deepseek-chat' }),
   },
-  adminAds: {
-    list: () => get<ApiResponse<AdItem[]>>('/api/admin/ads'),
-    create: (d: { slot: number; name: string; html_content: string }) => post<ApiResponse<any>>('/api/admin/ads', d),
-    update: (id: number, d: { name?: string; html_content?: string; is_active?: number }) => put<ApiResponse<any>>(`/api/admin/ads/${id}`, d),
-    delete: (id: number) => del<ApiResponse<any>>(`/api/admin/ads/${id}`),
-  },
-  ads: {
-    listPublic: () => get<ApiResponse<AdPublicItem[]>>('/api/ads'),
-  },
   proxy: {
     get: () => get<ApiResponse<{enabled:boolean;url:string;username:string;password:string}>>('/api/admin/proxy'),
     save: (d: {enabled:boolean;url:string;username:string;password:string}) => post<ApiResponse<any>>('/api/admin/proxy', d),
@@ -220,12 +209,6 @@ export const api = {
       priceExamOnly: number; priceHomeworkOnly: number;
       priceChaoxing: number;
     }>>('/api/pricing'),
-    recommend: (d: { avg_price: number; max_price: number; min_price?: number; my_cost_per_course?: number; extra_info?: string }) =>
-      post<ApiResponse<{
-        recommended: { priceSmall: number; priceMedium: number; priceLarge: number; discount25: number; discount50: number; discount75: number; priceMinimum: number; priceExamOnly: number; priceHomeworkOnly: number; videoUnitPrice: number; examUnitPrice: number; homeworkUnitPrice: number };
-        market: { avg: number; max: number; min: number; your_cost: number };
-        analysis: { strategy: string; scenarios: { course: string; videos: number; progress: string; competitor: string; your_price: string; note: string }[]; ai_powered: boolean };
-      }>>('/api/pricing/recommend', d),
     applyPackage: (d: Record<string, number>) => post<ApiResponse<any>>('/api/pricing/apply-package', d),
     calculate: (d: { courses: { course_id: string; video_total: number; video_completed: number; exam_total: number; exam_done: number; homework_total: number; homework_done: number }[] }) =>
       post<ApiResponse<{ courses: { course_id: string; type: string; price: number; label: string }[]; total: number; pricing_mode: string }>>('/api/pricing/calculate', d),
@@ -265,18 +248,6 @@ export const api = {
       return res.json()
     },
   },
-  setup: {
-    status: () => get<ApiResponse<{ done: boolean }>>('/api/setup/status'),
-    check: () => get<ApiResponse<{ all_ok: boolean; checks: { category: string; items: { name: string; status: string; msg: string; ok: boolean }[] }[]; setup_done: boolean }>>('/api/setup/check'),
-    initDb: () => post<ApiResponse<{ success: boolean; message: string }>>('/api/setup/init-db'),
-    saveConfig: (d: { site_url?: string; jwt_secret?: string; db_url?: string; redis_url?: string }) => post<ApiResponse<{ success: boolean; message: string }>>('/api/setup/save-config', d),
-    createAdmin: (d: { username: string; password: string }) => post<ApiResponse<{ success: boolean; message: string }>>('/api/setup/create-admin', d),
-    saveYpay: (d: { ypay_key?: string }) => post<ApiResponse<{ success: boolean; message: string }>>('/api/setup/save-ypay', d),
-    saveVmq: (d: { vmq_key?: string }) => post<ApiResponse<{ success: boolean; message: string }>>('/api/setup/save-vmq', d),
-    finish: () => post<ApiResponse<{ success: boolean; message: string }>>('/api/setup/finish'),
-    testDb: (d: { user: string; password: string; database: string }) => post<ApiResponse<{ success: boolean; message: string; db_url?: string }>>('/api/setup/test-db', d),
-    saveDb: (d: { user: string; password: string; database: string }) => post<ApiResponse<{ success: boolean; message: string }>>('/api/setup/save-db', d),
-  },
   app: {
     info: () => get<ApiResponse<{ app_name: string; version: string; apk_exists: boolean; apk_size_mb: number; download_url: string }>>('/api/app/info'),
     pairQrcode: () => get<ApiResponse<{ pair_data: string; qr_image: string | null; download_url: string; host: string; port: number }>>('/api/app/pair-qrcode'),
@@ -290,15 +261,5 @@ export const api = {
     get: () => get<ApiResponse<{ id: number; content: string; active: boolean }>>('/api/announcement'),
     set: (content: string) => post<ApiResponse<{ id: number }>>('/api/admin/announcement', { content }),
     disable: () => post<ApiResponse<any>>('/api/admin/announcement/disable'),
-  },
-  healthMonitor: {
-    summary: () => get<ApiResponse<{ status: string; check_time: string; website: string; checks: Record<string, { status: string; message: string }> }>>('/api/health/summary'),
-    check: (websiteId: number) => post<ApiResponse<{ website_id: number; website_name: string; check_time: string; checks: Record<string, { status: string; message: string; [k: string]: any }>; overall: string }>>(`/api/health/check/${websiteId}`),
-    checkAll: () => post<ApiResponse<Record<number, any>>>('/api/health/check/all'),
-    getInterval: () => get<ApiResponse<{ interval: number }>>('/api/health/interval'),
-    setInterval: (interval: number) => put<ApiResponse<{ interval: number }>>('/api/health/interval', { interval }),
-    getAccount: () => get<ApiResponse<{ accounts: { username: string; password: string; active: boolean }[] }>>('/api/health/account'),
-    setAccount: (username: string, password: string, website_type: string = 'school') => put<ApiResponse>('/api/health/account', { username, password, website_type }),
-    setAccounts: (accounts: { username: string; password: string; active: boolean }[]) => put<ApiResponse>('/api/health/accounts', { accounts }),
   },
 }

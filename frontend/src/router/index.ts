@@ -1,21 +1,4 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
-import { api } from '@/api'
-
-let setupChecked = false
-let setupDoneFromApi = false
-
-async function checkSetupDone(): Promise<boolean> {
-  if (setupChecked) return setupDoneFromApi
-  try {
-    const r = await fetch('/api/setup/status')
-    const d = await r.json()
-    setupDoneFromApi = !!(d.data && d.data.done)
-  } catch {
-    setupDoneFromApi = false
-  }
-  setupChecked = true
-  return setupDoneFromApi
-}
 
 const SITE_NAME = 'Anti-Course'
 
@@ -41,12 +24,6 @@ const router = createRouter({
       meta: { requiresAdmin: true, title: '后台管理' },
     },
     {
-      path: '/setup',
-      name: 'setup',
-      component: () => import('@/views/Setup.vue'),
-      meta: { title: '安装向导' },
-    },
-    {
       path: '/payment/:id',
       name: 'payment',
       component: () => import('@/views/Payment.vue'),
@@ -67,26 +44,17 @@ router.afterEach((to) => {
 })
 
 router.beforeEach(async (to, _from, next) => {
-  if (to.name === 'setup' || to.name === 'payment' || to.name === 'orders' || to.name === 'orderDetail' || to.name === 'admin') {
-    next()
-    return
+  if (to.meta.requiresAuth) {
+    const token = localStorage.getItem('user_token')
+    if (!token) { next({ name: 'home' }); return }
   }
-  const done = await checkSetupDone()
-  if (!done) {
-    next({ name: 'setup' })
-  } else {
-    if (to.meta.requiresAuth) {
-      const token = localStorage.getItem('user_token')
-      if (!token) { next({ name: 'home' }); return }
+  if (to.meta.requiresAdmin) {
+    const adminToken = localStorage.getItem('admin_token')
+    if (!adminToken) {
+      next({ name: 'home' }); return
     }
-    if (to.meta.requiresAdmin) {
-      const adminToken = localStorage.getItem('admin_token')
-      if (!adminToken) {
-        next({ name: 'home' }); return
-      }
-    }
-    next()
   }
+  next()
 })
 
 export default router

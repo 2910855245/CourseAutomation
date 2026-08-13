@@ -401,7 +401,6 @@ export function useHomeState() {
   const payBatchId = ref('')
   const payBatchOutTradeNo = ref('')
   const showPaySuccess = ref(false)
-  const footerAds = ref<{ id: number; slot: number; name: string }[]>([])
   const paySuccessAmount = ref(0)
   const payTimedOut = ref(false)
 
@@ -527,10 +526,6 @@ export function useHomeState() {
     if (payPollTimer.value) clearInterval(payPollTimer.value); startPollPayment()
   }
 
-  // ── Danmaku ──
-  const painTexts = ['化好妆了网课还没刷完', '兄弟们上号啊我还在刷课', '网课谁发明的能不能取消', '这视频怎么还要答题啊', '出去玩还要挂着刷课', '室友都在打游戏就我在刷', '又占我周末时间', '作业比专业课还多', '又要挂科了救救我吧', '周末本该出去拍照的', '室友都去KTV了就我留宿', '网课进度条怎么不动啊', '五排就差我一个了', '考前才知道有网课要刷', '早八人还要刷到凌晨三点', '社团活动全被网课耽误了', '一学期的课两周刷完', '求求了给个脚本吧']
-  const danmakuList = painTexts.map((text, idx) => ({ text, x: `${3 + idx * 5}%`, delay: `${idx * 2}s`, dur: `${14 + (idx % 3) * 3}s` }))
-
   // ── Utilities ──
   const pct = (c: CourseItem) => { const total = c.video_total; if (total === 0) return 0; return Math.round(c.video_completed / total * 100) }
   const pctClass = (c: CourseItem) => { const p = pct(c); if (p >= 100) return 'done'; if (p < 50) return 'low'; return '' }
@@ -576,10 +571,10 @@ export function useHomeState() {
     // Payment
     paying, showPayModal, payTotal, submitSuccess, payError, payQrCode, payPollTimer,
     selectedPayMethod, payOrders, payQrCodes, payReallyPrices, payBatchIds, payBatchOutTradeNos,
-    payBatchId, payBatchOutTradeNo, showPaySuccess, footerAds, paySuccessAmount, payTimedOut,
+    payBatchId, payBatchOutTradeNo, showPaySuccess, paySuccessAmount, payTimedOut,
     handleOrderSuccess, goToOrders, submitAndPay, startPollPayment, onPaySuccessDone, closePay, savePayQr, switchPayMethod,
     // UI
-    danmakuList, pct, pctClass,
+    pct, pctClass,
     // Announcement
     showAnnouncement, announcementContent, announcementId, checkAnnouncement, dismissAnnouncement,
     // LS_KEY for template

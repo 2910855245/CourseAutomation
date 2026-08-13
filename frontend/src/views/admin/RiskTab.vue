@@ -81,12 +81,6 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
         >
           {{ loadingRisk ? '刷新中' : '刷新' }}
         </button>
-        <button
-          class="btn btn-ghost btn-sm"
-          @click="showHealthSettings = true"
-        >
-          设置
-        </button>
         <span
           v-if="riskChecking && riskCheckStep"
           class="risk-check-progress"
@@ -94,115 +88,6 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
           <span class="risk-check-spinner" />
           正在检查: {{ riskCheckStep }}
         </span>
-      </div>
-
-      <!-- 健康检查设置弹窗 -->
-      <div
-        v-if="showHealthSettings"
-        class="modal-overlay"
-        @click.self="showHealthSettings = false"
-      >
-        <div class="modal-box health-settings-modal">
-          <div class="modal-header">
-            <h3>健康检查设置</h3>
-            <button
-              class="modal-close"
-              @click="showHealthSettings = false"
-            >
-              &times;
-            </button>
-          </div>
-          <div class="modal-body">
-            <div class="health-form-group">
-              <label>检查间隔（秒）</label>
-              <div style="display:flex;align-items:center;gap:8px;">
-                <input
-                  v-model.number="healthIntervalInput"
-                  type="number"
-                  min="300"
-                  max="86400"
-                  step="60"
-                  class="health-form-input"
-                  style="width:100px;"
-                >
-                <span style="font-size:12px;color:var(--text-secondary);">范围 300-86400</span>
-                <button
-                  class="btn btn-ghost btn-sm"
-                  :disabled="healthIntervalSaving"
-                  @click="saveHealthInterval"
-                >
-                  {{ healthIntervalSaving ? '保存中' : '保存' }}
-                </button>
-              </div>
-            </div>
-
-            <div class="health-form-group">
-              <label>学校平台检测账号</label>
-              <div class="health-add-row">
-                <input v-model="healthAccountInput" type="text" placeholder="学号" class="health-form-input">
-                <input v-model="healthPasswordInput" type="password" placeholder="密码" class="health-form-input">
-                <button class="btn btn-primary btn-sm" :disabled="healthAccountSaving" @click="saveHealthAccount('school')">
-                  {{ healthAccountSaving ? '...' : healthSchoolSwitched ? '已切换' : healthSchoolSaved ? '已保存' : '保存' }}
-                </button>
-              </div>
-            </div>
-
-            <div class="health-form-group">
-              <label>学习通检测账号</label>
-              <div class="health-add-row">
-                <input v-model="healthChaoxingAccountInput" type="text" placeholder="手机号" class="health-form-input">
-                <input v-model="healthChaoxingPasswordInput" type="password" placeholder="密码" class="health-form-input">
-                <button class="btn btn-primary btn-sm" :disabled="healthChaoxingSaving" @click="saveHealthAccount('chaoxing')">
-                  {{ healthChaoxingSaving ? '...' : healthChaoxingSwitched ? '已切换' : healthChaoxingSaved ? '已保存' : '保存' }}
-                </button>
-              </div>
-            </div>
-          </div>
-          <div class="modal-footer">
-            <button class="btn btn-ghost btn-sm" @click="showHealthSettings = false">关闭</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div
-      v-if="riskNeedLogin"
-      class="risk-login-card"
-    >
-      <div class="risk-login-title">
-        需要登录测试账号
-      </div>
-      <div class="risk-login-desc">
-        健康检查需要平台会话，请输入一个学生账号登录所有平台
-      </div>
-      <div class="risk-login-form">
-        <input
-          v-model="riskLoginForm.username"
-          type="text"
-          placeholder="学号/账号"
-          class="risk-login-input"
-          @keyup.enter="riskLoginAndCheck"
-        >
-        <input
-          v-model="riskLoginForm.password"
-          type="password"
-          placeholder="密码"
-          class="risk-login-input"
-          @keyup.enter="riskLoginAndCheck"
-        >
-        <button
-          class="btn btn-primary btn-sm"
-          :disabled="riskLoginLoading"
-          @click="riskLoginAndCheck"
-        >
-          {{ riskLoginLoading ? '登录并检查中...' : '登录并检查' }}
-        </button>
-        <button
-          class="btn btn-ghost btn-sm"
-          @click="riskNeedLogin = false"
-        >
-          取消
-        </button>
       </div>
     </div>
 
@@ -434,53 +319,6 @@ const { DEEPSEEK_MODELS, acceptOrder, accountForm, accounts, active, activeTab, 
                     保存
                   </button>
                   <span class="risk-interval-hint">最小 300 秒（当前: {{ Math.floor(riskIntervalInput / 60) }} 分钟）</span>
-                </div>
-              </div>
-              <div v-else-if="check.id.startsWith('health_')">
-                <div
-                  v-if="healthSummary?.platform_checks && Object.keys(healthSummary.platform_checks).length"
-                  class="table-wrap"
-                >
-                  <table class="data-table data-table-sm">
-                    <thead><tr><th>平台</th><th>检测账号</th><th>状态</th><th>详情</th></tr></thead>
-                    <tbody>
-                      <tr
-                        v-for="(pc, wid) in healthSummary.platform_checks"
-                        :key="wid"
-                      >
-                        <td>{{ pc.name || '平台' + wid }}</td>
-                        <td style="font-size:12px;">
-                          {{ pc.username || '-' }}
-                        </td>
-                        <td>
-                          <span
-                            v-if="pc.error && !Object.keys(pc.checks).length"
-                            class="status-tag bad"
-                          >登录失败</span>
-                          <span
-                            v-else
-                            :class="['status-tag',
-                                     (pc.checks[check.id.replace('health_', '')]?.status === 'healthy') ? 'ok' :
-                                     (pc.checks[check.id.replace('health_', '')]?.status === 'warning') ? 'warn' :
-                                     (pc.checks[check.id.replace('health_', '')]?.status === 'failed') ? 'bad' : 'unknown']"
-                          >
-                            {{ pc.checks[check.id.replace('health_', '')]?.status === 'healthy' ? '正常' :
-                              pc.checks[check.id.replace('health_', '')]?.status === 'warning' ? '警告' :
-                              pc.checks[check.id.replace('health_', '')]?.status === 'failed' ? '异常' : '未检测' }}
-                          </span>
-                        </td>
-                        <td style="font-size:12px;">
-                          {{ pc.error && !Object.keys(pc.checks).length ? pc.error : (pc.checks[check.id.replace('health_', '')]?.message || '-') }}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-                <div
-                  v-else
-                  style="font-size:13px;color:var(--text-secondary);padding:8px 0;"
-                >
-                  {{ check.desc || '无详细信息' }}
                 </div>
               </div>
             </slot>

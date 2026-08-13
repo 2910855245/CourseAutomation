@@ -320,111 +320,6 @@ export function useYpayAdmin() {
     } catch { alert('重置失败，请检查网络') }
   }
 
-  // ── Ads ──
-  const adsList = ref<any[]>([])
-  const loadingAds = ref(false)
-  const showAdModal = ref(false)
-  const editingAd = ref<any>(null)
-  const adForm = reactive({ slot: 1, name: '', html_content: '' })
-  const savingAd = ref(false)
-  const adFileInput = ref<HTMLInputElement | null>(null)
-  const adImgInput = ref<HTMLInputElement | null>(null)
-  const adFileUploading = ref(false)
-
-  async function loadAds() {
-    loadingAds.value = true
-    try { const r = await api.adminAds.list(); adsList.value = r.data || [] }
-    catch { adsList.value = [] }
-    finally { loadingAds.value = false }
-  }
-
-  function openCreateAd() {
-    editingAd.value = null
-    const usedSlots = adsList.value.map(a => a.slot)
-    let nextSlot = 1
-    for (let i = 1; i <= 5; i++) { if (!usedSlots.includes(i)) { nextSlot = i; break } }
-    adForm.slot = nextSlot; adForm.name = ''; adForm.html_content = ''
-    showAdModal.value = true
-  }
-
-  function openEditAd(ad: any) {
-    editingAd.value = ad; adForm.slot = ad.slot; adForm.name = ad.name
-    adForm.html_content = ad.html_content; showAdModal.value = true
-  }
-
-  async function saveAd() {
-    if (!adForm.name.trim()) { store.toast('请输入广告名称', 'warning'); return }
-    savingAd.value = true
-    try {
-      if (editingAd.value) {
-        await api.adminAds.update(editingAd.value.id, { name: adForm.name, html_content: adForm.html_content })
-        store.toast('更新成功', 'success')
-      } else {
-        await api.adminAds.create({ slot: adForm.slot, name: adForm.name, html_content: adForm.html_content })
-        store.toast('添加成功', 'success')
-      }
-      showAdModal.value = false; await loadAds()
-    } catch (e: any) { store.toast(e.message || '操作失败', 'error') }
-    finally { savingAd.value = false }
-  }
-
-  async function toggleAdActive(ad: any) {
-    await api.adminAds.update(ad.id, { is_active: ad.is_active ? 0 : 1 }); await loadAds()
-  }
-
-  async function deleteAd(ad: any) {
-    if (!confirm(`确定删除广告"${ad.name}"？`)) return
-    await api.adminAds.delete(ad.id); store.toast('已删除', 'success'); await loadAds()
-  }
-
-  function triggerAdFileUpload() { adFileInput.value?.click() }
-  function triggerAdImgUpload() { adImgInput.value?.click() }
-
-  function onAdFileChange(e: Event) {
-    const file = (e.target as HTMLInputElement).files?.[0]
-    if (!file) return
-    if (!file.name.endsWith('.html') && !file.name.endsWith('.htm') && file.type !== 'text/html') {
-      store.toast('请上传 HTML 文件', 'warning'); return
-    }
-    adFileUploading.value = true
-    const reader = new FileReader()
-    reader.onload = () => {
-      let html = reader.result as string
-      const relImgs = html.match(/<img[^>]+src=["'](?!https?:\/\/|data:)[^"']+["']/gi)
-      if (relImgs && relImgs.length > 0) {
-        store.toast(`HTML 中有 ${relImgs.length} 个本地图片引用，建议用「插入图片」按钮替换`, 'warning')
-      }
-      adForm.html_content = html
-      if (!adForm.name.trim()) adForm.name = file.name.replace(/\.html?$/i, '')
-      adFileUploading.value = false; store.toast('文件已读取', 'success')
-    }
-    reader.onerror = () => { adFileUploading.value = false; store.toast('文件读取失败', 'error') }
-    reader.readAsText(file); (e.target as HTMLInputElement).value = ''
-  }
-
-  function onAdImgChange(e: Event) {
-    const file = (e.target as HTMLInputElement).files?.[0]
-    if (!file) return
-    if (!file.type.startsWith('image/')) { store.toast('请选择图片文件', 'warning'); return }
-    if (file.size > 2 * 1024 * 1024) { store.toast('图片不能超过 2MB', 'warning'); return }
-    adFileUploading.value = true
-    const reader = new FileReader()
-    reader.onload = () => {
-      const base64 = reader.result as string
-      const imgTag = `<img src="${base64}" alt="${file.name}" style="max-width:100%" />`
-      const ta = document.querySelector('.ad-html-textarea') as HTMLTextAreaElement
-      if (ta) {
-        const start = ta.selectionStart; const end = ta.selectionEnd
-        adForm.html_content = adForm.html_content.substring(0, start) + imgTag + adForm.html_content.substring(end)
-      } else {
-        adForm.html_content += imgTag
-      }
-      adFileUploading.value = false; store.toast('图片已插入', 'success')
-    }
-    reader.onerror = () => { adFileUploading.value = false; store.toast('图片读取失败', 'error') }
-    reader.readAsDataURL(file); (e.target as HTMLInputElement).value = ''
-  }
-
   return {
     // YPay
     ypayTab, ypayForm, ypaySaving, pairQrTs, pairQrLoading, downloadQrLoading,
@@ -441,10 +336,5 @@ export function useYpayAdmin() {
     loadYpay, saveYpaySettings, saveYpayKeyOnly, regenerateYpayKey, loadPairQr,
     loadYpayOrders, closeExpiredYpayOrders, clearYpayOrderHistory,
     runYpayTest, resetYpayConnection,
-    // Ads
-    adsList, loadingAds, showAdModal, editingAd, adForm, savingAd,
-    adFileInput, adImgInput, adFileUploading,
-    loadAds, openCreateAd, openEditAd, saveAd, toggleAdActive, deleteAd,
-    triggerAdFileUpload, triggerAdImgUpload, onAdFileChange, onAdImgChange,
   }
 }
