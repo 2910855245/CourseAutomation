@@ -10,6 +10,7 @@ import time
 import base64
 import pickle
 import hashlib
+import lxml.html
 from loguru import logger
 from io import BytesIO
 from hashlib import sha1, md5
@@ -106,6 +107,14 @@ def decode_text(text: str, mapping: dict) -> str:
 # ============ 题目解析 ============
 
 
+def _find_input_by_name(tree, name: str):
+    """按 name 属性精确查找 input（等价 BeautifulSoup find('input', {'name': ...})）"""
+    for inp in tree.xpath('.//input[@name]'):
+        if inp.get('name') == name:
+            return inp
+    return None
+
+
 def parse_quiz(html: str, mapping: dict) -> tuple:
     """解析作业页面HTML为结构化题目
 
@@ -115,22 +124,22 @@ def parse_quiz(html: str, mapping: dict) -> tuple:
 
     返回: (questions: list, form_params: dict)
     """
-    from bs4 import BeautifulSoup
-
-    soup = BeautifulSoup(html, 'html.parser')
+    tree = lxml.html.document_fromstring(html)
     questions = []
 
-    title_divs = soup.find_all(class_='Zy_TItle')
+    title_divs = tree.find_class('Zy_TItle')
     for i, title_div in enumerate(title_divs):
         # 优先找 cxsecret 字体加密标签，回退到 fontLabel 标签
-        label_div = title_div.find(class_=lambda x: x and 'cxsecret' in x and 'fontLabel' in x)
-        if not label_div:
-            label_div = title_div.find(class_=lambda x: x and 'fontLabel' in x)
-        if not label_div:
+        label_divs = title_div.xpath('.//*[contains(@class,"cxsecret") and contains(@class,"fontLabel")]')
+        if not label_divs:
+            label_divs = title_div.xpath('.//*[contains(@class,"fontLabel")]')
+        if not label_divs:
             # 回退：取整个标题div的文本
             label_div = title_div
+        else:
+            label_div = label_divs[0]
 
-        text = decode_text(label_div.get_text(strip=True), mapping)
+        text = decode_text(label_div.text_content().strip(), mapping)
 
         if '判断题' in text or 'True or False' in text:
             qtype = 'judgment'
@@ -142,28 +151,28 @@ def parse_quiz(html: str, mapping: dict) -> tuple:
             qtype = 'unknown'
 
         options = []
-        next_sib = title_div.find_next_sibling()
+        next_sib = title_div.getnext()
         qid = ''
-        if next_sib:
+        if next_sib is not None:
             # 优先找带 qid 属性的 li
-            li_with_qid = next_sib.find_all('li', attrs={'qid': True})
+            li_with_qid = next_sib.xpath('.//li[@qid]')
             if li_with_qid:
                 for li in li_with_qid:
                     qid = li.get('qid', '')
-                    opt_text = decode_text(li.get_text(strip=True), mapping)
+                    opt_text = decode_text(li.text_content().strip(), mapping)
                     options.append(opt_text)
             else:
                 # tsjy 格式：普通 li 无 qid
-                for li in next_sib.find_all('li'):
-                    opt_text = decode_text(li.get_text(strip=True), mapping)
+                for li in next_sib.xpath('.//li'):
+                    opt_text = decode_text(li.text_content().strip(), mapping)
                     options.append(opt_text)
 
         # tsjy 格式无 qid，用题目序号生成
         if not qid:
             qid = str(i + 1)
 
-        ans_type_input = soup.find('input', {'name': f'answertype{qid}'})
-        ans_type = ans_type_input.get('value', '') if ans_type_input else ''
+        ans_type_input = _find_input_by_name(tree, f'answertype{qid}')
+        ans_type = ans_type_input.get('value', '') if ans_type_input is not None else ''
 
         questions.append({
             'index': i,
@@ -175,16 +184,17 @@ def parse_quiz(html: str, mapping: dict) -> tuple:
         })
 
     # 提取表单参数
-    form = soup.find('form')
+    forms = tree.xpath('.//form')
+    form = forms[0] if forms else None
     form_params = {}
-    if form:
+    if form is not None:
         action = form.get('action', '')
         if '?' in action:
             for pair in action.split('?', 1)[1].split('&'):
                 if '=' in pair:
                     k, v = pair.split('=', 1)
                     form_params[k] = v
-        for inp in form.find_all('input', {'type': 'hidden'}):
+        for inp in form.xpath('.//input[@type="hidden"]'):
             name = inp.get('name', '')
             value = inp.get('value', '')
             if name and not name.startswith('answer') and not name.startswith('answertype'):
@@ -525,11 +535,6 @@ def get_work_list(session: ChaoxingSession, course_id: str, class_id: str, cpi: 
 # ============ 一站式答题 ============
 
 
-def _is_hash_workid(workid: str) -> bool:
-    """判断是否为哈希格式的workId（tsjy平台）"""
-    return bool(workid) and not workid.isdigit()
-
-
 def _fetch_clean_questions(session: ChaoxingSession, work_url: str) -> str:
     """通过api=1端点获取无字体加密的题目页面（tsjy平台专用）
 
@@ -589,20 +594,19 @@ def _merge_clean_questions(clean_html: str, encrypted_html: str,
     从clean_html提取题目文本，从encrypted_html提取qid和form参数。
     返回: (questions: list, form_params: dict)
     """
-    from bs4 import BeautifulSoup
-
     # 从加密页面获取 form_params 和 qid 列表
-    enc_soup = BeautifulSoup(encrypted_html, 'html.parser')
+    enc_tree = lxml.html.document_fromstring(encrypted_html)
     form_params = {}
-    form = enc_soup.find('form')
-    if form:
+    enc_forms = enc_tree.xpath('.//form')
+    form = enc_forms[0] if enc_forms else None
+    if form is not None:
         action = form.get('action', '')
         if '?' in action:
             for pair in action.split('?', 1)[1].split('&'):
                 if '=' in pair:
                     k, v = pair.split('=', 1)
                     form_params[k] = v
-        for inp in form.find_all('input', {'type': 'hidden'}):
+        for inp in form.xpath('.//input[@type="hidden"]'):
             name = inp.get('name', '')
             value = inp.get('value', '')
             if name and not name.startswith('answer') and not name.startswith('answertype'):
@@ -610,7 +614,7 @@ def _merge_clean_questions(clean_html: str, encrypted_html: str,
 
     # 从加密页面获取 qid 和 answertype
     # qid 在 singleQuesId div 的 data 属性中，或在 li 的 qid 属性中
-    enc_title_divs = enc_soup.find_all(class_='Zy_TItle')
+    enc_title_divs = enc_tree.find_class('Zy_TItle')
     qid_list = []
     ans_type_list = []
     for td in enc_title_divs:
@@ -618,41 +622,47 @@ def _merge_clean_questions(clean_html: str, encrypted_html: str,
         ans_type = ''
 
         # 方法1：从父级 singleQuesId div 的 data 属性获取
-        parent_div = td.find_parent(class_='singleQuesId')
-        if parent_div:
+        parent_div = None
+        for anc in td.iterancestors():
+            if 'singleQuesId' in (anc.get('class') or '').split():
+                parent_div = anc
+                break
+        if parent_div is not None:
             qid = parent_div.get('data', '')
 
         # 方法2：从 li 的 qid 属性获取
         if not qid:
-            next_sib = td.find_next_sibling()
-            if next_sib:
-                li_with_qid = next_sib.find_all('li', attrs={'qid': True})
+            next_sib = td.getnext()
+            if next_sib is not None:
+                li_with_qid = next_sib.xpath('.//li[@qid]')
                 if li_with_qid:
                     qid = li_with_qid[0].get('qid', '')
 
         # 方法3：从 hidden input 获取
         if not qid:
-            for inp in enc_soup.find_all('input', {'name': re.compile(r'^answer\d+')}):
+            for inp in enc_tree.xpath('.//input'):
                 name = inp.get('name', '')
-                candidate = name[6:]  # 去掉 'answer' 前缀
-                if candidate not in [q for q in qid_list if q]:
-                    qid = candidate
-                    break
+                if re.match(r'^answer\d+', name or ''):
+                    candidate = name[6:]  # 去掉 'answer' 前缀
+                    if candidate not in [q for q in qid_list if q]:
+                        qid = candidate
+                        break
 
         if qid:
-            ans_type_input = enc_soup.find('input', {'name': f'answertype{qid}'})
-            ans_type = ans_type_input.get('value', '') if ans_type_input else ''
+            ans_type_input = _find_input_by_name(enc_tree, f'answertype{qid}')
+            ans_type = ans_type_input.get('value', '') if ans_type_input is not None else ''
         qid_list.append(qid)
         ans_type_list.append(ans_type)
 
     # 从干净页面提取题目
-    clean_soup = BeautifulSoup(clean_html, 'html.parser')
-    clean_title_divs = clean_soup.find_all(class_='Zy_TItle')
+    clean_tree = lxml.html.document_fromstring(clean_html)
+    clean_title_divs = clean_tree.find_class('Zy_TItle')
 
     questions = []
     for i, td in enumerate(clean_title_divs):
-        label = td.find(class_='fontLabel') or td
-        text = label.get_text(strip=True)
+        labels = td.find_class('fontLabel')
+        label = labels[0] if labels else td
+        text = label.text_content().strip()
 
         if '判断题' in text or 'True or False' in text:
             qtype = 'judgment'
@@ -664,10 +674,10 @@ def _merge_clean_questions(clean_html: str, encrypted_html: str,
             qtype = 'unknown'
 
         options = []
-        next_sib = td.find_next_sibling()
-        if next_sib:
-            for li in next_sib.find_all('li'):
-                opt_text = li.get_text(strip=True)
+        next_sib = td.getnext()
+        if next_sib is not None:
+            for li in next_sib.xpath('.//li'):
+                opt_text = li.text_content().strip()
                 options.append(opt_text)
 
         qid = qid_list[i] if i < len(qid_list) and qid_list[i] else str(i + 1)
@@ -694,11 +704,6 @@ def solve_quiz(session: ChaoxingSession, work_url: str,
 
     返回: {success: bool, total: int, cached: bool, submitted: bool, error: str}
     """
-    try:
-        from bs4 import BeautifulSoup
-    except ImportError:
-        return {'success': False, 'total': 0, 'error': 'bs4 未安装'}
-
     # 获取作业页面
     try:
         resp = session.get(work_url, referer=BASE_URL + '/')

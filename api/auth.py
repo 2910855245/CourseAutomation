@@ -43,25 +43,6 @@ def _add_to_blacklist_in_memory(token_jti: str, expires_in: int):
                 del _token_blacklist_in_memory[k]
 
 
-def _blacklist_key(token_jti: str) -> str:
-    return f"jwt:blacklist:{token_jti}"
-
-
-def blacklist_token(token: str):
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"verify_exp": False})
-        token_jti = payload.get("jti")
-        if not token_jti:
-            return
-        exp = payload.get("exp", 0)
-        ttl = max(exp - int(datetime.now(timezone.utc).timestamp()), 0)
-    except jwt.InvalidTokenError:
-        return
-
-    _add_to_blacklist_in_memory(token_jti, ttl)
-    logger.info(f"Token 已加入内存黑名单 jti={token_jti[:16]}")
-
-
 def is_token_blacklisted(token: str) -> bool:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"verify_exp": False})

@@ -5,8 +5,8 @@ import threading
 from typing import Optional
 
 import httpx
+import lxml.html
 from loguru import logger
-from bs4 import BeautifulSoup
 
 from infrastructure.http_session import create_sync_client
 
@@ -29,10 +29,10 @@ class LoginHelper:
 
     def _get_csrf_token(self) -> Optional[str]:
         resp = self.session.get(f"{self.base_url}/user/login", timeout=15)
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        meta = soup.find('meta', attrs={'name': 'csrf-token'})
-        if meta:
-            return meta.get('content')
+        tree = lxml.html.document_fromstring(resp.text)
+        metas = tree.xpath('//meta[@name="csrf-token"]')
+        if metas:
+            return metas[0].get('content')
         return None
 
     def _get_captcha(self) -> str:

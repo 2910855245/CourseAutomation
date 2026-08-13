@@ -61,15 +61,6 @@ def create_async_client(**kwargs) -> httpx.AsyncClient:
     return httpx.AsyncClient(**defaults)
 
 
-def create_platform_client(base_url: str = None, **kwargs) -> httpx.AsyncClient:
-    """为已知目标平台创建HTTP客户端，自动跳过SSL验证仅对白名单域名生效"""
-    url = base_url or get_base_url()
-    skip = _should_skip_ssl(url)
-    if skip:
-        logger.debug("Target platform domain in SSL skip whitelist: {}", urlparse(url).hostname)
-    return create_async_client(verify=not skip, **kwargs)
-
-
 def create_sync_client(base_url: str = None, **kwargs) -> httpx.Client:
     """创建同步HTTP客户端，仅对白名单域名跳过SSL验证
 
@@ -112,72 +103,6 @@ def get_dynamic_headers(ref_url: str = None) -> dict:
         headers["Referer"] = ref_url
     return headers
 
-
-def check_rate_limit(session, url: str, max_retries: int = 3) -> bool:
-    """检测是否触发频率限制，自动等待重试
-
-    Returns: True 表示正常，False 表示被限制且重试失败
-    """
-    # 中文教育平台常见的限流关键词
-    _rate_limit_keywords = ('频率', '请求过快', '稍后再试', '访问过于频繁', '操作频繁')
-
-    for attempt in range(max_retries):
-        try:
-            resp = session.get(url, timeout=10)
-        except Exception:
-            logger.warning("频率检测请求异常 attempt={}/{}", attempt + 1, max_retries)
-            time.sleep(10 * (attempt + 1))
-            continue
-
-        if resp.status_code == 429:
-            wait = int(resp.headers.get('Retry-After', 30 + attempt * 15))
-            logger.info("HTTP 429 限流，等待 {}s", wait)
-            time.sleep(wait)
-            continue
-
-        text = resp.text or ""
-        if any(kw in text for kw in _rate_limit_keywords):
-            wait = 20 + attempt * 10
-            logger.info("检测到限流关键词，等待 {}s", wait)
-            time.sleep(wait)
-            continue
-
-        return True
-
-    logger.warning("频率限制重试耗尽 url={}", url)
-    return False
-
-def save_cookie(session):
-    """保存Cookie到当前账号的文件夹"""
-    from config import get_current_account
-    username = get_current_account()
-    if not username:
-        return
-    
-    cookie_path = get_account_cookies_path(username)
-    os.makedirs(os.path.dirname(cookie_path), exist_ok=True)
-    
-    with open(cookie_path, 'w', encoding='utf-8') as f:
-        json.dump(dict(session.cookies), f)
-
-def load_cookie(session) -> bool:
-    """从当前账号加载Cookie"""
-    from config import get_current_account
-    username = get_current_account()
-    if not username:
-        return False
-    
-    cookie_path = get_account_cookies_path(username)
-    if not os.path.exists(cookie_path):
-        return False
-    
-    try:
-        with open(cookie_path, encoding='utf-8') as f:
-            cookie_dict = json.load(f)
-        session.cookies.update(cookie_dict)
-        return True
-    except Exception as e:
-        return False
 
 def check_cookie_valid(session) -> bool:
     try:

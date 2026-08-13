@@ -60,22 +60,6 @@ def load_global_config() -> bool:
     return True
 
 
-def save_global_config() -> bool:
-    import datetime
-    config = {
-        "last_website_id": CURRENT_WEBSITE,
-        "remember_website_choice": True,
-        "last_website_switch_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    try:
-        with open(GLOBAL_CONFIG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        return True
-    except Exception as e:
-        logger.warning(f"保存全局配置失败 error={str(e)}")
-        return False
-
-
 load_global_config()
 
 
@@ -202,30 +186,6 @@ def get_account_records_dir(username: str = None) -> str:
     os.makedirs(records_dir, exist_ok=True)
     _migrate_old_data(get_account_dir(username), records_dir, "records")
     return records_dir
-
-
-def get_account_config_path(username: str = None) -> str:
-    return os.path.join(get_account_dir(username), "config.json")
-
-
-def get_account_last_play_path(username: str = None) -> str:
-    return os.path.join(get_account_dir(username), "last_play.json")
-
-
-def get_account_log_path(username: str = None) -> str:
-    username = username or get_account_username()
-    if not username:
-        return os.path.join(LOGS_DIR, "default.log")
-    return os.path.join(LOGS_DIR, f"{username}.log")
-
-
-# ==================== 兼容旧代码 ====================
-def get_account_course_info_dir(username: str = None) -> str:
-    return get_account_courses_dir(username)
-
-
-def get_account_study_records_dir(username: str = None) -> str:
-    return get_account_records_dir(username)
 
 
 def update_paths_for_current_account():

@@ -3,8 +3,13 @@
 from typing import Dict, List
 
 import httpx
+import lxml.html
 from loguru import logger
-from bs4 import BeautifulSoup
+
+
+def _els_with_class(el, cls: str, tag: str = None):
+    """找 el 子孙节点中 class 含指定 token 的元素（等价 BeautifulSoup find_all(class_=cls)）"""
+    return [e for e in el.xpath(f'.//{tag or "*"}[@class]') if cls in e.get('class', '').split()]
 
 
 
@@ -89,12 +94,12 @@ class TopicFetcher:
         return self._parse_topics(html, work_id)
 
     def _parse_topics(self, html: str, work_id: int) -> Dict:
-        soup = BeautifulSoup(html, 'html.parser')
+        tree = lxml.html.document_fromstring(html)
 
         # 提取页面级的 examId 和 nodeId（支持 name 或 id 属性）
         exam_id = ''
         node_id = ''
-        hidden_inputs = soup.find_all('input', type='hidden')
+        hidden_inputs = tree.xpath('//input[@type="hidden"]')
         for inp in hidden_inputs:
             name = inp.get('name', '') or inp.get('id', '')
             value = inp.get('value', '')
@@ -103,15 +108,22 @@ class TopicFetcher:
             elif 'nodeId' in name:
                 node_id = value
 
-        title_el = soup.find('h2') or soup.find('h3') or soup.find('title')
-        work_title = title_el.get_text(strip=True) if title_el else f"作业{work_id}"
+        title_el = None
+        for tag in ('h2', 'h3', 'title'):
+            found = tree.xpath(f'//{tag}')
+            if found:
+                title_el = found[0]
+                break
+        work_title = title_el.text_content().strip() if title_el is not None else f"作业{work_id}"
 
         # 优先从 form 解析（考试页面结构：每题一个 form）
-        topics = self._parse_topics_from_forms(soup)
+        topics = self._parse_topics_from_forms(tree)
 
         if not topics:
             # 降级到原有的解析方式
-            topic_items = soup.select('.topic-item, .question-item, .topic, .question, div.topic, div.question')
+            topic_items = [e for e in tree.xpath('//*[@class]')
+                           if any(c in e.get('class', '').split()
+                                  for c in ('topic-item', 'question-item', 'topic', 'question'))]
             for idx, item in enumerate(topic_items, 1):
                 topic = self._parse_single_topic(item, idx)
                 if topic:
@@ -128,42 +140,42 @@ class TopicFetcher:
             'topics': topics,
         }
 
-    def _parse_topics_from_forms(self, soup: BeautifulSoup) -> List[Dict]:
+    def _parse_topics_from_forms(self, tree) -> List[Dict]:
         """从 form 元素解析题目（考试页面结构：每题一个 form）"""
         topics = []
 
         # 检测是否有文件上传按钮（项目提交题型）
-        has_uploader = bool(soup.find('a', class_='uploader-btn'))
+        has_uploader = bool(_els_with_class(tree, 'uploader-btn', tag='a'))
 
         # 提取 topic-head 链接中的 data-id（这是真正的 answerId）
-        topic_heads = soup.find_all('a', class_='topic-head')
+        topic_heads = _els_with_class(tree, 'topic-head', tag='a')
         head_id_map = {}
         for idx, a in enumerate(topic_heads):
             data_id = a.get('data-id', '')
             if data_id:
                 head_id_map[idx] = data_id
 
-        forms = soup.find_all('form', action=lambda x: x and 'submit' in str(x))
+        forms = [f for f in tree.xpath('.//form') if 'submit' in (f.get('action') or '')]
 
         for idx, form in enumerate(forms):
             # 提取题号
-            num_el = form.find('div', class_='num')
+            num_el = _els_with_class(form, 'num', tag='div')
             number = len(topics) + 1
             if num_el:
-                num_span = num_el.find('span')
+                num_span = num_el[0].xpath('.//span')
                 if num_span:
                     try:
-                        number = int(num_span.get_text(strip=True))
+                        number = int(num_span[0].text_content().strip())
                     except ValueError:
                         pass
 
             # 提取题目文本
-            name_el = form.find('div', class_='name')
+            name_el = _els_with_class(form, 'name', tag='div')
             if not name_el:
                 continue
 
             # 填空题：将 <input> 标签替换为占位符 _____
-            name_html = str(name_el)
+            name_html = lxml.html.tostring(name_el[0], encoding='unicode')
             import re
             name_html = re.sub(r'<input[^>]*class="exam-input"[^>]*/?>', ' _____ ', name_html)
             # 移除其他HTML标签，保留文本
@@ -175,25 +187,24 @@ class TopicFetcher:
 
             # 提取完整题目描述（包含 <p> 标签中的要求）
             question_parts = [question]
-            for p in form.find_all('p'):
-                p_text = p.get_text(strip=True)
+            for p in form.xpath('.//p'):
+                p_text = p.text_content().strip()
                 if p_text and p_text not in question:
                     question_parts.append(p_text)
             full_question = '\n'.join(question_parts)
 
             # 提取选项
             options = []
-            list_el = form.find('div', class_='list')
-            if list_el:
-                labels = list_el.find_all('label')
-                for label in labels:
-                    opt_text = label.get_text(strip=True)
+            list_els = _els_with_class(form, 'list', tag='div')
+            if list_els:
+                for label in list_els[0].xpath('.//label'):
+                    opt_text = label.text_content().strip()
                     if opt_text:
                         options.append(opt_text)
 
             # 提取题型
-            type_el = form.find('div', class_='type')
-            q_type = type_el.get_text(strip=True) if type_el else ''
+            type_els = _els_with_class(form, 'type', tag='div')
+            q_type = type_els[0].text_content().strip() if type_els else ''
             is_choice = '单选' in q_type or '多选' in q_type or '判断' in q_type
 
             # 判断是否为项目提交题（简答 + 文件上传）
@@ -212,7 +223,7 @@ class TopicFetcher:
             # 统计填空题的空格数量
             blank_count = 0
             if '填空' in q_type:
-                blank_inputs = form.find_all('input', class_='exam-input')
+                blank_inputs = _els_with_class(form, 'exam-input', tag='input')
                 blank_count = len(blank_inputs) if blank_inputs else 1
 
             topics.append({
@@ -229,20 +240,21 @@ class TopicFetcher:
         return topics
 
     def _parse_single_topic(self, item, number: int) -> Dict:
-        text = item.get_text(separator='\n', strip=True)
+        text = '\n'.join(t.strip() for t in item.itertext() if t.strip())
 
-        answer_id_el = item.select_one('input[name="answerId"], input[name="topic_id"]')
-        answer_id = answer_id_el.get('value', '') if answer_id_el else ''
+        answer_id_els = item.xpath('.//input[@name="answerId" or @name="topic_id"]')
+        answer_id = answer_id_els[0].get('value', '') if answer_id_els else ''
 
-        topic_id_el = item.select_one('input[name="topicId"], input[name="topic_id"]')
-        topic_id = topic_id_el.get('value', '') if topic_id_el else answer_id
+        topic_id_els = item.xpath('.//input[@name="topicId" or @name="topic_id"]')
+        topic_id = topic_id_els[0].get('value', '') if topic_id_els else answer_id
 
         options = []
-        option_els = item.select('label.option, label.choice, span.option, span.choice, div.option, div.choice')
+        option_els = [e for e in item.xpath('.//label | .//span | .//div')
+                      if any(c in (e.get('class') or '').split() for c in ('option', 'choice'))]
         if not option_els:
-            option_els = item.find_all('label')
+            option_els = item.xpath('.//label')
         for opt in option_els:
-            opt_text = opt.get_text(strip=True)
+            opt_text = opt.text_content().strip()
             if opt_text and len(opt_text) < 200:
                 options.append(opt_text)
 
@@ -256,13 +268,13 @@ class TopicFetcher:
         }
 
     def _parse_topics_regex(self, html: str) -> List[Dict]:
-        """用 BeautifulSoup 从 hidden input / topic-head 链接中提取题目ID"""
-        soup = BeautifulSoup(html, 'html.parser')
+        """用 lxml 从 hidden input / topic-head 链接中提取题目ID"""
+        tree = lxml.html.document_fromstring(html)
         topics = []
         seen = set()
 
         # 从 hidden input 提取 topicId / answerId
-        for inp in soup.find_all('input', type='hidden'):
+        for inp in tree.xpath('//input[@type="hidden"]'):
             name = inp.get('name', '') or inp.get('id', '')
             value = inp.get('value', '')
             if name in ('topicId', 'answerId', 'topic_id') and value and value not in seen:
@@ -277,7 +289,7 @@ class TopicFetcher:
                 })
 
         # 从 topic-head 链接提取 data-id
-        for a in soup.find_all('a', class_='topic-head'):
+        for a in _els_with_class(tree, 'topic-head', tag='a'):
             data_id = a.get('data-id', '')
             if data_id and data_id not in seen:
                 seen.add(data_id)
@@ -285,7 +297,7 @@ class TopicFetcher:
                     'number': len(topics) + 1,
                     'topic_id': data_id,
                     'answer_id': data_id,
-                    'question': a.get_text(strip=True) or f'题目{len(topics)+1}',
+                    'question': a.text_content().strip() or f'题目{len(topics)+1}',
                     'options': [],
                     'type': 'choice',
                 })

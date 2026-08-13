@@ -1,33 +1,25 @@
 import re
-import time
-from typing import Dict, List, Optional
+from typing import Dict, List
 
-from scrapling.parser import Adaptor
+import lxml.html
 
-from config import VIDEO_PARAM_IDS
 from infrastructure.http_session import get_dynamic_headers, safe_request
 
 
 def _s(val) -> str:
-    """将 Scrapling Selector 转为 str"""
+    """将 xpath 结果转为 str"""
     return str(val) if val is not None else ""
 
 
 def _text(el) -> str:
-    """从 scrapling Selector 元素中安全提取文本内容（兼容 0.2.x 和 0.4.x）"""
+    """从 lxml 元素中安全提取文本内容"""
     try:
-        return el._root.text_content().strip()
+        return el.text_content().strip()
     except Exception:
         try:
             return str(el).strip()
         except Exception:
             return ""
-
-
-def get_current_base_url():
-    """动态获取当前基础URL"""
-    from config import get_base_url
-    return get_base_url()
 
 
 def get_courses(session) -> List[Dict]:
@@ -39,7 +31,7 @@ def get_courses(session) -> List[Dict]:
         return []
 
     html = resp.content.decode('utf-8', errors='replace')
-    tree = Adaptor(html, adaptive=True)
+    tree = lxml.html.fromstring(html)
     course_nodes = tree.xpath('//div[contains(@class,"user-course")]//div[@class="item"]')
     courses = []
     for node in course_nodes:
@@ -120,7 +112,7 @@ def get_courses_with_diag(session) -> Dict:
         result["error"] = "账号可能被禁用或锁定"
         return result
 
-    tree = Adaptor(html, adaptive=True)
+    tree = lxml.html.fromstring(html)
     course_nodes = tree.xpath('//div[contains(@class,"user-course")]//div[@class="item"]')
 
     if not course_nodes:
@@ -289,29 +281,8 @@ def _fetch_all_pages(session, base_url: str, course_id: str, headers: dict) -> L
 
 # ==================== 旧的 HTML 爬取函数（保留作为 fallback）====================
 
-def get_first_study_link(session, detail_url: str) -> Optional[str]:
-    resp = safe_request(session, detail_url)
-    if not resp:
-        return None
-    tree = Adaptor(resp.text, adaptive=True)
-    possible_xpaths = [
-        '//a[contains(@href,"/user/node?nodeId=")]/@href',
-        '//div[contains(@class,"course-detail")]//a[contains(@href,"node")]/@href',
-        '//a[starts-with(@href,"/user/node?nodeId=")]/@href',
-    ]
-    for xp in possible_xpaths:
-        hrefs = tree.xpath(xp)
-        if hrefs:
-            from config import get_base_url
-            BASE_URL = get_base_url()
-            h = _s(hrefs[0])
-            full_url = BASE_URL + h if h.startswith('/') else h
-            return full_url
-    return None
-
-
 def extract_all_nodes_from_study_page(html_content: str) -> List[Dict]:
-    tree = Adaptor(html_content, adaptive=True)
+    tree = lxml.html.fromstring(html_content)
     nodes = []
     for a in tree.xpath('//div[@class="detmain-navlist"]//div[@class="item"]/a'):
         name = _text(a)
@@ -329,122 +300,9 @@ def extract_all_nodes_from_study_page(html_content: str) -> List[Dict]:
     return nodes
 
 
-def extract_node_params(session, node_url: str, retries=2) -> Dict:
-    from config import get_base_url
-    BASE_URL = get_base_url()
-    full_url = BASE_URL + node_url if node_url.startswith('/') else node_url
-    for attempt in range(retries + 1):
-        try:
-            headers = get_dynamic_headers()
-            resp = session.get(full_url, headers=headers, timeout=10)
-            resp.raise_for_status()
-            if "SQLSTATE" in resp.text or "数据出现异常" in resp.text:
-                wait_time = 2 ** attempt
-                time.sleep(wait_time)
-                continue
-            tree = Adaptor(resp.text, adaptive=True)
-            params = {'node_type': 'unknown', 'types': []}
-
-            has_video = False
-            has_work = False
-            has_exam = False
-            has_material = False
-
-            tab_links = tree.xpath('//div[@class="detmain-tabs"]//a/@href')
-            for link in tab_links:
-                link = _s(link)
-                if '/user/node/work' in link:
-                    has_work = True
-                    if 'work' not in params['types']:
-                        params['types'].append('work')
-                elif '/user/node/exam' in link:
-                    has_exam = True
-                    if 'exam' not in params['types']:
-                        params['types'].append('exam')
-                elif '/user/node/material' in link:
-                    has_material = True
-                    if 'material' not in params['types']:
-                        params['types'].append('material')
-                elif '/user/node' in link and 'nodeId=' in link:
-                    has_video = True
-                    if 'video' not in params['types']:
-                        params['types'].append('video')
-
-            video_file = tree.xpath('//input[@id="video-file"]/@value')
-            if video_file or tree.xpath('//video/@src'):
-                has_video = True
-                if 'video' not in params['types']:
-                    params['types'].append('video')
-                if video_file:
-                    for pid in VIDEO_PARAM_IDS:
-                        values = tree.xpath(f'//input[@id="{pid}"]/@value')
-                        params[pid] = _s(values[0]) if values else None
-                else:
-                    params['video-file'] = _s(tree.xpath('//video/@src')[0])
-
-            work_link = tree.xpath('//div[@class="detmain-stard"]/a[contains(@href,"workId=")]/@href')
-            if work_link:
-                has_work = True
-                if 'work' not in params['types']:
-                    params['types'].append('work')
-                wl = _s(work_link[0])
-                params['work_url'] = wl
-                if 'workId=' in wl:
-                    params['work_id'] = wl.split('workId=')[-1].split('&')[0]
-
-            exam_rows = tree.xpath('//div[@class="detmain-head"]/div[@class="row"]')
-            exams = []
-            for row in exam_rows:
-                exam = {}
-                link = row.xpath('.//div[@class="detmain-stard"]/a[contains(@href,"examId=")]')
-                if link:
-                    exam['status'] = _text(link[0])
-                    href = link[0].attrib.get('href')
-                    exam['url'] = href
-                    if href and 'examId=' in _s(href):
-                        exam['exam_id'] = _s(href).split('examId=')[-1].split('&')[0]
-                title = row.xpath('.//div[@class="detmain-title"]/text()')
-                if title:
-                    raw_title = _s(title[0]).strip()
-                    if raw_title.startswith('考试标题：'):
-                        exam['title'] = raw_title.replace('考试标题：', '').strip()
-                    else:
-                        exam['title'] = raw_title
-                if exam:
-                    exams.append(exam)
-            if exams:
-                has_exam = True
-                if 'exam' not in params['types']:
-                    params['types'].append('exam')
-                params['exams'] = exams
-
-            if not has_video and not has_work and not has_exam:
-                if tree.xpath('//a[contains(@href,"/user/node/material")]'):
-                    has_material = True
-                    if 'material' not in params['types']:
-                        params['types'].append('material')
-
-            if has_exam:
-                params['node_type'] = 'exam'
-            elif has_work:
-                params['node_type'] = 'work'
-            elif has_video:
-                params['node_type'] = 'video'
-            elif has_material:
-                params['node_type'] = 'material'
-
-            return params
-        except Exception as e:
-            if attempt < retries:
-                wait_time = 1.5 ** attempt
-                time.sleep(wait_time)
-                continue
-    return {'node_type': 'error', 'types': []}
-
-
 def extract_student_name(html_content: str) -> str:
     """从个人中心 HTML 中提取学生姓名"""
-    tree = Adaptor(html_content, adaptive=True)
+    tree = lxml.html.fromstring(html_content)
     xpaths = [
         '//div[@class="user-head"]//div[@class="name"]/text()',
         '//div[@class="con"]//div[@class="name"]/text()',
@@ -467,33 +325,3 @@ def extract_student_name(html_content: str) -> str:
     return ""
 
 
-def get_course_list(session, website_id: int = None) -> List[Dict]:
-    return get_courses(session)
-
-
-def get_course_content(session, course_id: str, website_id: int = None) -> Optional[str]:
-    courses = get_courses(session)
-    target = None
-    for c in courses:
-        cid = c.get("course_id") or c.get("id")
-        if cid == course_id:
-            target = c
-            break
-    if not target:
-        return None
-    study_url = target.get("study_record_url") or target.get("detail_link")
-    if not study_url:
-        return None
-    from config import get_base_url
-    BASE_URL = get_base_url()
-    full_url = BASE_URL + study_url if study_url.startswith('/') else study_url
-    resp = safe_request(session, full_url)
-    if not resp:
-        return None
-    return resp.content.decode('utf-8', errors='replace')
-
-
-def transform_course_content(content: Optional[str]) -> List[Dict]:
-    if not content:
-        return []
-    return extract_all_nodes_from_study_page(content)

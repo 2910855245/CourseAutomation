@@ -9,8 +9,8 @@ from typing import Dict, List
 from urllib.parse import urlparse
 
 import httpx
+import lxml.html
 from loguru import logger
-from bs4 import BeautifulSoup
 
 
 SCHOOL_URL = "https://www.cdcas.edu.cn/"
@@ -416,18 +416,19 @@ def sync_from_school() -> dict:
 
 
 def _extract_platforms_from_html(html: str) -> List[dict]:
-    """用 BeautifulSoup 从学校官网提取课程平台链接"""
-    soup = BeautifulSoup(html, "lxml")
+    """用 lxml 从学校官网提取课程平台链接"""
+    tree = lxml.html.document_fromstring(html)
     platforms = []
     seen_domains = set()
 
-    for a in soup.find_all("a", href=True):
-        p_tag = a.find("p")
-        if not p_tag:
+    for a in tree.xpath('//a[@href]'):
+        p_tags = a.xpath('.//p')
+        if not p_tags:
             continue
+        p_tag = p_tags[0]
 
-        name = p_tag.get_text(strip=True)
-        href = a["href"].strip()
+        name = p_tag.text_content().strip()
+        href = a.get('href', '').strip()
 
         if not href or not href.startswith("http"):
             continue

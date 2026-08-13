@@ -80,8 +80,6 @@ export interface DashboardStats {
   recent_orders: { order_id: string; username: string; website_id: number; task_type: string; price: number; status: string; created_at: string }[]
 }
 
-export interface SystemStatus { tasks: { running: number; pending: number; completed: number; failed: number; total: number }; queue: { pending: number; running: number; completed: number; failed: number; total: number; active_workers: number }; orders: { total_orders: number; total_revenue: number; by_status: Record<string, { count: number; revenue: number }> } }
-
 
 export const api = {
   courses: {
@@ -92,28 +90,17 @@ export const api = {
   },
   orders: {
     batch: (d: { username: string; password: string; orders: any[] }) => post<ApiResponse<any>>('/api/orders/batch', d),
-    pay: () => post<ApiResponse<any>>('/api/orders/pay'),
     list: (params?: { status?: string; page?: number; page_size?: number; limit?: number; search?: string; sort_by?: string; sort_dir?: string }) =>
       get<ApiResponse<{ total: number; items: OrderItem[]; page: number; page_size: number; total_pages: number }>>('/api/orders/' + buildQuery(params)),
     get: (id: string, token?: string) => get<ApiResponse<OrderItem>>('/api/orders/' + id + (token ? '?token=' + encodeURIComponent(token) : '')),
     cancel: (id: string, token?: string) => del<ApiResponse<any>>('/api/orders/' + id + (token ? '?token=' + encodeURIComponent(token) : '')),
     clearHistory: () => post<ApiResponse<any>>('/api/orders/clear-history'),
     auditLog: (id: string) => get<ApiResponse<{ event: string; detail: string; created_at: string }[]>>('/api/orders/audit-log/' + id),
-    notifications: () => get<ApiResponse<{ type: string; message: string; time: string; order_id: string }[]>>('/api/orders/notifications'),
     activeCourses: (username: string) => get<ApiResponse<string[]>>('/api/orders/active-courses?username=' + encodeURIComponent(username)),
   },
   payment: {
-    create: (d: { order_id: string; pay_type?: number }) =>
-      post<ApiResponse<{ mode: string; trade_no: string; out_trade_no: string; order_id: string; pay_url: string; price: number; really_price: number; pay_type: number; qr_image: string | null }>>('/api/payment/create', d),
     batchCreate: (d: { order_ids: string[]; pay_type?: number }) =>
       post<ApiResponse<{ mode: string; batch_id: string; trade_no: string; out_trade_no: string; order_ids: string[]; pay_url: string; total_price: number; really_price: number; pay_type: number; qr_image: string | null }>>('/api/payment/batch-create', d),
-    check: (out_trade_no: string, order_id?: string, token?: string) => {
-      const params = new URLSearchParams()
-      if (order_id) params.set('order_id', order_id)
-      if (token) params.set('token', token)
-      const q = params.toString() ? '?' + params.toString() : ''
-      return get<ApiResponse<{ paid: boolean; order_id?: string; message: string; expired?: boolean }>>('/api/payment/check/' + out_trade_no + q)
-    },
     batchCheck: (batch_id: string, out_trade_no?: string, token?: string) => {
       const params = new URLSearchParams()
       if (out_trade_no) params.set('out_trade_no', out_trade_no)
@@ -121,15 +108,11 @@ export const api = {
       const q = params.toString() ? '?' + params.toString() : ''
       return get<ApiResponse<{ paid: boolean; paid_count?: number; message: string; expired?: boolean }>>('/api/payment/batch-check/' + batch_id + q)
     },
-    balancePay: (_order_id: string) => post<ApiResponse<any>>('/api/orders/pay'),
   },
   admin: {
     login: (d: { username: string; password: string; captcha_token?: string; captcha_answer?: string }) => post<ApiResponse<any>>('/api/admin/login', d),
     dashboard: () => get<ApiResponse<DashboardStats>>('/api/admin/dashboard'),
     changePassword: (d: { old_password: string; new_password: string }) => post<ApiResponse<any>>('/api/admin/change-password', d),
-  },
-  system: {
-    status: () => get<SystemStatus>('/api/system/status'),
   },
   adminOrders: {
     list: (params?: { status?: string; user_id?: string; limit?: number; offset?: number }) =>
@@ -139,15 +122,6 @@ export const api = {
     execute: (id: string) => post<ApiResponse<any>>('/api/admin/orders/' + id + '/execute'),
     fail: (id: string, note?: string) => post<ApiResponse<any>>('/api/admin/orders/' + id + '/fail', { admin_note: note || '' }),
     complete: (id: string) => post<ApiResponse<any>>('/api/admin/orders/' + id + '/complete'),
-  },
-  adminUsers: {
-    list: (params?: { limit?: number; offset?: number }) =>
-      get<ApiResponse<{ total: number; items: any[] }>>('/api/admin/users' + buildQuery(params)),
-    topup: (userId: string, amount: number, note?: string) =>
-      post<ApiResponse<any>>('/api/admin/users/' + userId + '/topup', { amount, note }),
-    deduct: (id: string, amount: number, note?: string) =>
-      post<ApiResponse<any>>('/api/admin/users/' + id + '/deduct', { amount, note }),
-    delete: (id: string) => del<ApiResponse<any>>('/api/admin/users/' + id),
   },
   queue: {
     stats: (queue?: string) => get<ApiResponse<any>>('/api/queue/stats' + buildQuery({ queue })),
@@ -200,7 +174,6 @@ export const api = {
       post<ApiResponse<{ courses: { course_id: string; type: string; price: number; label: string }[]; total: number; pricing_mode: string }>>('/api/pricing/calculate', d),
   },
   ypay: {
-    regenerateKey: () => post<ApiResponse<{ key: string }>>('/api/ypay/regenerate-key'),
     clearOrders: () => post<ApiResponse<any>>('/api/ypay/clear-orders'),
     accounts: {
       list: () => get<ApiResponse<any[]>>('/api/ypay/accounts'),
@@ -233,12 +206,6 @@ export const api = {
       const res = await fetch('/api/ypay/decode-qr', { method: 'POST', body: fd })
       return res.json()
     },
-  },
-  app: {
-    info: () => get<ApiResponse<{ app_name: string; version: string; apk_exists: boolean; apk_size_mb: number; download_url: string }>>('/api/app/info'),
-    pairQrcode: () => get<ApiResponse<{ pair_data: string; qr_image: string | null; download_url: string; host: string; port: number }>>('/api/app/pair-qrcode'),
-    pairStatus: () => get<ApiResponse<{ paired: boolean }>>('/api/app/pair-status'),
-    downloadUrl: () => '/api/app/download',
   },
   captcha: {
     generate: () => get<ApiResponse<{ token: string; image: string }>>('/api/captcha/generate'),

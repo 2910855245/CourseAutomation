@@ -44,14 +44,6 @@ def _extract_school_ids(login_html: str):
 from infrastructure.ocr import get_ocr as _get_ocr
 
 
-def get_website_base_url(website_id: int) -> str:
-    """动态获取网站基础URL"""
-    website = WEBSITES.get(website_id)
-    if website:
-        return website["base_url"]
-    return ""
-
-
 def login_single_platform(website_id: int, username: str, password: str) -> Tuple[int, bool, httpx.Client, str]:
     """
     登录单个平台（学生端）

@@ -47,37 +47,6 @@ def validate_new_order(uid: str, client_ip: str, course_ids: list, price: float,
                 raise HTTPException(status_code=429, detail="该课程24小时内已下单，请勿重复操作")
 
 
-def retry_order(original: dict, uid: str) -> dict:
-    """基于失败订单创建新订单，返回新订单 dict"""
-    eligible = ("failed", "cancelled", "amount_mismatch")
-    if original["status"] not in eligible:
-        raise HTTPException(
-            status_code=400,
-            detail=f"只有失败/已取消/金额不匹配的订单才能重试，当前状态: {original['status']}",
-        )
-
-    course_ids = parse_course_ids(original.get("course_ids", []))
-
-    new_order = db.create_order(
-        customer_name=original.get("customer_name", ""),
-        username=original["username"],
-        password=original["password"],
-        website_id=original["website_id"],
-        task_type=original.get("task_type", "full"),
-        course_ids=course_ids,
-        user_id=uid,
-        price=original["price"],
-        video_count=original.get("video_count", 50),
-        exam_count=original.get("exam_count", 0),
-    )
-    if not new_order or "order_id" not in new_order:
-        raise HTTPException(status_code=500, detail="重新创建订单失败")
-
-    db.audit_log("order_retried", order_id=new_order["order_id"],
-                 detail=f"来自失败订单 {original.get('order_id')} 的重试")
-    return new_order
-
-
 def compute_batch_price(orders: list, website_prices: Dict[str, float] = None) -> Tuple[float, List[str]]:
     """计算批量订单的后端校验总价（与 /api/pricing/calculate 逻辑一致）。"""
     from services.pricing_service import calculate_package_price as _calculate_package_price_backend
@@ -138,19 +107,6 @@ def _price_single_course(cd, calc_video_fn, price_exam: float, price_homework: f
     if has_exam and has_homework:
         return max(price_exam, price_homework)
     return 0.0
-
-
-def validate_order_amount(front_total: float, back_total: float, detail_lines: List[str], is_privileged: bool) -> None:
-    """校验前后端金额一致性，不一致则抛出异常"""
-    from fastapi import HTTPException
-
-    if not is_privileged and abs(front_total - back_total) > 0.015:
-        logger.bind(front_total=front_total, back_total=back_total).warning(
-            "订单金额异常 details={}", " | ".join(detail_lines))
-        raise HTTPException(
-            status_code=400,
-            detail=f"订单金额异常(前端¥{front_total:.2f}/后端¥{back_total:.2f})，请刷新页面重试",
-        )
 
 
 def enqueue_order(order_id: str, *, mark_paid: bool = False) -> bool:

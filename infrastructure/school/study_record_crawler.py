@@ -1,6 +1,6 @@
 import re
 import time as _time
-from scrapling.parser import Adaptor
+import lxml.html
 from typing import Dict, List, Any
 
 
@@ -41,7 +41,7 @@ class StudyRecordCrawler:
         Returns:
             课程基本信息字典
         """
-        tree = Adaptor(html_text, adaptive=True)
+        tree = lxml.html.fromstring(html_text)
 
         def _s(val):
             return str(val) if val is not None else ""

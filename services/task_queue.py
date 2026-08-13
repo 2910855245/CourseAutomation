@@ -30,14 +30,6 @@ class QueueJobStatus(str, Enum):
     WAITING = "waiting"
 
 
-class QueueJobType(str, Enum):
-    VIDEO = "video"
-    EXAM = "exam"
-    ALL = "all"
-    MANUAL = "manual"
-    CHAOXING_POINTS = "chaoxing_points"
-
-
 # ── Dataclass ─────────────────────────────────────────────
 
 @dataclass

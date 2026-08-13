@@ -1,10 +1,10 @@
-"""学习通课程爬取 — 使用 scrapling 解析，统一返回原始数据"""
+"""学习通课程爬取 — 使用 lxml 解析，统一返回原始数据"""
 import json
 import re
 import time
 
+import lxml.html
 from loguru import logger
-from scrapling.parser import Adaptor
 
 from infrastructure.chaoxing.session import ChaoxingSession
 
@@ -15,9 +15,9 @@ def _s(val) -> str:
 
 
 def _text(el) -> str:
-    """从 scrapling Selector 元素中安全提取文本内容（兼容 0.2.x 和 0.4.x）"""
+    """从 lxml 元素中安全提取文本内容"""
     try:
-        return el._root.text_content().strip()
+        return el.text_content().strip()
     except Exception:
         try:
             return str(el).strip()
@@ -28,7 +28,7 @@ def _text(el) -> str:
 # ── 课程列表 ──────────────────────────────────────────────
 
 def fetch_course_list(session: ChaoxingSession) -> list:
-    """抓取课程列表 HTML，用 scrapling 解析
+    """抓取课程列表 HTML，用 lxml 解析
 
     返回: [{courseId, classId, name, teacher, ended, cover_url}, ...]
     """
@@ -47,7 +47,7 @@ def fetch_course_list(session: ChaoxingSession) -> list:
         logger.error(f"获取课程列表失败 error={str(e)}")
         return []
 
-    tree = Adaptor(html, adaptive=True)
+    tree = lxml.html.fromstring(html)
     courses = []
     seen = set()
 
@@ -98,7 +98,7 @@ def fetch_course_list(session: ChaoxingSession) -> list:
 
 def fetch_knowledge_list(session: ChaoxingSession, course_id: str, class_id: str,
                          page_size: int = 100) -> list:
-    """抓取课程知识点，用 scrapling 解析
+    """抓取课程知识点，用 lxml 解析
 
     返回: [{knowledgeId, classId, name, has_video, video_minutes}, ...]
     """
@@ -124,7 +124,7 @@ def fetch_knowledge_list(session: ChaoxingSession, course_id: str, class_id: str
             logger.warning(f"获取知识点失败 course_id={course_id} error={str(e)}")
             break
 
-        tree = Adaptor(html, adaptive=True)
+        tree = lxml.html.fromstring(html)
         li_blocks = tree.xpath('//li[@class="list"]')
         if not li_blocks:
             break
@@ -202,59 +202,6 @@ def fetch_points(session: ChaoxingSession, course_id: str, class_id: str) -> dic
         "remaining": remaining,
         "days_needed": days_needed,
     }
-
-
-# ── 视频信息 ──────────────────────────────────────────────
-
-def fetch_video_info(session: ChaoxingSession, domain: str, object_id: str) -> dict:
-    """获取视频信息（含 dtoken）"""
-    url = f"{domain}/ananas/status/{object_id}?k={session.fid}&flag=normal"
-    try:
-        resp = session.get(url, referer="https://mooc1.chaoxing.com/ananas/modules/video/index.html?v=2025-0725-1842")
-        if resp.status_code == 200:
-            data = resp.json()
-            return {
-                "duration": data.get("duration", 0),
-                "dtoken": data.get("dtoken", ""),
-                "filename": data.get("filename", ""),
-                "status": data.get("status", ""),
-            }
-    except Exception:
-        pass
-    return {}
-
-
-# ── enc 信息 ──────────────────────────────────────────────
-
-def fetch_enc_info(session: ChaoxingSession, course_id: str, knowledge_id: str,
-                   class_id: str) -> dict:
-    """获取 enc 信息"""
-    url = f"https://tsjy.chaoxing.com/plaza/user/{course_id}/{knowledge_id}/modify-node?classId={class_id}&userId={session.uid}"
-    referer = f"https://tsjy.chaoxing.com/plaza/knowledge-all?courseId={course_id}"
-    try:
-        data = session.get_json(url, referer=referer)
-        if data.get("code") == 1 and "data" in data:
-            result = data["data"]
-            return {"domain": result["domain"], "classId": result["classId"], "enc": result["enc"]}
-    except Exception as e:
-        logger.warning(f"获取enc失败 error={str(e)}")
-    return {}
-
-
-# ── mArg（视频任务列表）────────────────────────────────────
-
-def fetch_marg(session: ChaoxingSession, domain: str, knowledge_id: str,
-               course_id: str, class_id: str) -> dict:
-    """获取 mArg（视频任务列表）"""
-    url = f"{domain}/mooc-ans/knowledge/cards?clazzid={class_id}&courseid={course_id}&knowledgeid={knowledge_id}"
-    try:
-        resp = session.get(url)
-        match = re.search(r"try{\s+mArg\s*=\s*({.*?});", resp.text(), re.DOTALL)
-        if match:
-            return json.loads(match.group(1))
-    except Exception as e:
-        logger.warning(f"获取mArg失败 error={str(e)}")
-    return {}
 
 
 # ── 必学知识点完成状态 ──────────────────────────────────────

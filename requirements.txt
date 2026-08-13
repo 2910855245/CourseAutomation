@@ -18,8 +18,7 @@ bcrypt>=4.1.0
 python-multipart>=0.0.5       # FastAPI 文件上传
 
 # --- 爬虫/解析 ---
-scrapling>=0.2.0               # 反检测爬虫 + HTML 解析
-beautifulsoup4>=4.12.0         # 简单 HTML 解析（自动拉取 lxml 后端）
+lxml>=5.0.0                    # HTML 解析（C 加速 xpath）
 ddddocr>=1.4.0                 # 验证码 OCR
 
 # --- 日志/配置 ---

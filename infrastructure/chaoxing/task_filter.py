@@ -2,12 +2,6 @@
 from typing import List, Dict
 
 
-def get_actionable_courses(cleaned_courses: List[Dict]) -> List[Dict]:
-    """返回有待刷视频的课程列表（有积分系统且积分未满）"""
-    return [c for c in cleaned_courses
-            if c.get("has_points_system") and c.get("video_pending", 0) > 0]
-
-
 def get_actionable_tasks(cleaned_courses: List[Dict]) -> List[Dict]:
     """返回所有可操作任务（积分未满、必学未完成或有待完成作业的课程）
 

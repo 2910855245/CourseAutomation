@@ -25,14 +25,6 @@ def _cached_config(key: str, default: str = "") -> str:
     return val
 
 
-def _invalidate_config_cache(key: str = None):
-    """清除配置缓存（配置变更时调用）"""
-    if key:
-        _config_cache.pop(key, None)
-    else:
-        _config_cache.clear()
-
-
 class AIService:
     def __init__(self, session: httpx.Client, website_id: int = 1):
         self.session = session

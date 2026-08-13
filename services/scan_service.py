@@ -438,22 +438,6 @@ def scan_all_platforms(username: str, password: str,
     return results
 
 
-def get_actionable_tasks_all(username: str, password: str,
-                             website_id: int = None) -> list:
-    """只返回可操作任务列表（视频+考试+作业合并）"""
-    if website_id is not None:
-        result = scan_platform(username, password, website_id)
-        return result.get("tasks", [])
-
-    platforms = _discover_and_match()
-    all_tasks = []
-    for wid, pinfo in platforms.items():
-        result = scan_platform(username, password, wid,
-                               platform_name=pinfo.get("name"))
-        all_tasks.extend(result.get("tasks", []))
-    return all_tasks
-
-
 _chaoxing_cache: Dict[str, dict] = {}  # 内存缓存 {username: {data, ts}}
 _chaoxing_cookies: Dict[str, dict] = {}  # Cookie 缓存 {username: {cookie_str, ts}}
 _CHAOXING_CACHE_TTL = 300  # 内存缓存 5 分钟

@@ -9,7 +9,6 @@
 
 import json
 import os
-import sys
 import time
 
 
@@ -69,17 +68,6 @@ def push_ws_update(status_file: str, data: dict):
         pass
 
 
-def register_signal_handlers(on_signal):
-    """SIGTERM/SIGINT → on_signal()（worker 内设置 _shutdown_requested）"""
-    import signal
-
-    def _handler(signum, frame):
-        on_signal()
-
-    signal.signal(signal.SIGTERM, _handler)
-    signal.signal(signal.SIGINT, _handler)
-
-
 def ensure_terminal_status(status_file: str):
     """退出兜底：无终态时写入 error（进程被 kill/OOM 时也要留下终态）"""
     try:
@@ -106,25 +94,3 @@ def apply_proxy(session):
             logger.info("已启用隧道代理")
     except Exception:
         pass
-
-
-def bootstrap_worker() -> dict:
-    """worker 入口引导：chdir + sys.path + 解析 argv + 初始化进程上下文。
-
-    返回 (params_file, status_file) 路径元组。
-    """
-    base = os.path.dirname(os.path.abspath(__file__))
-    os.chdir(base)
-    sys.path.insert(0, base)
-
-    from config import init_worker_context, validate_settings
-    validate_settings()
-
-    if len(sys.argv) < 3:
-        print(f"用法: python {os.path.basename(sys.argv[0])} <params.json> <status.json>", file=sys.stderr)
-        sys.exit(2)
-    params_file, status_file = sys.argv[1], sys.argv[2]
-    with open(params_file, encoding="utf-8") as f:
-        params = json.load(f)
-    init_worker_context(params)
-    return params_file, status_file

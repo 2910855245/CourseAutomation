@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildQuery } from '@/composables/useApi'
+import { buildQuery } from '@/api'
 import { usePlatformNames } from '@/composables/usePlatformNames'
 
 describe('buildQuery', () => {

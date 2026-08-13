@@ -1,12 +1,8 @@
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import Boolean, Float, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-
-def _now_str() -> str:
-    return datetime.now().isoformat()
 
 S = String(255)
 
@@ -106,14 +102,6 @@ class Order(Base):
     deleted_at: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
 
 
-class PlatformSetting(Base):
-    __tablename__ = "platform_settings"
-
-    key: Mapped[str] = mapped_column(S, primary_key=True)
-    value: Mapped[str] = mapped_column(Text, default="")
-    updated_at: Mapped[str] = mapped_column(S, nullable=False)
-
-
 class SystemConfig(Base):
     __tablename__ = "system_config"
     config_key: Mapped[str] = mapped_column(S, primary_key=True)
@@ -211,14 +199,3 @@ class YpayTmpPrice(Base):
     price: Mapped[float] = mapped_column(Float, unique=True, nullable=False, index=True)
     oid: Mapped[str] = mapped_column(S, default="")
     create_time: Mapped[str] = mapped_column(S, nullable=False)
-
-
-class Ad(Base):
-    __tablename__ = "ads"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    slot: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
-    name: Mapped[str] = mapped_column(S, default="")
-    html_content: Mapped[str] = mapped_column(Text, default="")
-    is_active: Mapped[int] = mapped_column(Integer, default=1)
-    create_time: Mapped[str] = mapped_column(S, nullable=False)
-    deleted_at: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
