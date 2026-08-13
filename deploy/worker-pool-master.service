@@ -1,0 +1,15 @@
+[Unit]
+Description=Worker Pool Master (fork-COW)
+After=network.target anti-course.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/anti-course
+ExecStart=/opt/anti-course/venv/bin/python worker_pool_master.py
+Environment=WORKER_POOL_PORT=17019
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

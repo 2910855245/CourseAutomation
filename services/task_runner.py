@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -78,35 +79,73 @@ class TaskRunner:
         # 学习通任务（website_id=4）或学习通积分任务使用专用worker
         if self.website_id == 4 or job_type == "chaoxing_points":
             cmd = [python_exe, CHAOXING_WORKER_SCRIPT, self._params_file, self._status_file]
+            pool_script = os.path.basename(CHAOXING_WORKER_SCRIPT)
         else:
             cmd = [python_exe, WORKER_SCRIPT, self._params_file, self._status_file]
+            pool_script = os.path.basename(WORKER_SCRIPT)
         logger.info("启动子进程: {}", " ".join(cmd))
 
-        log_fh = open(self._log_file, "w", encoding="utf-8")
-        try:
-            worker_env = os.environ.copy()
-            from config import settings
-            worker_env["WORKER_TOKEN"] = settings.worker_token
-            worker_env["MALLOC_ARENA_MAX"] = "2"
-            worker_env["MALLOC_MMAP_THRESHOLD_"] = "65536"
-            worker_env["PYTHONDONTWRITEBYTECODE"] = "1"
-            self._process = subprocess.Popen(
-                cmd,
-                stdout=log_fh,
-                stderr=subprocess.STDOUT,
-                cwd=os.path.dirname(WORKER_SCRIPT),
-                env=worker_env,
-            )
-        except Exception as e:
-            log_fh.close()
-            raise
-        self._log_fh = log_fh
+        # ── 优先 fork-COW 进程池（Linux，内存最小化：子进程共享预热页）──
+        self._pool_mode = False
+        self._pool_task_id = None
+        self._pool_exit_file = os.path.join(self._tmpdir, "pool_exit.json")
+        self._pool_port = 17019
+        from config import settings as _cfg
+        if (getattr(_cfg, "worker_pool_enabled", False) and sys.platform == "linux"):
+            try:
+                self._pool_task_id = order_id or f"T{os.path.basename(self._tmpdir)}"
+                self._pool_port = int(getattr(_cfg, "worker_pool_port", 17019))
+                req = json.dumps({
+                    "cmd": "run",
+                    "task_id": self._pool_task_id,
+                    "script": pool_script,
+                    "params_file": self._params_file,
+                    "status_file": self._status_file,
+                    "cwd": os.path.dirname(WORKER_SCRIPT),
+                })
+                with socket.create_connection(("127.0.0.1", self._pool_port), timeout=3) as s:
+                    s.sendall((req + "\n").encode("utf-8"))
+                    resp_line = s.makefile().readline()
+                resp = json.loads(resp_line)
+                if resp.get("ok"):
+                    self._pool_mode = True
+                    logger.info("fork-COW 池接手任务 task_id={} pid={}", self._pool_task_id, resp.get("pid"))
+                else:
+                    logger.warning("池拒绝任务，回退 spawn: {}", resp.get("message", ""))
+            except Exception as e:
+                logger.info("worker pool 不可用，回退 spawn: {}", e)
+
+        if not self._pool_mode:
+            log_fh = open(self._log_file, "w", encoding="utf-8")
+            try:
+                worker_env = os.environ.copy()
+                from config import settings
+                worker_env["WORKER_TOKEN"] = settings.worker_token
+                worker_env["MALLOC_ARENA_MAX"] = "2"
+                worker_env["MALLOC_MMAP_THRESHOLD_"] = "65536"
+                worker_env["PYTHONDONTWRITEBYTECODE"] = "1"
+                self._process = subprocess.Popen(
+                    cmd,
+                    stdout=log_fh,
+                    stderr=subprocess.STDOUT,
+                    cwd=os.path.dirname(WORKER_SCRIPT),
+                    env=worker_env,
+                )
+            except Exception as e:
+                log_fh.close()
+                raise
+            self._log_fh = log_fh
 
         # 重阶段（登录/爬取）整体超时：防止网络卡死永久占用 worker 槽位
+        def _still_running() -> bool:
+            if self._pool_mode:
+                return not os.path.exists(self._pool_exit_file)
+            return self._process.poll() is None
+
         deadline = time.monotonic() + heavy_timeout
         heavy_timed_out = False
         try:
-            while self._running and self._process.poll() is None:
+            while self._running and _still_running():
                 time.sleep(3)
                 status_data = self._read_status()
                 if status_data.get("heavy_done") or status_data.get("phase") == "study_running":
@@ -133,7 +172,14 @@ class TaskRunner:
 
         status_data = self._read_status()
 
-        rc = self._process.returncode
+        if self._pool_mode:
+            try:
+                with open(self._pool_exit_file, encoding="utf-8") as f:
+                    rc = json.load(f).get("exit_code", 1)
+            except Exception:
+                rc = 1
+        else:
+            rc = self._process.returncode
         if not status_data:
             status_data = self._read_status_file()
 
@@ -175,7 +221,15 @@ class TaskRunner:
 
     def cancel(self):
         self._running = False
-        if self._process and self._process.poll() is None:
+        if self._pool_mode and self._pool_task_id:
+            try:
+                req = json.dumps({"cmd": "cancel", "task_id": self._pool_task_id})
+                with socket.create_connection(("127.0.0.1", self._pool_port), timeout=3) as s:
+                    s.sendall((req + "\n").encode("utf-8"))
+                    s.makefile().readline()
+            except Exception:
+                pass
+        elif self._process and self._process.poll() is None:
             self._process.terminate()
             try:
                 self._process.wait(timeout=10)
