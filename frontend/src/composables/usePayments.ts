@@ -105,12 +105,12 @@ export function usePayments() {
   const payTestChannelName = ref('')
   let payTestBatchId = ''
   let payTestTradeNo = ''
-  let _payTestAccountId = 0
+  const payTestAccountId = ref(0)
   let payTestTimer: ReturnType<typeof setInterval> | null = null
 
   async function startChannelPayTest(acc: any) {
     if (!acc) return
-    _payTestAccountId = acc.id; payTestChannelName.value = acc.name
+    payTestAccountId.value = acc.id; payTestChannelName.value = acc.name
     showPayTest.value = true; payTestLoading.value = true
     payTestChecks.value = []; payTestStarted.value = false
     payTestQrImage.value = ''; payTestPaid.value = false; payTestExpired.value = false
@@ -164,5 +164,6 @@ export function usePayments() {
     payTestPolling, payTestPaid, payTestExpired, showPayTest, payTestChannelName,
     startChannelPayTest, startPayTestPolling, stopPayTestPolling, closePayTest,
     _payTestTimer: payTestTimer,
+    payTestAccountId,
   }
 }

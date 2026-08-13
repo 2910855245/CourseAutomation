@@ -1,14 +1,14 @@
 <script setup lang="ts">
-// @ts-nocheck
 import { ref } from 'vue'
-import { useAdminState } from './adminState'
+import { useAdminStore } from '@/stores/admin'
 import { useAppStore } from '@/stores/app'
 import { useConfirmSingleton } from '@/composables/useConfirm'
 import { api } from '@/api'
 
 const store = useAppStore()
 const { showConfirm } = useConfirmSingleton()
-const { users, usersTotal, loadingUsers, loadUsers, fmtMoney, fmtDate, openTopup, statusClass } = useAdminState()
+const { fmtDate, fmtMoney } = useAdminStore().state().dashboard
+const { loadUsers, loadingUsers, openTopup, users, usersTotal } = useAdminStore().state().users
 
 async function deleteUser(u: any) {
   const label = u.nickname || u.username || u.user_id

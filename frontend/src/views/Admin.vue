@@ -1,9 +1,8 @@
 <script setup lang="ts">
-// @ts-nocheck
 import { ref, onMounted, onUnmounted, toRef, watch } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { usePlatformNames } from '@/composables/usePlatformNames'
-import { initAdminState } from '@/views/admin/adminState'
+import { useAdminStore } from '@/stores/admin'
 import { useAuth } from '@/composables/useAuth'
 import { useDashboard } from '@/composables/useDashboard'
 import { useOrders } from '@/composables/useOrders'
@@ -28,10 +27,12 @@ const store = useAppStore()
 // ── Composables ──
 const { adminUser, adminPass, loginErr, currentRole, isLoggedIn, pwForm, changingPw, captchaToken, captchaAnswer, captchaImage, captchaLoading, doLogin, logout, changeAdminPassword, loadCaptcha } = useAuth()
 const dashboard = useDashboard()
-const { allSidebarItems, visibleSidebarGroups, sidebarGroups, sidebarCollapsed, mobileSidebarOpen, loadingDash, dash, dashError, fmtDate, fmtShortDate, fmtMoney, loadDashboard, statusLabel, statusClass, orderStatusLabel, orderStatusClass, maxStatusCount, maxBarRevenue, maxBarOrders, totalPlatformOrders, maxPartnerStatusCount } = dashboard
+const { allSidebarItems, visibleSidebarGroups, sidebarGroups, sidebarCollapsed, mobileSidebarOpen, loadingDash, dash, dashError, fmtDate, fmtShortDate, fmtMoney, loadDashboard, statusLabel, statusClass, orderStatusLabel, orderStatusClass, maxStatusCount, maxBarRevenue, maxBarOrders, totalPlatformOrders } = dashboard
 const orders = useOrders()
 const users = useUsers()
 const payments = usePayments()
+// 模板内 Topup modal 直接使用 users 切片状态
+const { showTopupModal, toppupMode, topupTarget, topupAmount, topupNote, toppingUp, doTopup } = users
 const sysConfig = useSystemConfig()
 const ypayAdmin = useYpayAdmin()
 
@@ -118,28 +119,18 @@ onUnmounted(() => {
   if (payments._payTestTimer) { clearInterval(payments._payTestTimer); payments._payTestTimer = null }
 })
 
-// ── Expose all state to tab components via initAdminState ──
-const adminState = initAdminState({
-  // Auth
-  adminUser, adminPass, loginErr, currentRole, isLoggedIn, pwForm, changingPw, doLogin, logout, changeAdminPassword,
-  // Dashboard
-  ...dashboard,
-  activeTab,
-  // Orders
-  ...orders,
-  // Users
-  ...users,
-  // Payments (withdrawals, queue, pay test)
-  ...payments,
-  // System config (deepseek, pricing, proxy, risk/health)
-  ...sysConfig,
-  // YPay admin (ypay, ads)
-  ...ypayAdmin,
-  // Tab switching
-  switchTab,
-  // Platform names
-  loadPlatformNames, getPlatformName, platformNames,
+// ── Expose typed state slices to tab components via admin store ──
+useAdminStore().init({
+  auth: { adminUser, adminPass, loginErr, currentRole, isLoggedIn, pwForm, changingPw, captchaToken, captchaAnswer, captchaImage, captchaLoading, doLogin, logout, changeAdminPassword, loadCaptcha },
+  dashboard,
+  orders,
+  users,
+  payments,
+  sysConfig,
+  ypay: ypayAdmin,
+  ui: { activeTab, switchTab, platformNames, loadPlatformNames, getPlatformName },
 })
+
 </script>
 
 <template>
@@ -287,7 +278,7 @@ const adminState = initAdminState({
           </div>
           <div class="topbar-right">
             <span class="admin-badge">管理员</span>
-            <button v-if="activeTab === 'overview'" class="btn btn-ghost btn-sm" :disabled="loadingDash" @click="loadDashboard">
+            <button v-if="activeTab === 'overview'" class="btn btn-ghost btn-sm" :disabled="loadingDash" @click="loadDashboard(currentRole)">
               <span v-if="loadingDash" class="spinner" style="width:14px;height:14px"></span>
               {{ loadingDash ? '加载中' : '刷新数据' }}
             </button>
@@ -384,15 +375,6 @@ const adminState = initAdminState({
       </div>
     </div>
 
-    <!-- QR 大图弹窗 -->
-    <div v-if="showQrModal" class="modal-overlay" @click.self="showQrModal = ''">
-      <div class="qr-modal">
-        <img :src="showQrModal" alt="收款码" />
-        <button class="btn btn-ghost btn-sm" @click="showQrModal = ''">
-关闭
-</button>
-      </div>
-    </div>
   </div>
 </template>
 
