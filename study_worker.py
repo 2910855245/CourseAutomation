@@ -6,9 +6,8 @@ import random
 import threading
 import signal
 import traceback
-import structlog
+from loguru import logger
 
-logger = structlog.get_logger(__name__)
 
 _ocr_instance = None
 
