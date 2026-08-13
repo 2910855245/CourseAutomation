@@ -59,21 +59,16 @@ from fastapi.staticfiles import StaticFiles
 from api.auth import get_current_admin
 from api.models import ApiResponse
 from api.routers import (
-    accounts,
     admin,
-    admin_ads,
     admin_users,
     captcha,
     config_admin,
-    courses,
     orders,
     payment,
     pricing,
     progress,
     queue,
     scan,
-    setup,
-    tasks,
     users,
     wallet,
     ypay_admin,
@@ -82,7 +77,6 @@ from api.routers import (
     ypay_vmq,
 )
 from api.routers import domain_monitor as domain_monitor_router
-from api.routers import health as health_router
 from config import settings
 
 
@@ -111,10 +105,9 @@ _TAGS_METADATA = [
     {"name": "YPay支付", "description": "支付通道管理、订单查询、二维码生成"},
     {"name": "YPay VMQ", "description": "V免签协议：心跳、支付推送回调"},
     {"name": "YPay APP", "description": "Android 监控 APP：配对、心跳、推送"},
-    {"name": "健康监控", "description": "平台健康检查、账号检测、间隔配置"},
     {"name": "任务队列", "description": "队列状态、任务列表、暂停/恢复"},
     {"name": "课程扫描", "description": "平台课程列表、扫描进度"},
-    {"name": "系统配置", "description": "首次配置向导、全局设置"},
+    {"name": "系统配置", "description": "全局设置"},
 ]
 
 app = FastAPI(
@@ -165,8 +158,8 @@ async def rate_limit_middleware(request: Request, call_next):
         return await call_next(request)
 
     path = request.url.path
-    # 支付回调/安装向导/YPay通知/课程扫描/验证码 不做限流
-    if path.startswith("/api/payment/notify") or path.startswith("/api/setup/") or path.startswith("/api/ypay/vmq/") or path.startswith("/api/courses/") or path.startswith("/api/captcha/"):
+    # 支付回调/YPay通知/课程扫描/验证码 不做限流
+    if path.startswith("/api/payment/notify") or path.startswith("/api/ypay/vmq/") or path.startswith("/api/courses/") or path.startswith("/api/captcha/"):
         return await call_next(request)
 
     client_ip = request.client.host if request.client else "unknown"
@@ -224,18 +217,13 @@ async def no_cache_middleware(request: Request, call_next):
     return response
 
 
-app.include_router(accounts.router)
 app.include_router(scan.router)
-app.include_router(courses.router)
 app.include_router(progress.router)
-app.include_router(tasks.router)
 app.include_router(users.router)
 app.include_router(wallet.router)
 app.include_router(orders.router)
 app.include_router(admin.router)
 app.include_router(admin_users.router)
-app.include_router(admin_ads.router)
-app.include_router(admin_ads.public_ads_router)
 app.include_router(queue.router)
 app.include_router(payment.router)
 app.include_router(ypay_routes.router)
@@ -247,10 +235,8 @@ app.include_router(config_admin.announcement_router)
 app.include_router(pricing.router)
 
 app.include_router(ypay_app.raw_router)
-app.include_router(setup.router)
 app.include_router(captcha.router)
 app.include_router(domain_monitor_router.router)
-app.include_router(health_router.router)
 
 # --- 监控APP接口 (前端 /api/app/* 代理到 /api/ypay/*) ---
 @app.get("/api/app/pair-qrcode", response_model=ApiResponse)
