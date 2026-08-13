@@ -69,7 +69,6 @@ def retry_order(original: dict, uid: str) -> dict:
         task_type=original.get("task_type", "full"),
         course_ids=course_ids,
         user_id=uid,
-        inviter_code=original.get("inviter_code"),
         price=original["price"],
         video_count=original.get("video_count", 50),
         exam_count=original.get("exam_count", 0),

@@ -12,15 +12,15 @@ from api.db._base import _db_logger
 logger = _db_logger
 
 # Lazy-loaded model references
-_Order = _User = _Agent = _Commission = _WalletTransaction = _YpayOrder = None
+_Order = _User = _WalletTransaction = _YpayOrder = None
 
 
 def _resolve_models():
-    global _Order, _User, _Agent, _Commission, _WalletTransaction, _YpayOrder
+    global _Order, _User, _WalletTransaction, _YpayOrder
     if _Order is None:
-        from api.db.models import Agent, Commission, Order, User, WalletTransaction, YpayOrder
-        _Order, _User, _Agent, _Commission, _WalletTransaction, _YpayOrder = Order, User, Agent, Commission, WalletTransaction, YpayOrder
-    return _Order, _User, _Agent, _Commission, _WalletTransaction, _YpayOrder
+        from api.db.models import Order, User, WalletTransaction, YpayOrder
+        _Order, _User, _WalletTransaction, _YpayOrder = Order, User, WalletTransaction, YpayOrder
+    return _Order, _User, _WalletTransaction, _YpayOrder
 
 
 def _order_to_dict(order) -> dict:
@@ -33,7 +33,6 @@ def _order_to_dict(order) -> dict:
         "payment_trade_no": order.payment_trade_no,
         "payment_channel": order.payment_channel,
         "payment_time": order.payment_time,
-        "commission_status": order.commission_status,
         "paid_processed": order.paid_processed,
         "user_id": order.user_id,
         "customer_name": order.customer_name,
@@ -47,7 +46,6 @@ def _order_to_dict(order) -> dict:
         "exam_count": order.exam_count,
         "price": order.price,
         "notes": order.notes,
-        "inviter_code": order.inviter_code,
         "status": order.status,
         "paid": order.paid,
         "task_id": order.task_id,
@@ -64,8 +62,8 @@ class OrderDBMixin:
     def create_order(self, *, customer_name="", customer_contact="",
                      username: str, password: str, website_id: int,
                      task_type="video", course_ids=None, video_count=50,
-                     exam_count=0, price=0.0, notes="", user_id="", inviter_code="") -> Dict[str, Any]:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+                     exam_count=0, price=0.0, notes="", user_id="") -> Dict[str, Any]:
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         from api.crypto import encrypt_password
         order_id = f"ORD-{uuid.uuid4().hex[:8].upper()}"
         now = datetime.now().isoformat()
@@ -85,7 +83,6 @@ class OrderDBMixin:
                 exam_count=exam_count,
                 price=price,
                 notes=notes,
-                inviter_code=inviter_code,
                 status="pending",
                 created_at=now,
                 updated_at=now,
@@ -102,7 +99,7 @@ class OrderDBMixin:
 
     def deduct_user_balance_for_payment(self, user_id: str, amount: float,
                                          order_id: str) -> bool:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         session = self._get_session()
         try:
             count = session.execute(update(User).filter(
@@ -137,7 +134,7 @@ class OrderDBMixin:
             session.close()
 
     def get_order(self, order_id: str) -> Optional[Dict[str, Any]]:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         session = self._get_session()
         try:
             order = session.scalars(select(Order).filter(Order.order_id == order_id)).first()
@@ -150,9 +147,8 @@ class OrderDBMixin:
                     search: Optional[str] = None,
                     sort_by: str = "created_at",
                     sort_dir: str = "desc",
-                    agent_ids: Optional[List[str]] = None,
                     limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         _ALLOWED_SORT_FIELDS = {
             "created_at", "updated_at", "price", "status", "username",
             "customer_name", "order_id", "finished_at", "payment_time",
@@ -164,10 +160,6 @@ class OrderDBMixin:
                 stmt = stmt.where(Order.status == status)
             if user_id:
                 stmt = stmt.where(Order.user_id == user_id)
-            if agent_ids:
-                stmt = stmt.where(Order.inviter_code.in_(
-                    select(Agent.referral_code).filter(Agent.agent_id.in_(agent_ids))
-                ))
             if search:
                 like = f"%{search}%"
                 stmt = stmt.where(
@@ -189,9 +181,8 @@ class OrderDBMixin:
 
     def count_orders(self, status: Optional[str] = None,
                      user_id: Optional[str] = None,
-                     search: Optional[str] = None,
-                     agent_ids: Optional[List[str]] = None) -> int:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+                     search: Optional[str] = None) -> int:
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         session = self._get_session()
         try:
             stmt = select(func.count(Order.order_id))
@@ -199,10 +190,6 @@ class OrderDBMixin:
                 stmt = stmt.where(Order.status == status)
             if user_id:
                 stmt = stmt.where(Order.user_id == user_id)
-            if agent_ids:
-                stmt = stmt.where(Order.inviter_code.in_(
-                    select(Agent.referral_code).filter(Agent.agent_id.in_(agent_ids))
-                ))
             if search:
                 like = f"%{search}%"
                 stmt = stmt.where(
@@ -215,7 +202,7 @@ class OrderDBMixin:
             session.close()
 
     def update_order(self, order_id: str, **fields) -> bool:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         if not fields:
             return False
         if "course_ids" in fields and isinstance(fields["course_ids"], list):
@@ -234,7 +221,7 @@ class OrderDBMixin:
             session.close()
 
     def _update_order_if_status(self, order_id: str, expected_status, **fields) -> bool:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         fields["updated_at"] = datetime.now().isoformat()
         session = self._get_session()
         try:
@@ -254,7 +241,7 @@ class OrderDBMixin:
             session.close()
 
     def accept_order(self, order_id: str, admin_note: str = "") -> bool:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         return self._update_order_if_status(
             order_id, "pending",
             status="accepted",
@@ -263,7 +250,7 @@ class OrderDBMixin:
         )
 
     def start_order(self, order_id: str, task_id: str) -> bool:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         return self._update_order_if_status(
             order_id, ("paid", "accepted", "queued", "retrying"),
             status="running", task_id=task_id,
@@ -271,7 +258,7 @@ class OrderDBMixin:
         )
 
     def complete_order(self, order_id: str) -> bool:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         # 也允许 cancelled 状态的订单恢复为 completed（任务完成后自动恢复）
         return self._update_order_if_status(
             order_id, ("pending", "running", "paid", "cancelled", "accepted"),
@@ -280,7 +267,7 @@ class OrderDBMixin:
         )
 
     def fail_order(self, order_id: str, error: str = "") -> bool:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         return self._update_order_if_status(
             order_id, ("pending", "running", "paid", "cancelled", "accepted"),
             status="failed",
@@ -289,7 +276,7 @@ class OrderDBMixin:
         )
 
     def cancel_order(self, order_id: str) -> bool:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         return self._update_order_if_status(
             order_id, "pending",
             status="cancelled",
@@ -297,7 +284,7 @@ class OrderDBMixin:
         )
 
     def auto_cancel_expired_pending(self, minutes: int = 5) -> int:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         session = self._get_session()
         try:
             cutoff = (datetime.now() - timedelta(minutes=minutes)).isoformat()
@@ -319,7 +306,7 @@ class OrderDBMixin:
             session.close()
 
     def clear_history_orders(self, user_id: Optional[str] = None) -> int:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         session = self._get_session()
         try:
             now = datetime.now().isoformat()
@@ -345,7 +332,7 @@ class OrderDBMixin:
             session.close()
 
     def pay_order(self, order_id: str) -> bool:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         session = self._get_session()
         try:
             order = session.scalars(select(Order).filter(Order.order_id == order_id).with_for_update()).first()
@@ -366,7 +353,7 @@ class OrderDBMixin:
             user = session.scalars(select(User).filter(User.user_id == order.user_id).with_for_update()).first()
             if not user:
                 return False
-            is_vip = user.role in ("admin", "sub_admin")
+            is_vip = user.role == "admin"
             if not is_vip and user.balance < order.price:
                 return False
             if not is_vip:
@@ -391,7 +378,7 @@ class OrderDBMixin:
             session.close()
 
     def pay_user_orders(self, user_id: str) -> Dict[str, Any]:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         session = self._get_session()
         try:
             orders = session.scalars(select(Order).filter(
@@ -405,7 +392,7 @@ class OrderDBMixin:
             user = session.scalars(select(User).filter(User.user_id == user_id).with_for_update()).first()
             if not user:
                 return {"paid": 0, "total_price": 0, "failed": 0}
-            is_vip = user.role in ("admin", "sub_admin")
+            is_vip = user.role == "admin"
             total = sum(o.price for o in unpaid)
             if not is_vip and user.balance < total:
                 return {"paid": 0, "total_price": round(total, 2), "failed": len(unpaid),
@@ -441,22 +428,8 @@ class OrderDBMixin:
         finally:
             session.close()
 
-    def _get_agent_upgrade_stats(self, session, since: str = None) -> Dict[str, Any]:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
-        stmt = select(
-            func.count(YpayOrder.id),
-            func.coalesce(func.sum(YpayOrder.truemoney), 0),
-        ).filter(
-            YpayOrder.out_trade_no.like("AGENTUP-%"),
-            YpayOrder.status == 1,
-        )
-        if since:
-            stmt = stmt.filter(YpayOrder.create_time >= since)
-        cnt, total = session.execute(stmt).one()
-        return {"count": cnt or 0, "revenue": float(total or 0)}
-
     def get_stats(self) -> Dict[str, Any]:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         session = self._get_session()
         try:
             rows = session.execute(
@@ -466,12 +439,10 @@ class OrderDBMixin:
                     func.coalesce(func.sum(Order.price), 0),
                 ).group_by(Order.status)
             ).all()
-            upgrade_stats = self._get_agent_upgrade_stats(session)
             stats = {
                 "total_orders": 0,
                 "total_revenue": 0.0,
                 "by_status": {},
-                "agent_upgrades": upgrade_stats,
             }
             for status, cnt, total_price in rows:
                 stats["total_orders"] += cnt
@@ -480,13 +451,12 @@ class OrderDBMixin:
                     "count": cnt,
                     "revenue": total_price,
                 }
-            stats["total_revenue"] += upgrade_stats["revenue"]
             return stats
         finally:
             session.close()
 
     def get_dashboard_stats(self) -> Dict[str, Any]:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         session = self._get_session()
         try:
             now = datetime.now()
@@ -519,40 +489,6 @@ class OrderDBMixin:
             )) or 0.0
             revenue_week = session.scalar(select(func.coalesce(func.sum(Order.price), 0)).filter(
                 Order.created_at >= week_start
-            )) or 0.0
-
-            upgrade_all = self._get_agent_upgrade_stats(session)
-            upgrade_today = self._get_agent_upgrade_stats(session, since=today_start)
-            upgrade_week = self._get_agent_upgrade_stats(session, since=week_start)
-            total_revenue += upgrade_all["revenue"]
-            revenue_today += upgrade_today["revenue"]
-            revenue_week += upgrade_week["revenue"]
-
-            active_agents = session.scalar(select(func.count(Agent.agent_id)).filter(
-                Agent.status == "active"
-            )) or 0
-            pending_agents = session.scalar(select(func.count(Agent.agent_id)).filter(
-                Agent.status == "pending"
-            )) or 0
-
-            total_agents = session.scalar(select(func.count(Agent.agent_id))) or 0
-            new_agents_today = session.scalar(select(func.count(Agent.agent_id)).filter(
-                Agent.created_at >= today_start
-            )) or 0
-            new_agents_week = session.scalar(select(func.count(Agent.agent_id)).filter(
-                Agent.created_at >= week_start
-            )) or 0
-            rejected_agents = session.scalar(select(func.count(Agent.agent_id)).filter(
-                Agent.status == "rejected"
-            )) or 0
-            agents_by_tier = session.execute(
-                select(Agent.tier_level, func.count(Agent.agent_id))
-                .filter(Agent.status == "active")
-                .group_by(Agent.tier_level)
-            ).all()
-
-            total_commission = session.scalar(select(
-                func.coalesce(func.sum(Commission.commission_amount), 0)
             )) or 0.0
 
             platform_dist = session.execute(
@@ -590,15 +526,7 @@ class OrderDBMixin:
                 rev = session.scalar(select(func.coalesce(func.sum(Order.price), 0)).filter(
                     Order.created_at >= day_start, Order.created_at < day_end_ts
                 )) or 0.0
-                up_rev = session.scalar(select(
-                    func.coalesce(func.sum(YpayOrder.truemoney), 0)
-                ).filter(
-                    YpayOrder.out_trade_no.like("AGENTUP-%"),
-                    YpayOrder.status == 1,
-                    YpayOrder.create_time >= day_start,
-                    YpayOrder.create_time <= day_end_ts,
-                )) or 0.0
-                recent_7_days.append({"date": day_label, "orders": cnt, "revenue": round(rev + up_rev, 2)})
+                recent_7_days.append({"date": day_label, "orders": cnt, "revenue": round(rev, 2)})
 
             recent_orders = session.scalars(select(Order).order_by(
                 Order.created_at.desc()
@@ -613,20 +541,6 @@ class OrderDBMixin:
                     "price": o.price,
                     "status": o.status,
                     "created_at": o.created_at,
-                })
-
-            top_agents = []
-            top_agents_raw = session.scalars(select(Agent).filter(
-                Agent.status == "active"
-            ).order_by(Agent.total_commission.desc()).limit(5)).all()
-            for a in top_agents_raw:
-                user = session.scalars(select(User).filter(User.user_id == a.user_id)).first()
-                top_agents.append({
-                    "agent_id": a.agent_id,
-                    "display_name": a.display_name or (user.nickname if user else "") or (user.username if user else ""),
-                    "total_earnings": a.total_commission,
-                    "referral_code": a.referral_code,
-                    "commission_rate": a.flow_commission_rate,
                 })
 
             pending_orders = session.scalar(select(func.count(Order.order_id)).filter(
@@ -660,24 +574,6 @@ class OrderDBMixin:
                     "today": round(revenue_today, 2),
                     "week": round(revenue_week, 2),
                 },
-                "agents": {
-                    "active": active_agents,
-                    "pending": pending_agents,
-                    "total": total_agents,
-                    "rejected": rejected_agents,
-                    "new_today": new_agents_today,
-                    "new_week": new_agents_week,
-                    "total_commission": round(total_commission, 2),
-                    "by_tier": {str(tl): cnt for tl, cnt in agents_by_tier},
-                },
-                "agent_upgrades": {
-                    "count": upgrade_all["count"],
-                    "revenue": round(upgrade_all["revenue"], 2),
-                    "today_count": upgrade_today["count"],
-                    "today_revenue": round(upgrade_today["revenue"], 2),
-                    "week_count": upgrade_week["count"],
-                    "week_revenue": round(upgrade_week["revenue"], 2),
-                },
                 "platform_distribution": [
                     {"website_id": wid, "count": cnt, "revenue": round(rev, 2)}
                     for wid, cnt, rev in platform_dist
@@ -692,17 +588,16 @@ class OrderDBMixin:
                 ],
                 "recent_7_days": recent_7_days,
                 "recent_orders": recent_order_items,
-                "top_agents": top_agents,
             }
         finally:
             session.close()
 
     def complete_order_full(self, order_id: str, payment_trade_no: str = "",
                              payment_channel: str = "") -> bool:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         now = datetime.now().isoformat()
         return self.update_order(
-            order_id, status="completed", paid=True, commission_status="processed",
+            order_id, status="completed", paid=True,
             paid_processed="processed",
             payment_trade_no=payment_trade_no, payment_channel=payment_channel,
             payment_time=now, finished_at=now,
@@ -710,7 +605,7 @@ class OrderDBMixin:
 
     def confirm_payment(self, order_id: str, payment_trade_no: str = "",
                          payment_channel: str = "") -> bool:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         now = datetime.now().isoformat()
         session = self._get_session()
         try:
@@ -732,30 +627,9 @@ class OrderDBMixin:
         finally:
             session.close()
 
-    def claim_commission(self, order_id: str) -> bool:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
-        session = self._get_session()
-        try:
-            updated = session.execute(update(Order).filter(
-                Order.order_id == order_id,
-                Order.commission_status == "unprocessed",
-            ).values(commission_status="processing")).rowcount
-            session.commit()
-            return updated > 0
-        except Exception as e:
-            logger.exception("claim_commission 失败")
-            session.rollback()
-            return False
-        finally:
-            session.close()
-
-    def mark_commission_done(self, order_id: str) -> bool:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
-        return self.update_order(order_id, commission_status="processed")
-
     def claim_payment_processing(self, order_id: str) -> bool:
         """支付处理幂等闸门：unprocessed → processing，并发下只有一次返回 True"""
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         session = self._get_session()
         try:
             updated = session.execute(update(Order).filter(
@@ -772,5 +646,5 @@ class OrderDBMixin:
             session.close()
 
     def mark_payment_processed(self, order_id: str) -> bool:
-        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        Order, User, WalletTransaction, YpayOrder = _resolve_models()
         return self.update_order(order_id, paid_processed="processed")

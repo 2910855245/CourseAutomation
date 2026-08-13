@@ -42,11 +42,6 @@ def _setup_queue_callbacks(db, queue):
                 db.complete_order(job.order_id)
                 logger.info(f"订单完成 order_id={job.order_id}")
                 _push_event("order_update", {"order_id": job.order_id, "status": "completed"})
-                try:
-                    from api.routers.agents import calculate_commission
-                    calculate_commission(job.order_id, order["user_id"], order["price"])
-                except Exception as e:
-                    logger.error(f"佣金计算失败 error={str(e)}")
 
     def _on_job_fail(job):
         if job.order_id:

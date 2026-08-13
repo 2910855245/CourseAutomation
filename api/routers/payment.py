@@ -11,27 +11,10 @@ from api.auth import get_optional_user
 from api.database import db
 from api.models import ApiResponse
 from api.redis_client import redis_client
-from api.services.crack import crack_engine
-from api.services.risk import risk_control
 from api.services.ypay_service import ypay
 from config import settings
 
 router = APIRouter(prefix="/api/payment", tags=["支付"])
-
-
-def _process_order_commissions(order: dict, agent: dict = None) -> bool:
-    from api.services.commission_service import process_order_commissions
-    return process_order_commissions(order, agent)
-
-
-def _handle_agent_registration(pay_id: str) -> str:
-    from api.services.agent_service import handle_agent_registration
-    return handle_agent_registration(pay_id)
-
-
-def _handle_agent_upgrade(pay_id: str, price: str, really_price: str) -> str:
-    from api.services.agent_service import handle_agent_upgrade
-    return handle_agent_upgrade(pay_id, price, really_price)
 
 
 class PaymentCreateRequest(BaseModel):
@@ -118,11 +101,6 @@ def _payment_notify_sync(params: dict) -> str:
     if not ypay.verify_callback_sign(pay_id, param, pay_type, price, really_price, sign):
         return "fail"
 
-    if pay_id.startswith("AGENTREG-"):
-        return _handle_agent_registration(pay_id)
-    if pay_id.startswith("AGENTUP-"):
-        return _handle_agent_upgrade(pay_id, price, really_price)
-
     trade_no = pay_id if pay_id and pay_id.startswith("Y") else param
     ypay_order = db.ypay_get_order(trade_no)
     if not ypay_order:
@@ -177,15 +155,6 @@ def _payment_notify_sync(params: dict) -> str:
             if not db.claim_payment_processing(order_id):
                 continue
             db.confirm_payment(order_id, payment_trade_no=trade_no, payment_channel=channel_name)
-            fresh_order = db.get_order(order_id)
-            agent = None
-            if fresh_order and fresh_order.get("user_id"):
-                user = db.get_user(fresh_order["user_id"])
-                if user and user.get("referred_by"):
-                    agent = db.get_agent(user["referred_by"])
-            if not agent and fresh_order and fresh_order.get("inviter_code"):
-                agent = db.get_agent_by_referral_code(fresh_order["inviter_code"])
-            _process_order_commissions(fresh_order, agent=agent)
             db.mark_payment_processed(order_id)
             db.audit_log("payment_confirm", order_id=order_id,
                          detail=f"YPay批量支付成功 batch={out_trade_no} ¥{price} 实付¥{really_price}")
@@ -207,15 +176,6 @@ def _payment_notify_sync(params: dict) -> str:
 
         db.confirm_payment(order_id, payment_trade_no=trade_no, payment_channel=channel_name)
 
-        fresh_order = db.get_order(order_id)
-        agent = None
-        if fresh_order and fresh_order.get("user_id"):
-            user = db.get_user(fresh_order["user_id"])
-            if user and user.get("referred_by"):
-                agent = db.get_agent(user["referred_by"])
-        if not agent and fresh_order and fresh_order.get("inviter_code"):
-            agent = db.get_agent_by_referral_code(fresh_order["inviter_code"])
-        _process_order_commissions(fresh_order, agent=agent)
         db.mark_payment_processed(order_id)
 
         db.audit_log("payment_confirm", order_id=order_id,
@@ -226,21 +186,6 @@ def _payment_notify_sync(params: dict) -> str:
         enqueue_paid_orders([order_id])
 
     return "success"
-
-
-def _check_agent_upgraded(out_trade_no: str) -> bool:
-    """Lightweight check: is the agent already at or above target tier?"""
-    try:
-        inner = out_trade_no[len("AGENTUP-"):]
-        last_hyphen = inner.rfind("-")
-        second_last = inner.rfind("-", 0, last_hyphen)
-        agent_id = inner[:second_last]
-        target_tier_str = inner[second_last + 1:last_hyphen]
-        target_tier = int(target_tier_str.replace("L", ""))
-        agent = db.get_agent(agent_id)
-        return bool(agent and agent.get("tier_level", 0) >= target_tier)
-    except Exception as e:
-        return False
 
 
 def _paid_response(order_id: str) -> JSONResponse:
@@ -273,15 +218,6 @@ def check_payment(out_trade_no: str, order_id: str = Query("")):
     actual_order_id = ypay_order.get("out_trade_no", "")
 
     if ypay_order["status"] == 1:
-        if actual_order_id.startswith("AGENTREG-"):
-            result = _handle_agent_registration(actual_order_id)
-            return _paid_response(actual_order_id) if result == "success" else {"code": -1, "message": "代理注册处理失败"}
-        if actual_order_id.startswith("AGENTUP-"):
-            if _check_agent_upgraded(actual_order_id):
-                return _paid_response(actual_order_id)
-            result = _handle_agent_upgrade(actual_order_id, str(ypay_order.get("money", "")), str(ypay_order.get("truemoney", "")))
-            return _paid_response(actual_order_id) if result == "success" else {"code": -1, "message": "代理升级处理失败"}
-
         # Regular order — check if payment already processed
         fresh_order = db.get_order(actual_order_id)
         if fresh_order and fresh_order.get("paid_processed") == "processed":
@@ -297,15 +233,6 @@ def check_payment(out_trade_no: str, order_id: str = Query("")):
 
         db.confirm_payment(actual_order_id, payment_trade_no=trade_no, payment_channel="ypay")
 
-        updated_order = db.get_order(actual_order_id)
-        agent = None
-        if updated_order and updated_order.get("user_id"):
-            user = db.get_user(updated_order["user_id"])
-            if user and user.get("referred_by"):
-                agent = db.get_agent(user["referred_by"])
-        if not agent and updated_order and updated_order.get("inviter_code"):
-            agent = db.get_agent_by_referral_code(updated_order["inviter_code"])
-        _process_order_commissions(updated_order, agent=agent)
         db.mark_payment_processed(actual_order_id)
 
         db.audit_log("payment_confirm", order_id=actual_order_id,
@@ -315,11 +242,6 @@ def check_payment(out_trade_no: str, order_id: str = Query("")):
         from api.services.order_service import enqueue_paid_orders
         enqueue_paid_orders([actual_order_id])
 
-        return _paid_response(actual_order_id)
-
-    # AGENTUP fallback: even if ypay status not updated, check if agent already upgraded
-    if actual_order_id.startswith("AGENTUP-") and _check_agent_upgraded(actual_order_id):
-        db.ypay_mark_paid(trade_no)
         return _paid_response(actual_order_id)
 
     if ypay_order.get("end_time") and ypay_order["status"] == 0:
@@ -452,15 +374,6 @@ def batch_check_payment(batch_id: str, out_trade_no: str = Query(""), token: str
             continue
 
         db.confirm_payment(oid, payment_trade_no=out_trade_no, payment_channel="ypay")
-        fresh_order = db.get_order(oid)
-        agent = None
-        if fresh_order and fresh_order.get("user_id"):
-            user = db.get_user(fresh_order["user_id"])
-            if user and user.get("referred_by"):
-                agent = db.get_agent(user["referred_by"])
-        if not agent and fresh_order and fresh_order.get("inviter_code"):
-            agent = db.get_agent_by_referral_code(fresh_order["inviter_code"])
-        _process_order_commissions(fresh_order, agent=agent)
         db.mark_payment_processed(oid)
         paid_count += 1
 

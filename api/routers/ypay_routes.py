@@ -176,21 +176,6 @@ def pay_check(trade_no: str, order_id: str = Query("")):
 
     if order_data["status"] == 1:
         actual_order_id = order_data.get("out_trade_no", "") or order_id
-        # Handle agent registration / upgrade payments
-        if actual_order_id.startswith("AGENTREG-"):
-            from api.routers.payment import _handle_agent_registration
-            result = _handle_agent_registration(actual_order_id)
-            return JSONResponse(
-                content={"code": 0, "paid": True, "message": "支付成功" if result == "success" else "处理失败", "really_price": order_data.get("truemoney", 0)},
-                headers=_no_cache,
-            )
-        if actual_order_id.startswith("AGENTUP-"):
-            from api.routers.payment import _handle_agent_upgrade
-            result = _handle_agent_upgrade(actual_order_id, str(order_data.get("money", "")), str(order_data.get("truemoney", "")))
-            return JSONResponse(
-                content={"code": 0, "paid": True, "message": "支付成功" if result == "success" else "处理失败", "really_price": order_data.get("truemoney", 0)},
-                headers=_no_cache,
-            )
         anti_order = db.get_order(actual_order_id) if actual_order_id else None
         # Only process if not already done (avoid heavy work on every poll)
         if anti_order and not anti_order.get("paid"):
@@ -278,7 +263,6 @@ def pay_order_detail(trade_no: str):
 
 
 def _process_paid_order(order_id: str, already_confirmed: bool = False):
-    from api.routers.payment import _process_order_commissions
     try:
         fresh_order = db.get_order(order_id)
         if not fresh_order:
@@ -293,14 +277,6 @@ def _process_paid_order(order_id: str, already_confirmed: bool = False):
         if fresh_order.get("paid_processed") != "processed":
             if not db.claim_payment_processing(order_id):
                 return
-            agent = None
-            if fresh_order.get("user_id"):
-                user = db.get_user(fresh_order["user_id"])
-                if user and user.get("referred_by"):
-                    agent = db.get_agent(user["referred_by"])
-            if not agent and fresh_order.get("inviter_code"):
-                agent = db.get_agent_by_referral_code(fresh_order["inviter_code"])
-            _process_order_commissions(fresh_order, agent=agent)
             db.mark_payment_processed(order_id)
     except Exception as e:
         logger.error(f"ypay_process_paid_error order_id={order_id} error={str(e)}")

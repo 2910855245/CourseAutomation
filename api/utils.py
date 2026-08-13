@@ -67,44 +67,6 @@ def get_site_url() -> str:
     return (settings.site_url or "http://localhost:8000").strip().rstrip("/")
 
 
-def generate_referral_code() -> str:
-    from api.database import db
-    chars = string.ascii_uppercase + string.digits
-    while True:
-        code = "REF" + "".join(random.choices(chars, k=6))
-        if not db.get_agent_by_referral_code(code):
-            return code
-
-
-def generate_slug() -> str:
-    from api.database import db
-    chars = string.ascii_lowercase + string.digits
-    while True:
-        slug = "agent" + "".join(random.choices(chars, k=5))
-        if not db.get_agent_by_subdomain(slug):
-            return slug
-
-
-def get_agent_fees_data() -> dict:
-    from api.database import db
-    return {
-        "registration_enabled": db.config_get("agent_registration_fee_enabled") == "true",
-        "registration_fee": float(db.config_get("agent_registration_fee") or 100),
-        "upgrade_enabled": db.config_get("agent_upgrade_fee_enabled") == "true",
-        "upgrade_l2_fee": float(db.config_get("agent_upgrade_l2_fee") or 200),
-        "upgrade_l3_fee": float(db.config_get("agent_upgrade_l3_fee") or 300),
-    }
-
-
-def set_agent_fees_data(body) -> None:
-    from api.database import db
-    db.config_set("agent_registration_fee_enabled", "true" if body.registration_enabled else "false")
-    db.config_set("agent_registration_fee", str(body.registration_fee))
-    db.config_set("agent_upgrade_fee_enabled", "true" if body.upgrade_enabled else "false")
-    db.config_set("agent_upgrade_l2_fee", str(body.upgrade_l2_fee))
-    db.config_set("agent_upgrade_l3_fee", str(body.upgrade_l3_fee))
-
-
 def retry(max_attempts: int = 3, delay: float = 1.0, backoff: float = 2.0,
           exceptions: tuple = (Exception,)):
     """重试装饰器，用于支付等关键路径。

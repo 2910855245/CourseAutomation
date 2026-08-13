@@ -216,14 +216,12 @@ class RegisterRequest(CaptchaMixin):
             "password": "mypassword123",
             "nickname": "小明",
             "contact": "wx_ming",
-            "referral_code": "REF-ABC123",
         }]
     }}
     username: str = Field(..., min_length=3, max_length=32, description="用户名")
     password: str = Field(..., min_length=6, max_length=200, description="密码")
     nickname: str = Field(default="", max_length=50, description="昵称")
     contact: str = Field(default="", max_length=200, description="联系方式(微信/手机)")
-    referral_code: Optional[str] = Field(default=None, max_length=20, description="代理推荐码")
 
 
 class UserLoginRequest(CaptchaMixin):
@@ -282,13 +280,11 @@ class BatchOrderRequest(BaseModel):
                 {"website_id": 1, "task_type": "video", "course_ids": ["CRS-001"], "video_count": 20, "price": 3.0},
                 {"website_id": 2, "task_type": "full", "course_ids": ["CRS-003"], "video_count": 10, "price": 5.0},
             ],
-            "inviter_code": "REF-ABC123",
         }]
     }}
     username: str = Field(..., max_length=100, description="平台账号")
     password: str = Field(..., max_length=200, description="平台密码")
     orders: List[BatchOrderItem] = Field(..., min_length=1, max_length=20, description="各平台订单列表")
-    inviter_code: str = Field(default="", max_length=20, description="邀请人推荐码")
 
 
 class TransactionItem(BaseModel):
@@ -326,7 +322,6 @@ class UserResponse(BaseModel):
     balance: float = 0.0
     total_spent: float = 0.0
     order_count: int = 0
-    referred_by: Optional[str] = None
     created_at: str = ""
     last_login: Optional[str] = None
 
@@ -337,7 +332,7 @@ class OrderResponse(BaseModel):
     payment_trade_no: str = ""
     payment_channel: str = ""
     payment_time: Optional[str] = None
-    commission_status: str = "unprocessed"
+    paid_processed: str = "unprocessed"
     user_id: str = ""
     customer_name: str = ""
     customer_contact: str = ""
@@ -349,7 +344,6 @@ class OrderResponse(BaseModel):
     exam_count: int = 0
     price: float = 0.0
     notes: str = ""
-    inviter_code: str = ""
     status: str = "pending"
     paid: bool = False
     task_id: Optional[str] = None
@@ -359,65 +353,6 @@ class OrderResponse(BaseModel):
     accepted_at: Optional[str] = None
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
-
-
-class AgentResponse(BaseModel):
-    agent_id: str
-    user_id: str
-    referral_code: str
-    subdomain_slug: str = ""
-    display_name: str = ""
-    contact_phone: str = ""
-    contact_qq: str = ""
-    contact_wechat: str = ""
-    available_balance: float = 0.0
-    frozen_balance: float = 0.0
-    withdrawn_amount: float = 0.0
-    total_commission: float = 0.0
-    parent_agent_id: Optional[str] = None
-    grandparent_agent_id: Optional[str] = None
-    tier_level: int = 1
-    total_flow: float = 0.0
-    invite_count: int = 0
-    join_fee_paid: float = 0.0
-    cost_discount: float = 0.9
-    flow_commission_rate: float = 0.0
-    subsite_active: bool = False
-    subsite_name: str = ""
-    subsite_domain: str = ""
-    subsite_template: str = "default"
-    wechat_qr: str = ""
-    welcome_text: str = ""
-    contact: str = ""
-    managed_by: Optional[str] = None
-    status: str = "active"
-    created_at: str
-
-
-class CommissionResponse(BaseModel):
-    commission_id: str
-    agent_id: str
-    order_id: str
-    referred_user_id: str
-    order_amount: float
-    commission_rate: float
-    commission_amount: float
-    level: int = 1
-    status: str = "confirmed"
-    created_at: str
-
-
-class WithdrawalResponse(BaseModel):
-    withdrawal_id: str
-    agent_id: str
-    amount: float
-    fee_amount: float = 0.0
-    method: str = "balance"
-    status: str = "pending"
-    account: str = ""
-    admin_note: str = ""
-    processed_at: Optional[str] = None
-    created_at: str
 
 
 class QueueJobResponse(BaseModel):

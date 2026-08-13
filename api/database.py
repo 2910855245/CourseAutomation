@@ -27,8 +27,8 @@ import re as _re
 
 # 白名单：只允许已知表名，防止 SQL 注入
 _KNOWN_TABLES = {
-    "users", "orders", "wallet_transactions", "agents", "commissions",
-    "withdrawals", "ypay_account", "ypay_order", "ypay_config",
+    "users", "orders", "wallet_transactions",
+    "ypay_account", "ypay_order", "ypay_config",
     "pricing_config", "ads", "sub_admins", "login_logs", "risk_config",
     "risk_blacklist", "risk_logs", "task_queue", "study_records",
     "proxy_config", "admin_settings",
@@ -111,16 +111,6 @@ def init_db():
         "alipay_root_cert": "TEXT",
     })
 
-    _add_columns_if_missing("agents", {
-        "wechat_qr": "VARCHAR(255) DEFAULT ''",
-        "welcome_text": "TEXT",
-        "contact": "VARCHAR(255) DEFAULT ''",
-        "managed_by": "VARCHAR(255) DEFAULT ''",
-    })
-
-    _add_columns_if_missing("withdrawals", {
-        "fee_amount": "FLOAT DEFAULT 0.0",
-    })
     # paid_processed: 支付处理幂等列（取代 commission_status 的幂等语义）
     _orders_cols_before = _get_existing_columns("orders")
     _add_columns_if_missing("orders", {
@@ -170,7 +160,7 @@ def _order_to_dict(order: Order) -> Dict[str, Any]:
         "payment_trade_no": order.payment_trade_no,
         "payment_channel": order.payment_channel,
         "payment_time": order.payment_time,
-        "commission_status": order.commission_status,
+        "paid_processed": order.paid_processed,
         "user_id": order.user_id,
         "customer_name": order.customer_name,
         "customer_contact": order.customer_contact,
@@ -183,7 +173,6 @@ def _order_to_dict(order: Order) -> Dict[str, Any]:
         "exam_count": order.exam_count,
         "price": order.price,
         "notes": order.notes,
-        "inviter_code": order.inviter_code,
         "status": order.status,
         "paid": order.paid,
         "task_id": order.task_id,
@@ -208,7 +197,6 @@ def _user_to_dict(user: User) -> Dict[str, Any]:
         "balance": user.balance,
         "total_spent": user.total_spent,
         "order_count": user.order_count,
-        "referred_by": user.referred_by,
         "created_at": user.created_at,
         "last_login": user.last_login,
     }
@@ -216,13 +204,13 @@ def _user_to_dict(user: User) -> Dict[str, Any]:
 
 from loguru import logger
 
-from api.db.agent_db import AgentDBMixin
+from api.db.config_db import ConfigDBMixin
 from api.db.order_db import OrderDBMixin
 from api.db.payment_db import PaymentDBMixin
 from api.db.user_db import UserDBMixin
 
 
-class Database(UserDBMixin, OrderDBMixin, AgentDBMixin, PaymentDBMixin):
+class Database(UserDBMixin, OrderDBMixin, ConfigDBMixin, PaymentDBMixin):
     def __init__(self):
         self._session_factory = SessionLocal
 

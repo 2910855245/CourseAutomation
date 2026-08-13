@@ -189,7 +189,7 @@ def create_batch_orders(
         user = db.get_user(uid)
         if user:
             role = user.get("role", "")
-            if role in ("admin", "sub_admin"):
+            if role in ("admin",):
                 is_privileged = True
 
     from api.services.order_service import compute_batch_price, submit_free_order
@@ -231,9 +231,8 @@ def create_batch_orders(
             price=item.price,
             notes="",
             user_id=uid,
-            inviter_code=req.inviter_code,
         )
-        # 管理员/合伙人下单直接入队执行（免支付）
+        # 管理员下单直接入队执行（免支付）
         if free_order or is_privileged:
             submit_free_order(order, req.username, req.password, item.website_id)
         created.append(_mask_password(order))
@@ -282,7 +281,7 @@ def list_orders(
     if uid:
         user = db.get_user(uid)
         role = user.get("role") if user else None
-        if role in ("admin", "sub_admin"):
+        if role in ("admin",):
             uid = None
     offset = (page - 1) * page_size
     orders = db.list_orders(status=status, user_id=uid, search=search,
@@ -340,7 +339,7 @@ def get_order(order_id: str, current_user: dict = Depends(get_optional_user)):
     # 非本人需要管理员权限
     if order.get("user_id") and order["user_id"] != uid:
         user = db.get_user(uid)
-        if not user or user.get("role") not in ("admin", "sub_admin"):
+        if not user or user.get("role") not in ("admin",):
             raise HTTPException(status_code=403, detail="无权查看此订单")
     return ApiResponse(data=_mask_password(enriched))
 
@@ -357,7 +356,7 @@ def cancel_order(order_id: str, current_user: dict = Depends(get_optional_user))
             raise HTTPException(status_code=401, detail="请先登录")
         if order["user_id"] != uid:
             user = db.get_user(uid)
-            if not user or user.get("role") not in ("admin", "sub_admin"):
+            if not user or user.get("role") not in ("admin",):
                 raise HTTPException(status_code=403, detail="无权操作此订单")
     if order["status"] not in ("pending",):
         raise HTTPException(status_code=400, detail=f"当前状态 [{order['status']}] 不允许取消")
@@ -447,7 +446,7 @@ def get_order_audit_log(order_id: str, current_user: dict = Depends(get_current_
         raise HTTPException(status_code=404, detail="订单不存在")
     uid = current_user["user_id"]
     user = db.get_user(uid)
-    if order.get("user_id") != uid and (not user or user.get("role") not in ("admin", "sub_admin")):
+    if order.get("user_id") != uid and (not user or user.get("role") not in ("admin",)):
         raise HTTPException(status_code=403, detail="无权查看此订单审计日志")
     session = db._get_session()
     try:

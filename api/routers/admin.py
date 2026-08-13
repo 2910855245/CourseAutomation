@@ -8,7 +8,6 @@ from api.auth import get_current_admin, get_current_user
 from api.database import db
 from api.models import AcceptOrderRequest, ApiResponse
 from api.services.task_manager import manager as task_manager
-from api.utils import get_agent_fees_data, set_agent_fees_data
 
 router = APIRouter(prefix="/api/admin", tags=["管理员操作"])
 
@@ -282,11 +281,6 @@ def complete_order(order_id: str, admin: dict = Depends(_require_admin)):
     if order["user_id"]:
         db.increment_user_order_stats(order["user_id"], order["price"])
     db.complete_order(order_id)
-    try:
-        from api.routers.agents import calculate_commission
-        calculate_commission(order_id, order.get("user_id"), order.get("price", 0))
-    except Exception:
-        pass
     return ApiResponse(message=f"订单 {order_id} 已标记完成")
 
 
@@ -302,25 +296,6 @@ def get_order_task(order_id: str, admin: dict = Depends(_require_admin)):
     if not task:
         return ApiResponse(data={"status": order["status"], "task": None})
     return ApiResponse(data={"status": order["status"], "task": task.to_detail_dict()})
-
-
-class AgentFeesBody(BaseModel):
-    registration_enabled: bool = False
-    registration_fee: float = 100
-    upgrade_enabled: bool = False
-    upgrade_l2_fee: float = 200
-    upgrade_l3_fee: float = 300
-
-
-@router.get("/agent-fees", response_model=ApiResponse)
-def get_agent_fees(admin: dict = Depends(_require_admin)):
-    return ApiResponse(data=get_agent_fees_data())
-
-
-@router.put("/agent-fees", response_model=ApiResponse)
-def set_agent_fees(body: AgentFeesBody, admin: dict = Depends(_require_admin)):
-    set_agent_fees_data(body)
-    return ApiResponse(message="保存成功")
 
 
 def _start_order_monitor(order_id: str, task_id: str):
@@ -342,8 +317,6 @@ def _start_order_monitor(order_id: str, task_id: str):
                 order = db.get_order(order_id)
                 if order and order["user_id"]:
                     db.increment_user_order_stats(order["user_id"], order["price"])
-                    from api.routers.agents import calculate_commission
-                    calculate_commission(order_id, order["user_id"], order["price"])
                 db.complete_order(order_id)
                 break
             elif task.status == "failed":

@@ -62,13 +62,10 @@ from api.routers import (
     accounts,
     admin,
     admin_ads,
-    admin_agents,
     admin_users,
     captcha,
     config_admin,
     courses,
-    crack_admin,
-    invite,
     orders,
     payment,
     pricing,
@@ -76,7 +73,6 @@ from api.routers import (
     queue,
     scan,
     setup,
-    sub_admin,
     tasks,
     users,
     wallet,
@@ -87,7 +83,6 @@ from api.routers import (
 )
 from api.routers import domain_monitor as domain_monitor_router
 from api.routers import health as health_router
-from api.routers.agents import router as agents_router
 from config import settings
 
 
@@ -112,7 +107,6 @@ _TAGS_METADATA = [
     {"name": "用户管理", "description": "注册、登录、个人资料、修改密码"},
     {"name": "订单管理", "description": "创建订单、重试、取消、查询进度"},
     {"name": "支付管理", "description": "支付创建、回调通知、批量支付、退款"},
-    {"name": "代理分销", "description": "代理注册、升级、提现、推荐链接"},
     {"name": "后台管理", "description": "管理员仪表盘、用户管理、订单审核"},
     {"name": "YPay支付", "description": "支付通道管理、订单查询、二维码生成"},
     {"name": "YPay VMQ", "description": "V免签协议：心跳、支付推送回调"},
@@ -128,7 +122,7 @@ app = FastAPI(
     description=(
         "基于 FastAPI 的全栈在线课程自动化 SaaS 平台。\n\n"
         "支持多平台视频学习、考试辅助；\n"
-        "三级代理分销体系；YPay 聚合支付；\n"
+        "YPay 聚合支付；\n"
         "后台任务队列调度；Android 收款监控 APP。"
     ),
     version="6.0.0",
@@ -248,14 +242,9 @@ app.include_router(ypay_routes.router)
 app.include_router(ypay_vmq.router)
 app.include_router(ypay_app.router)
 app.include_router(ypay_admin.router)
-app.include_router(agents_router)
-app.include_router(admin_agents.router)
-app.include_router(crack_admin.router)
 app.include_router(config_admin.router)
 app.include_router(config_admin.announcement_router)
-app.include_router(invite.router)
 app.include_router(pricing.router)
-app.include_router(sub_admin.router)
 
 app.include_router(ypay_app.raw_router)
 app.include_router(setup.router)

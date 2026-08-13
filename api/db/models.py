@@ -71,7 +71,6 @@ class User(Base):
     balance: Mapped[float] = mapped_column(Float, default=0.0)
     total_spent: Mapped[float] = mapped_column(Float, default=0.0)
     order_count: Mapped[int] = mapped_column(Integer, default=0)
-    referred_by: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
     created_at: Mapped[str] = mapped_column(S, nullable=False)
     last_login: Mapped[Optional[str]] = mapped_column(S, nullable=True)
     deleted_at: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
@@ -85,7 +84,6 @@ class Order(Base):
     payment_trade_no: Mapped[str] = mapped_column("ezfpy_trade_no", S, default="")
     payment_channel: Mapped[str] = mapped_column(S, default="")
     payment_time: Mapped[Optional[str]] = mapped_column(S, nullable=True)
-    commission_status: Mapped[str] = mapped_column(S, default="unprocessed", index=True)
     paid_processed: Mapped[str] = mapped_column(S, default="unprocessed", index=True)
     user_id: Mapped[str] = mapped_column(S, default="", index=True)
     customer_name: Mapped[str] = mapped_column(S, default="")
@@ -99,7 +97,6 @@ class Order(Base):
     exam_count: Mapped[int] = mapped_column(Integer, default=0)
     price: Mapped[float] = mapped_column(Float, default=0.0)
     notes: Mapped[str] = mapped_column(Text, default="")
-    inviter_code: Mapped[str] = mapped_column(S, default="", index=True)
     status: Mapped[str] = mapped_column(S, default="pending", index=True)
     paid: Mapped[bool] = mapped_column(Integer, default=False)
     task_id: Mapped[Optional[str]] = mapped_column(S, nullable=True)
@@ -125,74 +122,6 @@ class WalletTransaction(Base):
     created_at: Mapped[str] = mapped_column(S, nullable=False)
 
 
-class Agent(Base):
-    __tablename__ = "agents"
-
-    agent_id: Mapped[str] = mapped_column(S, primary_key=True)
-    user_id: Mapped[str] = mapped_column(S, nullable=False, index=True)
-    referral_code: Mapped[str] = mapped_column(S, unique=True, nullable=False)
-    subdomain_slug: Mapped[str] = mapped_column(S, default="")
-    display_name: Mapped[str] = mapped_column(S, default="")
-    contact_phone: Mapped[str] = mapped_column(S, default="")
-    contact_qq: Mapped[str] = mapped_column(S, default="")
-    contact_wechat: Mapped[str] = mapped_column(S, default="")
-    available_balance: Mapped[float] = mapped_column(Float, default=0.0)
-    frozen_balance: Mapped[float] = mapped_column(Float, default=0.0)
-    withdrawn_amount: Mapped[float] = mapped_column(Float, default=0.0)
-    total_commission: Mapped[float] = mapped_column(Float, default=0.0)
-    parent_agent_id: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
-    grandparent_agent_id: Mapped[Optional[str]] = mapped_column(S, nullable=True)
-    tier_level: Mapped[int] = mapped_column(Integer, default=1)
-    total_flow: Mapped[float] = mapped_column(Float, default=0.0)
-    invite_count: Mapped[int] = mapped_column(Integer, default=0)
-    join_fee_paid: Mapped[float] = mapped_column(Float, default=0.0)
-    cost_discount: Mapped[float] = mapped_column(Float, default=0.9)
-    flow_commission_rate: Mapped[float] = mapped_column(Float, default=0.0)
-    subsite_active: Mapped[bool] = mapped_column(Integer, default=False)
-    subsite_name: Mapped[str] = mapped_column(S, default="")
-    subsite_domain: Mapped[str] = mapped_column(S, default="")
-    subsite_template: Mapped[str] = mapped_column(S, default="default")
-    wechat_qr: Mapped[str] = mapped_column(S, default="")
-    welcome_text: Mapped[str] = mapped_column(S, default="")
-    contact: Mapped[str] = mapped_column(S, default="")
-    managed_by: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
-    status: Mapped[str] = mapped_column(S, default="active", index=True)
-    created_at: Mapped[str] = mapped_column(S, nullable=False)
-    deleted_at: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
-
-
-class Commission(Base):
-    __tablename__ = "commissions"
-
-    commission_id: Mapped[str] = mapped_column(S, primary_key=True)
-    agent_id: Mapped[str] = mapped_column(S, nullable=False, index=True)
-    order_id: Mapped[str] = mapped_column(S, nullable=False)
-    referred_user_id: Mapped[str] = mapped_column(S, nullable=False)
-    order_amount: Mapped[float] = mapped_column(Float, nullable=False)
-    commission_rate: Mapped[float] = mapped_column(Float, nullable=False)
-    commission_amount: Mapped[float] = mapped_column(Float, nullable=False)
-    level: Mapped[int] = mapped_column(Integer, default=1)
-    status: Mapped[str] = mapped_column(S, default="confirmed", index=True)
-    created_at: Mapped[str] = mapped_column(S, nullable=False)
-    deleted_at: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
-
-
-class Withdrawal(Base):
-    __tablename__ = "withdrawals"
-
-    withdrawal_id: Mapped[str] = mapped_column(S, primary_key=True)
-    agent_id: Mapped[str] = mapped_column(S, nullable=False, index=True)
-    amount: Mapped[float] = mapped_column(Float, nullable=False)
-    fee_amount: Mapped[float] = mapped_column(Float, default=0.0)
-    method: Mapped[str] = mapped_column(S, default="balance")
-    status: Mapped[str] = mapped_column(S, default="pending", index=True)
-    account: Mapped[str] = mapped_column(S, default="")
-    admin_note: Mapped[str] = mapped_column(S, default="")
-    processed_at: Mapped[Optional[str]] = mapped_column(S, nullable=True)
-    created_at: Mapped[str] = mapped_column(S, nullable=False)
-    deleted_at: Mapped[Optional[str]] = mapped_column(S, nullable=True, index=True)
-
-
 class PlatformSetting(Base):
     __tablename__ = "platform_settings"
 
@@ -216,16 +145,6 @@ class Channel(Base):
     created_at: Mapped[str] = mapped_column(S, nullable=False)
 
 
-class UserInvite(Base):
-    __tablename__ = "user_invites"
-    invite_id: Mapped[str] = mapped_column(S, primary_key=True)
-    inviter_user_id: Mapped[str] = mapped_column(S, nullable=False)
-    invited_user_id: Mapped[str] = mapped_column(S, unique=True, nullable=False)
-    total_reward: Mapped[float] = mapped_column(Float, default=0.0)
-    invite_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[str] = mapped_column(S, nullable=False)
-
-
 class SystemConfig(Base):
     __tablename__ = "system_config"
     config_key: Mapped[str] = mapped_column(S, primary_key=True)
@@ -240,7 +159,6 @@ class AuditLog(Base):
     operator: Mapped[str] = mapped_column(S, default="system")
     detail: Mapped[str] = mapped_column(Text, default="")
     order_id: Mapped[str] = mapped_column(S, default="")
-    agent_id: Mapped[str] = mapped_column(S, default="")
     user_id: Mapped[str] = mapped_column(S, default="")
     created_at: Mapped[str] = mapped_column(S, nullable=False)
 

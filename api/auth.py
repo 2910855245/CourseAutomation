@@ -168,15 +168,6 @@ def get_current_admin(user_info: dict = Depends(get_current_user)):
     return user_info
 
 
-def get_current_sub_admin(user_info: dict = Depends(get_current_user)):
-    if user_info is None or not is_authenticated(user_info):
-        raise HTTPException(status_code=401, detail="未认证")
-    role = user_info.get("role", "")
-    if role not in ("admin", "sub_admin"):
-        raise HTTPException(status_code=403, detail="需要合伙人或管理员权限")
-    return user_info
-
-
 def verify_captcha(token: str, answer: str):
     """验证验证码，失败抛 HTTPException。各接口在函数体内调用。"""
     from api.services.captcha import captcha_service

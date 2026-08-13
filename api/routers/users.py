@@ -8,8 +8,6 @@ from pydantic import BaseModel, Field
 from api.auth import blacklist_token, create_token, get_current_user, hash_password, verify_captcha, verify_password
 from api.database import db
 from api.models import ApiResponse, RegisterRequest, UserLoginRequest
-from api.utils import generate_referral_code as _generate_referral_code
-from api.utils import generate_slug as _generate_slug
 
 router = APIRouter(prefix="/api/users", tags=["用户管理"])
 
@@ -48,53 +46,14 @@ def register(req: RegisterRequest):
     if existing:
         raise HTTPException(status_code=400, detail="用户名已存在")
 
-    referred_by = None
-    parent_agent_id = ""
-    grandparent_agent_id = ""
-    if req.referral_code:
-        agent = db.get_agent_by_referral_code(req.referral_code)
-        if agent and agent["status"] == "active":
-            referred_by = agent["agent_id"]
-            parent_agent_id = agent["agent_id"]
-            grandparent_agent_id = agent.get("parent_agent_id", "")
-
     user = db.create_user(
         username=req.username,
         password_hash=hash_password(req.password),
         nickname=req.nickname,
         contact=req.contact,
-        referred_by=referred_by,
     )
 
     token = create_token(user["user_id"], user["username"], user["role"])
-
-    registration_enabled = db.config_get("agent_registration_fee_enabled") == "true"
-    if not registration_enabled:
-        referral_code = _generate_referral_code()
-        subdomain_slug = _generate_slug()
-        agent = db.create_agent(
-            user_id=user["user_id"],
-            referral_code=referral_code,
-            parent_agent_id=parent_agent_id,
-            grandparent_agent_id=grandparent_agent_id,
-            tier_level=1,
-            subdomain_slug=subdomain_slug,
-        )
-        if parent_agent_id:
-            parent = db.get_agent(parent_agent_id)
-            if parent:
-                db.update_agent(parent_agent_id, invite_count=(parent.get("invite_count") or 0) + 1)
-
-        return ApiResponse(
-            message="注册成功，代理已开通！",
-            data={
-                "user_id": user["user_id"],
-                "username": user["username"],
-                "role": user["role"],
-                "token": token,
-                "agent": agent,
-            },
-        )
 
     return ApiResponse(
         message="注册成功！",
@@ -142,7 +101,6 @@ def get_my_info(current_user: dict = Depends(get_current_user)):
     user = db.get_user(current_user["user_id"])
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
-    agent = db.get_agent_by_user_id(current_user["user_id"])
     return ApiResponse(
         data={
             "user_id": user["user_id"],
@@ -155,12 +113,6 @@ def get_my_info(current_user: dict = Depends(get_current_user)):
             "order_count": user["order_count"],
             "created_at": user["created_at"],
             "last_login": user["last_login"],
-            "agent": {
-                "agent_id": agent["agent_id"],
-                "status": agent["status"],
-                "tier_level": agent["tier_level"],
-                "referral_code": agent["referral_code"],
-            } if agent else None,
         },
     )
 
