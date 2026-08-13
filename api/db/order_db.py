@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import delete, func, or_, select, update
 
 from api.db._base import _db_logger
+from api.utils import gen_id
 
 logger = _db_logger
 
@@ -63,7 +64,7 @@ class OrderDBMixin:
                      task_type="video", course_ids=None, video_count=50,
                      exam_count=0, price=0.0, notes="", user_id="") -> Dict[str, Any]:
         Order, User, WalletTransaction, YpayOrder = _resolve_models()
-        order_id = f"ORD-{uuid.uuid4().hex[:8].upper()}"
+        order_id = gen_id("ORD")
         now = datetime.now().isoformat()
         session = self._get_session()
         try:
@@ -110,7 +111,7 @@ class OrderDBMixin:
                 session.rollback()
                 return False
             now = datetime.now().isoformat()
-            tx_id = f"TX-{uuid.uuid4().hex[:8].upper()}"
+            tx_id = gen_id("TX")
             tx = WalletTransaction(
                 tx_id=tx_id,
                 user_id=user_id,
@@ -652,6 +653,27 @@ class OrderDBMixin:
     def mark_payment_processed(self, order_id: str) -> bool:
         Order, User, WalletTransaction, YpayOrder = _resolve_models()
         return self.update_order(order_id, paid_processed="processed")
+
+    def admin_reset_and_mark_paid(self, order_id: str) -> bool:
+        """管理员操作前置：cancelled 重置 pending + 未支付标 admin_free 已付"""
+        order = self.get_order(order_id)
+        if not order:
+            return False
+        if order["status"] == "cancelled":
+            self.update_order(order_id, status="pending", finished_at=None)
+        if not order.get("paid"):
+            from datetime import datetime
+            self.update_order(order_id, paid=True, payment_channel="admin_free",
+                              payment_time=datetime.now().isoformat())
+        return True
+
+    def refund_order(self, order_id: str, note: str = "自动退款") -> bool:
+        """已付订单退款（余额退回 + 流水），条件 UPDATE 原子扣款反向操作"""
+        order = self.get_order(order_id)
+        if not order or not order.get("paid") or order["price"] <= 0 or not order.get("user_id"):
+            return False
+        return self.update_user_balance(order["user_id"], order["price"], "order_refund",
+                                        note=note, order_id=order_id)
 
     def recover_stuck_paid_processing(self, minutes: int = 10) -> int:
         """启动时回收卡死的支付处理状态：claim 后进程崩溃会永久停在 processing。

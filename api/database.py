@@ -244,37 +244,6 @@ def init_db():
         pass
 
 
-def _order_to_dict(order: Order) -> Dict[str, Any]:
-    d = {
-        "order_id": order.order_id,
-        "out_trade_no": order.out_trade_no,
-        "payment_trade_no": order.payment_trade_no,
-        "payment_channel": order.payment_channel,
-        "payment_time": order.payment_time,
-        "paid_processed": order.paid_processed,
-        "user_id": order.user_id,
-        "customer_name": order.customer_name,
-        "customer_contact": order.customer_contact,
-        "username": order.username,
-        "password": order.password,
-        "website_id": order.website_id,
-        "task_type": order.task_type,
-        "course_ids": json.loads(order.course_ids) if isinstance(order.course_ids, str) else order.course_ids,
-        "video_count": order.video_count,
-        "exam_count": order.exam_count,
-        "price": order.price,
-        "notes": order.notes,
-        "status": order.status,
-        "paid": order.paid,
-        "task_id": order.task_id,
-        "admin_note": order.admin_note,
-        "created_at": order.created_at,
-        "updated_at": order.updated_at or "",
-        "accepted_at": order.accepted_at,
-        "started_at": order.started_at,
-        "finished_at": order.finished_at,
-    }
-    return d
 
 
 def _user_to_dict(user: User) -> Dict[str, Any]:
@@ -322,6 +291,7 @@ class Database(UserDBMixin, OrderDBMixin, ConfigDBMixin, PaymentDBMixin):
             session.close()
 
     def _order_to_dict(self, order) -> Dict[str, Any]:
+        from api.db.order_db import _order_to_dict
         return _order_to_dict(order)
 
     def _user_to_dict(self, user) -> Dict[str, Any]:

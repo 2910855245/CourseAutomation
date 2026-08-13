@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import delete, select, update, func, or_
 
 from api.db._base import _db_logger
+from api.utils import gen_id
 
 logger = _db_logger
 
@@ -43,7 +44,7 @@ class UserDBMixin:
                     nickname: str = "", contact: str = "",
                     role: str = "customer") -> Dict[str, Any]:
         User, _ = _resolve_models()
-        user_id = f"USR-{uuid.uuid4().hex[:8].upper()}"
+        user_id = gen_id("USR")
         now = datetime.now().isoformat()
         session = self._get_session()
         try:
@@ -220,7 +221,7 @@ class UserDBMixin:
                     session.rollback()
                     return False
             balance_after = session.scalar(select(User.balance).filter(User.user_id == user_id))
-            tx_id = f"TX-{uuid.uuid4().hex[:8].upper()}"
+            tx_id = gen_id("TX")
             tx = WalletTransaction(
                 tx_id=tx_id, user_id=user_id, amount=amount, tx_type=tx_type,
                 balance_after=balance_after, note=note, order_id=order_id,

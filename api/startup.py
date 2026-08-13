@@ -63,15 +63,8 @@ def _setup_queue_callbacks(db, queue):
                 except Exception:
                     pass
             if not has_active_jobs:
-                if order.get("paid") and order["price"] > 0 and order["user_id"]:
-                    if order.get("status") not in ("failed", "completed", "cancelled"):
-                        db.update_user_balance(
-                            order["user_id"],
-                            order["price"],
-                            "order_refund",
-                            note=f"订单 {job.order_id} 失败退款",
-                            order_id=job.order_id,
-                        )
+                if order.get("paid") and order["status"] not in ("failed", "completed", "cancelled"):
+                    db.refund_order(job.order_id, note=f"订单 {job.order_id} 失败退款")
                 db.fail_order(job.order_id, error=job.error_message or "任务执行失败")
                 logger.error(f"订单失败 order_id={job.order_id} error={job.error_message}")
                 _push_event("order_update", {"order_id": job.order_id, "status": "failed"})

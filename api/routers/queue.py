@@ -12,8 +12,7 @@ from services.task_queue import (
 router = APIRouter(prefix="/api/queue", tags=["任务队列"])
 
 
-def _require_admin(current_user: dict = Depends(get_current_user)):
-    return get_current_admin(current_user)
+from api.auth import require_admin as _require_admin
 
 
 @router.get("/stats", response_model=ApiResponse)

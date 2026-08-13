@@ -11,14 +11,7 @@ from loguru import logger
 from config import validate_settings
 
 
-_ocr_instance = None
-
-def _get_ocr():
-    global _ocr_instance
-    if _ocr_instance is None:
-        import ddddocr
-        _ocr_instance = ddddocr.DdddOcr(show_ad=False)
-    return _ocr_instance
+from infrastructure.ocr import get_ocr as _get_ocr
 
 
 from worker_common import ensure_terminal_status, send_status

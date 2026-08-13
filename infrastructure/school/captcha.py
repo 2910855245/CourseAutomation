@@ -2,6 +2,7 @@ import random
 import string
 
 from config import get_random_user_agent
+from infrastructure.ocr import get_ocr as _get_ocr
 from infrastructure.http_session import create_sync_client, safe_json_parse
 
 _ocr_instance = None

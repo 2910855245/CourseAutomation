@@ -177,3 +177,8 @@ def verify_view_token(order_id: str, token: str) -> bool:
     import hmac
     expected = make_view_token(order_id)
     return bool(token) and hmac.compare_digest(expected, token)
+
+
+def require_admin(current_user: dict = Depends(get_current_user)):
+    """路由依赖：管理员权限校验（此前 3 个 router 各复制一份）"""
+    return get_current_admin(current_user)

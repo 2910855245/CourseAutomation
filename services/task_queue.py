@@ -11,6 +11,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
 from loguru import logger
+from api.utils import gen_id
 
 from sqlalchemy import delete, func, select, update
 

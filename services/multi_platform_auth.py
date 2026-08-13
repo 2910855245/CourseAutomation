@@ -41,14 +41,7 @@ def _extract_school_ids(login_html: str):
     options = re.findall(r'<option[^>]*value="([^"]*)"[^>]*>', m.group(1))
     return [v for v in options if v]
 
-_ocr_instance = None
-
-def _get_ocr():
-    global _ocr_instance
-    if _ocr_instance is None:
-        import ddddocr
-        _ocr_instance = ddddocr.DdddOcr(show_ad=False)
-    return _ocr_instance
+from infrastructure.ocr import get_ocr as _get_ocr
 
 
 def get_website_base_url(website_id: int) -> str:

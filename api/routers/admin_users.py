@@ -11,8 +11,7 @@ from api.models import ApiResponse, TopUpRequest
 router = APIRouter(prefix="/api/admin", tags=["管理-用户"])
 
 
-def _require_admin(current_user: dict = Depends(get_current_user)):
-    return get_current_admin(current_user)
+from api.auth import require_admin as _require_admin
 
 
 @router.get("/users", response_model=ApiResponse)

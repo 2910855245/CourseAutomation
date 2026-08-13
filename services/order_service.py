@@ -8,6 +8,7 @@ from loguru import logger
 from fastapi import HTTPException
 
 from api.database import db
+from api.utils import normalize_task_type, parse_course_ids
 
 
 
@@ -54,12 +55,7 @@ def retry_order(original: dict, uid: str) -> dict:
             detail=f"只有失败/已取消/金额不匹配的订单才能重试，当前状态: {original['status']}",
         )
 
-    course_ids = original.get("course_ids", [])
-    if isinstance(course_ids, str):
-        try:
-            course_ids = json.loads(course_ids) if course_ids else []
-        except Exception:
-            course_ids = []
+    course_ids = parse_course_ids(original.get("course_ids", []))
 
     new_order = db.create_order(
         customer_name=original.get("customer_name", ""),
@@ -156,123 +152,59 @@ def validate_order_amount(front_total: float, back_total: float, detail_lines: L
         )
 
 
-def submit_free_order(order: dict, username: str, password: str, website_id: int) -> None:
-    """免费订单直接入队执行"""
+def enqueue_order(order_id: str, *, mark_paid: bool = False) -> bool:
+    """订单入队执行（免费订单与已支付订单共用）。
+
+    mark_paid=True 时先标记 admin_free 已付（管理员免单路径）。
+    """
     from services.task_queue import get_queue_for_type
 
-    oid = order.get("order_id")
-    db.pay_order(oid)
+    order = db.get_order(order_id)
+    if not order:
+        return False
+    if mark_paid:
+        db.pay_order(order_id)
+        order = db.get_order(order_id)
+    elif order.get("status") != "paid":
+        return False
 
-    task_type = order.get("task_type", "full")
-    if task_type not in ("video", "exam", "full", "chaoxing_points"):
-        task_type = "full"
-
+    task_type = normalize_task_type(order.get("task_type", "full"))
     q = get_queue_for_type(task_type)
-    if q.get_job_by_order_id(oid):
-        return
+    if q.get_job_by_order_id(order_id):
+        return False
 
-    course_ids = order.get("course_ids", [])
-    if isinstance(course_ids, str):
-        course_ids = json.loads(course_ids) if course_ids else []
+    course_ids = parse_course_ids(order.get("course_ids", []))
 
     # 学习通订单：后台触发全局扫描，获取准确的课程数据
-    if website_id == 4:
-        _trigger_full_scan(username, password, course_ids)
+    if order.get("website_id") == 4:
+        _trigger_full_scan(order["username"], order["password"], course_ids)
 
     q.submit_job(
-        username=username,
-        password=password,
-        website_id=website_id,
+        username=order["username"],
+        password=order["password"],
+        website_id=order["website_id"],
         job_type=task_type,
-        course_ids=course_ids if course_ids else [],
-        order_id=oid,
+        course_ids=course_ids,
+        order_id=order_id,
     )
-    db.start_order(oid, "")
+    db.start_order(order_id, "")
+    return True
+
+
+def submit_free_order(order: dict, username: str, password: str, website_id: int) -> None:
+    """兼容旧签名：免费订单入队（委托 enqueue_order）"""
+    enqueue_order(order.get("order_id"), mark_paid=True)
 
 
 def enqueue_paid_orders(paid_order_ids: list) -> int:
-    """将余额支付成功的订单提交到任务队列，返回成功提交数。"""
-    from services.task_queue import get_queue_for_type
-
+    """批量入队已支付订单（委托 enqueue_order），返回成功数。"""
     submitted = 0
     for oid in paid_order_ids:
         try:
-            order = db.get_order(oid)
-            if not order or order.get("status") != "paid":
-                continue
-            task_type = order.get("task_type", "full")
-            if task_type not in ("video", "exam", "full", "chaoxing_points"):
-                task_type = "full"
-            q = get_queue_for_type(task_type)
-            if q.get_job_by_order_id(oid):
-                continue
-            course_ids = order.get("course_ids", [])
-            if isinstance(course_ids, str):
-                course_ids = json.loads(course_ids) if course_ids else []
-            # 学习通订单：后台触发全局扫描
-            if order["website_id"] == 4:
-                _trigger_full_scan(order["username"], order["password"], course_ids)
-
-            q.submit_job(
-                username=order["username"],
-                password=order["password"],
-                website_id=order["website_id"],
-                job_type=task_type,
-                course_ids=course_ids if course_ids else [],
-                order_id=oid,
-            )
-            db.start_order(oid, "")
-            submitted += 1
+            if enqueue_order(oid):
+                submitted += 1
         except Exception as e:
-            logger.bind(order_id=oid).error("余额支付后提交任务失败 error={}", str(e))
+            logger.error(f"入队失败 order_id={oid} error={str(e)}")
     return submitted
 
 
-def _trigger_full_scan(username: str, password: str, course_ids: list = None):
-    """后台线程触发学习通全局扫描（完整模式），更新课程缓存
-
-    完整扫描会检测必学内容、视频完成状态（非抽样），结果写入
-    data/accounts/<username>/courses/ 缓存，供 Worker 读取。
-    """
-    import threading
-
-    def _scan():
-        try:
-            from infrastructure.chaoxing.session import ChaoxingSession
-            from infrastructure.chaoxing.scanner import scan_chaoxing, _process_single_course, _fetch_cpi_map
-
-            session = ChaoxingSession()
-            if not session.login(username, password):
-                logger.warning(f"全局扫描登录失败 username={username}")
-                return
-
-            logger.info(f"开始全局扫描 username={username}")
-
-            # 获取 CPI 映射
-            cpi_map = _fetch_cpi_map(session)
-
-            # 如果有指定课程，只扫描这些课程
-            if course_ids:
-                from infrastructure.chaoxing.crawler import fetch_course_list
-                all_courses = fetch_course_list(session)
-                target_courses = [c for c in all_courses
-                                  if c.get("courseId") in course_ids
-                                  or str(c.get("courseId")) in [str(cid) for cid in course_ids]]
-                for c in target_courses:
-                    cid = c["courseId"]
-                    cpi = cpi_map.get(cid, "")
-                    try:
-                        _process_single_course(session, c, cpi, quick_mode=False)
-                        logger.info(f"全局扫描完成 course={c.get('name', cid)}")
-                    except Exception as e:
-                        logger.warning(f"全局扫描课程失败 course={c.get('name', cid)} error={str(e)}")
-            else:
-                # 扫描全部课程
-                scan_chaoxing(session, quick_mode=False)
-
-            logger.info(f"全局扫描结束 username={username}")
-        except Exception as e:
-            logger.error(f"全局扫描异常 username={username} error={str(e)}")
-
-    t = threading.Thread(target=_scan, daemon=True, name=f"full-scan-{username}")
-    t.start()

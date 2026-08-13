@@ -14,22 +14,10 @@ router = APIRouter(prefix="/api/admin", tags=["管理员操作"])
 from api.utils import mask_password as _mask_pwd
 
 
-def _parse_course_ids(order: dict) -> list:
-    """安全解析订单中的 course_ids 字段，统一处理 str/list/None"""
-    import json
-    course_ids = order.get("course_ids") or []
-    if isinstance(course_ids, str):
-        try:
-            course_ids = json.loads(course_ids) if course_ids else []
-        except (json.JSONDecodeError, ValueError):
-            course_ids = []
-    if not isinstance(course_ids, list):
-        course_ids = []
-    return course_ids
+from api.utils import parse_course_ids as _parse_course_ids
 
 
-def _require_admin(current_user: dict = Depends(get_current_user)):
-    return get_current_admin(current_user)
+from api.auth import require_admin as _require_admin
 
 
 
@@ -61,15 +49,7 @@ def accept_order(order_id: str, req: AcceptOrderRequest = AcceptOrderRequest(),
             detail=f"只能接受 pending/cancelled 状态的订单，当前状态: {order['status']}",
         )
 
-    # cancelled 状态重置
-    if order["status"] == "cancelled":
-        db.update_order(order_id, status="pending", finished_at=None)
-
-    # 管理员自动标记已支付
-    if not order.get("paid"):
-        from datetime import datetime
-        db.update_order(order_id, paid=True, payment_channel="admin_free",
-                        payment_time=datetime.now().isoformat())
+    db.admin_reset_and_mark_paid(order_id)
 
     db.accept_order(order_id, admin_note=req.admin_note)
     return ApiResponse(
@@ -90,15 +70,7 @@ def execute_order(order_id: str, admin: dict = Depends(_require_admin)):
             detail=f"无法执行，当前状态: {order['status']}",
         )
 
-    # cancelled 状态重置
-    if order["status"] == "cancelled":
-        db.update_order(order_id, status="pending", finished_at=None)
-
-    # 管理员自动标记已支付
-    if not order.get("paid"):
-        from datetime import datetime
-        db.update_order(order_id, paid=True, payment_channel="admin_free",
-                        payment_time=datetime.now().isoformat())
+    db.admin_reset_and_mark_paid(order_id)
 
     course_ids = _parse_course_ids(order)
 
@@ -131,15 +103,7 @@ def execute_order(order_id: str, admin: dict = Depends(_require_admin)):
         raise HTTPException(status_code=500, detail="执行失败")
 
 
-    # cancelled 状态重置
-    if order["status"] == "cancelled":
-        db.update_order(order_id, status="pending", finished_at=None)
-
-    # 管理员自动标记已支付
-    if not order.get("paid"):
-        from datetime import datetime
-        db.update_order(order_id, paid=True, payment_channel="admin_free",
-                        payment_time=datetime.now().isoformat())
+    db.admin_reset_and_mark_paid(order_id)
 
     db.accept_order(order_id, admin_note=req.admin_note)
 
@@ -236,14 +200,7 @@ def fail_order(order_id: str, req: AcceptOrderRequest = AcceptOrderRequest(),
     if order["status"] in ("completed", "cancelled", "failed"):
         raise HTTPException(status_code=400, detail=f"当前状态 [{order['status']}] 不可标记失败")
 
-    if order.get("paid") and order["price"] > 0 and order["user_id"]:
-        db.update_user_balance(
-            order["user_id"],
-            order["price"],
-            "order_refund",
-            note=f"订单 {order_id} 失败退款",
-            order_id=order_id,
-        )
+    db.refund_order(order_id, note=f"订单 {order_id} 失败退款")
 
     db.fail_order(order_id, error=req.admin_note)
     if order.get("task_id"):
@@ -288,26 +245,12 @@ def _start_order_monitor(order_id: str, task_id: str):
                 break
             elif task.status == "failed":
                 order = db.get_order(order_id)
-                if order and order.get("paid") and order["price"] > 0 and order["user_id"]:
-                    db.update_user_balance(
-                        order["user_id"],
-                        order["price"],
-                        "order_refund",
-                        note=f"订单 {order_id} 失败退款",
-                        order_id=order_id,
-                    )
+                db.refund_order(order_id)
                 db.fail_order(order_id, error=task.error_message or "任务执行失败")
                 break
             elif task.status == "cancelled":
                 order = db.get_order(order_id)
-                if order and order.get("paid") and order["price"] > 0 and order["user_id"]:
-                    db.update_user_balance(
-                        order["user_id"],
-                        order["price"],
-                        "order_refund",
-                        note=f"订单 {order_id} 取消退款",
-                        order_id=order_id,
-                    )
+                db.refund_order(order_id)
                 db.update_order(order_id, status="cancelled")
                 break
         else:

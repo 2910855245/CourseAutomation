@@ -385,14 +385,7 @@ def cancel_order(order_id: str, token: str = Query("", description="游客查单
     if not cancelled:
         raise HTTPException(status_code=409, detail="订单取消失败，可能已被其他操作处理")
 
-    if order.get("paid") and order["price"] > 0 and order["user_id"]:
-        db.update_user_balance(
-            order["user_id"],
-            order["price"],
-            "order_refund",
-            note=f"订单 {order_id} 取消退款",
-            order_id=order_id,
-        )
+    db.refund_order(order_id, note=f"订单 {order_id} 取消退款")
 
     risk_control.log_audit("order_cancelled", user_id=order.get("user_id", ""),
                            order_id=order_id, detail="用户取消订单")
