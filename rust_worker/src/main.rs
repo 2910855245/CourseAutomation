@@ -13,6 +13,7 @@ mod cx_study;
 mod db;
 mod exam;
 mod login;
+mod order;
 mod queue;
 mod scan;
 mod study;

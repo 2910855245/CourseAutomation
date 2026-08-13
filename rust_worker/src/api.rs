@@ -26,9 +26,18 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/api/info", get(api_info))
         .route("/api/system/status", get(system_status))
         .route("/api/jobs/submit", post(submit_job))
+        .route("/api/orders/batch", post(batch_orders))
         .route("/api/admin/login", post(crate::auth::admin_login))
         .route("/health", get(health))
         .merge(protected)
+}
+
+/// 批量下单（写路径，与 Python 双跑对照验收）
+async fn batch_orders(State(state): State<AppState>, Json(body): Json<Value>) -> Json<Value> {
+    match crate::order::create_batch_orders(&state.db, &body).await {
+        Ok(v) => Json(v),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
 }
 
 async fn api_info() -> Json<Value> {
