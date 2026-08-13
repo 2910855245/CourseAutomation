@@ -244,9 +244,6 @@ def init_db():
         pass
 
 
-init_db()
-
-
 def _order_to_dict(order: Order) -> Dict[str, Any]:
     d = {
         "order_id": order.order_id,

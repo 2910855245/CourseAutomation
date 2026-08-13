@@ -278,12 +278,20 @@ def _ensure_default_admin(db):
 
 
 def run_startup(settings):
-    from api.database import db
+    from api.database import db, init_db
     from services.task_queue import school_queue, chaoxing_queue, migrate_old_queue_table
+
+    init_db()
 
     # 进程上下文最先初始化（daemon 线程继承此刻的 contextvars）
     from config import init_process_context
     init_process_context()
+
+    from services.task_manager import manager as task_manager
+    task_manager.start()
+
+    from services.session_pool import pool as session_pool
+    session_pool.start_cleaner()
 
     _ensure_default_admin(db)
     db.recover_stuck_paid_processing()

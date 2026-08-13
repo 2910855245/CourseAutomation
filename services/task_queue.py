@@ -709,8 +709,18 @@ def get_combined_stats() -> Dict[str, Any]:
     }
 
 
+_queue_migration_done = False
+_queue_migration_lock = threading.Lock()
+
+
 def migrate_old_queue_table():
-    """迁移旧 queue_jobs 表数据到新表"""
+    """迁移旧 queue_jobs 表数据到新表（进程内幂等 + 跨进程 marker）"""
+    global _queue_migration_done
+    with _queue_migration_lock:
+        if _queue_migration_done:
+            return
+        _queue_migration_done = True
+
     from sqlalchemy import text, inspect as sa_inspect, select, update, delete
     inspector = sa_inspect(engine)
     tables = inspector.get_table_names()
@@ -779,4 +789,4 @@ def migrate_old_queue_table():
 # ── 建表 + 迁移 ──────────────────────────────────────────
 
 # 队列表已统一由 Base.metadata.create_all() 在 database.py 中创建
-migrate_old_queue_table()
+# 迁移由 startup.run_startup 显式调用（不再 import 时执行，避免多 worker 并发 DROP）

@@ -85,7 +85,11 @@ class SessionPool:
         self._max_size = max_size
         self._ttl = timedelta(hours=ttl_hours)
         self._cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
-        self._cleanup_thread.start()
+
+    def start_cleaner(self):
+        """显式启动清理线程（由 run_startup 调用）"""
+        if not self._cleanup_thread.is_alive():
+            self._cleanup_thread.start()
 
     def _make_key(self, username: str, website_id: int) -> str:
         return f"{username}_{website_id}"

@@ -103,8 +103,15 @@ class TaskManager:
         self._heavy_queue = queue.Queue()
         self._heavy_semaphore = threading.Semaphore(max_concurrent_heavy)
         self._dispatcher = threading.Thread(target=self._dispatch_loop, daemon=True)
-        self._dispatcher.start()
         self._monitor = threading.Thread(target=self._monitor_loop, daemon=True)
+        self._started = False
+
+    def start(self):
+        """显式启动后台线程（由 run_startup 调用，不再 import 即启动）"""
+        if self._started:
+            return
+        self._started = True
+        self._dispatcher.start()
         self._monitor.start()
 
     def create_task(self, username, password, website_id, task_type,

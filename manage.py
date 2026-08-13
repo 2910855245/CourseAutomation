@@ -185,6 +185,8 @@ def show_menu():
 
 def main():
     validate_settings()
+    from api.database import init_db
+    init_db()
     while True:
         show_menu()
         choice = Prompt.ask("选择", choices=["1","2","3","4","5","q"], default="5")
