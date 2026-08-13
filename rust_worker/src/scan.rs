@@ -48,6 +48,21 @@ fn now_ms() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
 }
 
+/// 学校平台 base_url 映射（对齐 config/platforms.py WEBSITES）
+/// 测试钩子：RUST_TEST_BASE_URL 环境变量覆盖（mock 平台 E2E 用）
+pub fn platform_base_url(website_id: i64) -> String {
+    if let Ok(url) = std::env::var("RUST_TEST_BASE_URL") {
+        if !url.is_empty() {
+            return url;
+        }
+    }
+    match website_id {
+        2 => "https://cdcas.duxingkej.com".to_string(),
+        3 => "https://cdcas.chaoxiankeji.com".to_string(),
+        _ => "https://cdcass.taiskeji.com".to_string(),
+    }
+}
+
 /// 解析 "HH:MM:SS" / "MM:SS" / 秒数 为秒
 pub fn parse_duration_secs(s: &str) -> u64 {
     let s = s.trim();

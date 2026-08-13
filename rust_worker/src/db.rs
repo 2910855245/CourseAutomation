@@ -76,6 +76,11 @@ impl Db {
         .context("spawn_blocking 失败")?
     }
 
+    /// 原始连接池句柄（队列模块事务操作用）
+    pub fn raw_pool(&self) -> &Pool<SqliteConnectionManager> {
+        &self.pool
+    }
+
     /// 通用表计数（队列统计用）
     pub async fn table_count(&self, table: &'static str) -> Result<i64> {
         let pool = self.pool.clone();

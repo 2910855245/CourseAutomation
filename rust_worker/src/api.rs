@@ -4,7 +4,7 @@
 //! Phase 3 起逐路由迁移（读路径 → 写路径），迁移期与 Python 双跑对照。
 
 use axum::extract::State;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 
@@ -14,7 +14,16 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/info", get(api_info))
         .route("/api/system/status", get(system_status))
+        .route("/api/jobs/submit", post(submit_job))
         .route("/health", get(health))
+}
+
+/// 提交学校任务到队列（对齐 Python queue.submit_job 核心字段）
+async fn submit_job(State(state): State<AppState>, Json(body): Json<Value>) -> Json<Value> {
+    match crate::queue::submit_job(&state.db, body).await {
+        Ok(v) => Json(v),
+        Err(e) => Json(json!({"ok": false, "message": e.to_string()})),
+    }
 }
 
 async fn api_info() -> Json<Value> {

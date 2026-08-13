@@ -10,6 +10,8 @@ mod api;
 mod cx_scan;
 mod cx_study;
 mod db;
+mod login;
+mod queue;
 mod scan;
 mod study;
 
@@ -83,6 +85,9 @@ async fn main() -> anyhow::Result<()> {
         db: database,
     };
 
+    // Rust 队列调度器（RUST_QUEUE_ENABLED=true 时接管学校任务）
+    tokio::spawn(queue::dispatcher_loop(std::sync::Arc::new(state.clone())));
+
     let app = Router::new()
         .route("/status", get(status))
         .route("/submit", post(submit))
@@ -100,6 +105,7 @@ async fn main() -> anyhow::Result<()> {
 
     let addr = format!("127.0.0.1:{port}");
     tracing::info!(addr, "rust-backend 就绪（API + daemon + 静态服务）");
+
     let listener = tokio::net::TcpListener::bind(&addr).await
         .with_context(|| format!("绑定 {addr} 失败"))?;
     axum::serve(listener, app).await?;
