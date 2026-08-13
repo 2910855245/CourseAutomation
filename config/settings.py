@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     worker_phase_split_cx: bool = Field(default=False, alias="WORKER_PHASE_SPLIT_CX")
     worker_pool_enabled: bool = Field(default=False, alias="WORKER_POOL_ENABLED")
     worker_pool_port: int = Field(default=17019, alias="WORKER_POOL_PORT")
+    scan_concurrency: int = Field(default=4, alias="SCAN_CONCURRENCY")
     captcha_ak: str = Field(default="", alias="CAPTCHA_AK")
     captcha_url: str = Field(default="", alias="CAPTCHA_URL")
 

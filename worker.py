@@ -185,50 +185,73 @@ def run_task(params_file, status_file):
         all_videos = []
         all_exams = []
 
-        for i, course in enumerate(courses):
+        # 并发扫描：课程间相互独立，串行扫描是爬取阶段的主要耗时（IO 等待）
+        # httpx.Client 线程安全，session 可跨线程复用；SCAN_CONCURRENCY 可调
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from config import settings as _scan_cfg
+        scan_concurrency = max(1, int(getattr(_scan_cfg, "scan_concurrency", 4) or 4))
+
+        def _scan_one(course, idx):
+            """扫描单门课程：返回 (videos, exams, skipped, info)。缓存优先。"""
             cid = course.get("course_id", "")
             if course_ids and cid not in course_ids:
-                continue
+                return None
             cname = course.get("name", "")
+            info = {"idx": idx, "cname": cname, "cid": cid}
 
             # 优先用课程缓存（下单前扫描的详细结果，30分钟内有效）
             cached = load_course_cache(username, website_id, cid)
-            videos_from_cache = False
             if cached:
-                send_status(status_file, phase="crawl", message=f"缓存命中 {i+1}/{len(courses)}: {cname}")
-                logger.info("课程缓存命中: {} (id={})", cname, cid)
-                all_videos.extend(cached.get("videos", []))
-                videos_from_cache = True
+                info["cache_hit"] = True
+                videos = list(cached.get("videos", []))
                 cached_exams = cached.get("exams", []) + cached.get("works", [])
                 non_done_exams = [e for e in cached_exams if not e.get("is_done") and not e.get("is_deleted") and e.get("time_status", "进行中") == "进行中"]
-                skipped = len([e for e in cached_exams if not e.get("is_done") and not e.get("is_deleted")]) - len(non_done_exams)
                 if non_done_exams:
-                    all_exams.extend(non_done_exams)
-                    logger.info("  缓存考试: {} 个可考, {} 个未到/已过期", len(non_done_exams), skipped)
-                else:
-                    logger.info("  缓存无可用考试数据，将实时获取")
-                    cached = None  # 回退到实时扫描（仅重新获取考试，视频已从缓存加载）
-
-            if not cached:
-                send_status(status_file, phase="crawl", message=f"解析课程 {i+1}/{len(courses)}: {cname}")
-                logger.info("处理课程: {} (id={})", cname, cid)
-
+                    return videos, non_done_exams, len(cached_exams) - len(non_done_exams), info
+                # 缓存无可用考试数据 → 实时扫描（视频已从缓存加载）
                 try:
                     result = scan_course(session, cid, cname)
-                    if not videos_from_cache:
-                        all_videos.extend(result.get("videos", []))
-                    fresh_exams = result.get("exams", []) + result.get("works", [])
-                    non_done = [e for e in fresh_exams if not e.get("is_done") and not e.get("is_deleted") and e.get("time_status", "进行中") == "进行中"]
-                    skipped = len([e for e in fresh_exams if not e.get("is_done") and not e.get("is_deleted")]) - len(non_done)
-                    all_exams.extend(non_done)
-
-                    logger.info("  视频=%d 考试=%d 作业=%d 可考=%d 跳过=%d",
-                                len(result.get("videos", [])),
-                                len(result.get("exams", [])),
-                                len(result.get("works", [])),
-                                len(non_done), skipped)
+                    fresh = result.get("exams", []) + result.get("works", [])
+                    non_done = [e for e in fresh if not e.get("is_done") and not e.get("is_deleted") and e.get("time_status", "进行中") == "进行中"]
+                    info["fresh_counts"] = (len(result.get("videos", [])),
+                                            len(result.get("exams", [])),
+                                            len(result.get("works", [])))
+                    return videos, non_done, len(fresh) - len(non_done), info
                 except Exception as e:
                     logger.error("处理课程 {} 失败: {}", cname, e)
+                    return videos, [], 0, info
+
+            send_status(status_file, phase="crawl", message=f"解析课程 {idx+1}/{len(courses)}: {cname}")
+            logger.info("处理课程: {} (id={})", cname, cid)
+            try:
+                result = scan_course(session, cid, cname)
+                fresh = result.get("exams", []) + result.get("works", [])
+                non_done = [e for e in fresh if not e.get("is_done") and not e.get("is_deleted") and e.get("time_status", "进行中") == "进行中"]
+                info["fresh_counts"] = (len(result.get("videos", [])),
+                                        len(result.get("exams", [])),
+                                        len(result.get("works", [])))
+                return list(result.get("videos", [])), non_done, len(fresh) - len(non_done), info
+            except Exception as e:
+                logger.error("处理课程 {} 失败: {}", cname, e)
+                return [], [], 0, info
+
+        with ThreadPoolExecutor(max_workers=scan_concurrency) as pool:
+            futures = [pool.submit(_scan_one, c, i) for i, c in enumerate(courses)]
+            for fut in as_completed(futures):
+                res = fut.result()
+                if res is None:
+                    continue
+                videos, exams, skipped, info = res
+                cname = info["cname"]
+                if info.get("cache_hit"):
+                    logger.info("课程缓存命中: {} (id={}) 可考={} 跳过={}",
+                                cname, info["cid"], len(exams), skipped)
+                if info.get("fresh_counts"):
+                    v, e, w = info["fresh_counts"]
+                    logger.info("  视频={} 考试={} 作业={} 可考={} 跳过={}",
+                                v, e, w, len(exams), skipped)
+                all_videos.extend(videos)
+                all_exams.extend(exams)
 
         logger.info("汇总: 视频={}, 考试/作业={}", len(all_videos), len(all_exams))
 
