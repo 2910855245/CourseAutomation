@@ -18,7 +18,7 @@ from api.db.models import (
     VmqSetting,
     YpaySetting,
 )
-from api.db_engine import USE_MYSQL, engine
+from api.db_engine import engine
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
@@ -60,16 +60,9 @@ def _get_existing_columns(table_name: str) -> set:
     _validate_table_name(table_name)
     try:
         with engine.connect() as _conn:
-            if USE_MYSQL:
-                result = _conn.execute(text(
-                    "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
-                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table_name"
-                ), {"table_name": table_name})
-                return {row[0] for row in result}
-            else:
-                # SQLite PRAGMA 不支持参数绑定，但已通过白名单校验
-                result = _conn.execute(text(f"PRAGMA table_info({table_name})"))
-                return {row[1] for row in result}
+            # SQLite PRAGMA 不支持参数绑定，但已通过白名单校验
+            result = _conn.execute(text(f"PRAGMA table_info({table_name})"))
+            return {row[1] for row in result}
     except Exception as e:
         return set()
 
@@ -145,23 +138,12 @@ def _migrate_legacy_encrypted_passwords():
 def _rebuild_legacy_table(table_model, legacy_cols):
     """旧库表残留已废弃的 NOT NULL 列（模型已不再写入），重建表以去除。
 
-    - MySQL: 给遗留列补 DEFAULT，避免重建
-    - SQLite: 按当前模型 DDL 重建表并迁移数据
+    - 按当前模型 DDL 重建表并迁移数据
     """
     tbl = table_model.__tablename__
     existing = _get_existing_columns(tbl)
     hits = [c for c in legacy_cols if c in existing]
     if not hits:
-        return
-    if USE_MYSQL:
-        try:
-            with engine.connect() as _conn:
-                for c in hits:
-                    _conn.execute(text(f"ALTER TABLE {tbl} MODIFY COLUMN {c} VARCHAR(255) NOT NULL DEFAULT ''"))
-                _conn.commit()
-            logger.info(f"迁移: 表 {tbl} 遗留列已设默认值 columns={hits}")
-        except Exception as e:
-            logger.warning(f"迁移失败 表 {tbl} 遗留列 error={str(e)}")
         return
     try:
         from sqlalchemy.schema import CreateTable

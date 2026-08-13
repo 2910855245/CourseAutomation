@@ -21,7 +21,6 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, alias="PORT")
     debug: bool = Field(default=False, alias="DEBUG")
     db_path: str = Field(default="data/orders.db", alias="DB_PATH")
-    database_url: str = Field(default="", alias="DATABASE_URL")
     rate_limit_requests: int = Field(default=600, alias="RATE_LIMIT_REQUESTS")
     rate_limit_window_seconds: int = Field(default=60, alias="RATE_LIMIT_WINDOW_SECONDS")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
@@ -48,7 +47,6 @@ def validate_settings() -> None:
     """必填配置校验。由 run.py / manage.py / worker bootstrap 显式调用。"""
     _missing = [name for name, val in (
         ("JWT_SECRET_KEY", settings.jwt_secret_key),
-        ("DATABASE_URL", settings.database_url),
     ) if not val]
     if _missing:
         from loguru import logger

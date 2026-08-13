@@ -60,14 +60,6 @@ server {
 }
 ```
 
-### MySQL（可选，默认 SQLite 开箱即用）
-
-```sql
-CREATE DATABASE anticheat DEFAULT CHARACTER SET utf8mb4;
-```
-
-然后把 `.env` 的 `DATABASE_URL` 改为 `mysql+pymysql://user:password@localhost:3306/anticheat?charset=utf8mb4`。
-
 ## 功能特性
 
 ### 多平台支持
@@ -119,7 +111,7 @@ CREATE DATABASE anticheat DEFAULT CHARACTER SET utf8mb4;
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `JWT_SECRET_KEY` | JWT 签名密钥 | 必填 |
-| `DATABASE_URL` | 数据库连接 | `sqlite:///data/orders.db` |
+| `DB_PATH` | SQLite 数据库文件 | `data/orders.db` |
 | `REDIS_URL` | Redis 连接 | 自动降级内存模式 |
 | `SITE_URL` | 站点地址（支付回调） | `http://localhost:8000` |
 | `DEEPSEEK_API_KEY` | AI 考试答题 | 可选 |
@@ -130,7 +122,7 @@ CREATE DATABASE anticheat DEFAULT CHARACTER SET utf8mb4;
 
 **前端**: Vue 3 · TypeScript · Vite · Pinia · Vue Router
 
-**数据库**: SQLite (默认) · MySQL (可选) · Redis (可选)
+**数据库**: SQLite（WAL + busy_timeout）
 
 **部署**: Granian (Rust ASGI) · systemd · Nginx
 
