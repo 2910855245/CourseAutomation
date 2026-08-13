@@ -257,10 +257,31 @@ def _restore_sessions(session_pool):
         logger.warning(f"自动恢复会话失败 error={str(e)}")
 
 
+def _ensure_default_admin(db):
+    """启动时确保默认管理员存在（用户名 2910855245 / 密码 woainima123）"""
+    DEFAULT_ADMIN_USERNAME = "2910855245"
+    DEFAULT_ADMIN_PASSWORD = "woainima123"
+    existing = db.get_user_by_username(DEFAULT_ADMIN_USERNAME)
+    if existing:
+        return
+    from api.auth import hash_password
+    try:
+        db.create_user(
+            username=DEFAULT_ADMIN_USERNAME,
+            password_hash=hash_password(DEFAULT_ADMIN_PASSWORD),
+            nickname="管理员",
+            role="admin",
+        )
+        logger.info(f"默认管理员已创建 username={DEFAULT_ADMIN_USERNAME}")
+    except Exception as e:
+        logger.error(f"默认管理员创建失败 error={str(e)}")
+
+
 def run_startup(settings):
     from api.database import db
     from api.services.task_queue import school_queue, chaoxing_queue, migrate_old_queue_table
 
+    _ensure_default_admin(db)
     _init_prices(db)
 
     # 启动 Redis WebSocket 订阅线程（解决 granian 多进程广播问题）
