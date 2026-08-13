@@ -138,8 +138,8 @@ class QueueManager:
         self._on_fail: Optional[Callable] = None
         self._on_progress: Optional[Callable] = None
 
-        from api.services.error_classifier import ErrorClassifier
-        from api.services.job_executor import JobExecutor
+        from services.error_classifier import ErrorClassifier
+        from services.job_executor import JobExecutor
         self._executor = JobExecutor(
             db_update_fn=self._db_update,
             db_get_fn=self._db_get,
@@ -646,8 +646,8 @@ class QueueManager:
         if self._running:
             return
         self._running = True
-        from api.services.error_classifier import correction_loop
-        from api.services.job_executor import JobExecutor
+        from services.error_classifier import correction_loop
+        from services.job_executor import JobExecutor
         JobExecutor.recover_stuck_jobs(self._session_factory, self._model)
         JobExecutor.recover_unverified_jobs(self._session_factory, self._model)
         self._dispatcher_thread = threading.Thread(target=self._dispatcher_loop, daemon=True,

@@ -15,7 +15,7 @@ def verify_task_completion(username: str, website_id: int,
         {"verified": bool, "detail": str}
     """
     try:
-        from api.services.session_pool import pool
+        from services.session_pool import pool
         session_info = pool.get(username, website_id)
         if not session_info:
             return {"verified": False, "detail": "会话已过期，无法核查"}

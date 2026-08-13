@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from api.auth import get_current_admin, get_current_user
 from api.database import db
 from api.models import AcceptOrderRequest, ApiResponse
-from api.services.task_manager import manager as task_manager
+from services.task_manager import manager as task_manager
 
 router = APIRouter(prefix="/api/admin", tags=["管理员操作"])
 
@@ -223,7 +223,7 @@ def enqueue_order(order_id: str, req: AcceptOrderRequest = AcceptOrderRequest(),
 
     course_ids = _parse_course_ids(order)
 
-    from api.services.task_queue import get_queue_for_type
+    from services.task_queue import get_queue_for_type
     task_type = order["task_type"] if order["task_type"] in ("video", "exam", "full", "chaoxing_points") else "full"
     q = get_queue_for_type(task_type)
     job = q.submit_job(
@@ -302,7 +302,7 @@ def _start_order_monitor(order_id: str, task_id: str):
     def _monitor():
         import time
 
-        from api.services.task_manager import recovered_order_mappings
+        from services.task_manager import recovered_order_mappings
         max_checks = 360
         checks = 0
         while checks < max_checks:

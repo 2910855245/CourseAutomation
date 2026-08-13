@@ -38,8 +38,7 @@ def send_status(status_file, **kwargs):
 def _apply_proxy(session):
     """加载隧道代理配置并应用到 session"""
     try:
-        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'api', 'services'))
-        from proxy_config import get_proxy_config
+        from services.proxy_config import get_proxy_config
         cfg = get_proxy_config()
         if cfg["enabled"]:
             session.proxies.update(cfg["proxies"])

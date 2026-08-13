@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api/courses", tags=["课程扫描"])
 @router.get("/platforms", response_model=ApiResponse)
 def list_platforms():
     """获取平台列表（从 domain_monitor 统一数据源读取）"""
-    from api.services.domain_monitor import get_active_platforms
+    from services.domain_monitor import get_active_platforms
     platforms = get_active_platforms()
     items = [{"id": wid, "name": info["name"], "base_url": info["base_url"]}
              for wid, info in platforms.items()]
@@ -52,7 +52,7 @@ def scan_platforms(req: ScanRequest, current_user: dict = Depends(get_optional_u
 @router.post("/relogin", response_model=ApiResponse)
 def relogin_platform(req: ReloginRequest, current_user: dict = Depends(get_optional_user)):
     """单平台重新登录（用于密码错误后重试）"""
-    from api.services.session_pool import pool as session_pool
+    from services.session_pool import pool as session_pool
     session_pool.remove(req.username, req.website_id)
 
     result = scan_platform(req.username, req.password, req.website_id, req.include_records)

@@ -11,7 +11,7 @@ from api.auth import get_optional_user
 from api.database import db
 from api.models import ApiResponse
 from api.redis_client import redis_client
-from api.services.ypay_service import ypay
+from services.ypay_service import ypay
 from config import settings
 
 router = APIRouter(prefix="/api/payment", tags=["支付"])
@@ -161,7 +161,7 @@ def _payment_notify_sync(params: dict) -> str:
                          detail=f"YPay批量支付成功 batch={out_trade_no} ¥{price} 实付¥{really_price}")
 
         # 批量支付成功后自动入队
-        from api.services.order_service import enqueue_paid_orders
+        from services.order_service import enqueue_paid_orders
         enqueue_paid_orders(order_ids)
     else:
         # 单笔支付
@@ -183,7 +183,7 @@ def _payment_notify_sync(params: dict) -> str:
                      detail=f"YPay支付成功 ¥{price} 实付¥{really_price}")
 
         # 支付成功后自动入队
-        from api.services.order_service import enqueue_paid_orders
+        from services.order_service import enqueue_paid_orders
         enqueue_paid_orders([order_id])
 
     return "success"
@@ -229,16 +229,16 @@ def check_payment(out_trade_no: str, order_id: str = Query("")):
             # claim 失败：要么并发处理中，要么卡在 processing（进程崩溃）。已支付则自愈收尾。
             stale = db.get_order(actual_order_id)
             if stale and stale.get("paid_processed") == "processing" and stale.get("paid"):
-                from api.services.task_queue import school_queue, chaoxing_queue
+                from services.task_queue import school_queue, chaoxing_queue
                 if not (school_queue.get_job_by_order_id(actual_order_id)
                         or chaoxing_queue.get_job_by_order_id(actual_order_id)):
                     db.confirm_payment(actual_order_id, payment_trade_no=trade_no, payment_channel="ypay")
                     db.mark_payment_processed(actual_order_id)
-                    from api.services.order_service import enqueue_paid_orders
+                    from services.order_service import enqueue_paid_orders
                     enqueue_paid_orders([actual_order_id])
             return _paid_response(actual_order_id)
 
-        from api.services.task_queue import school_queue, chaoxing_queue
+        from services.task_queue import school_queue, chaoxing_queue
         if school_queue.get_job_by_order_id(actual_order_id) or chaoxing_queue.get_job_by_order_id(actual_order_id):
             return _paid_response(actual_order_id)
 
@@ -250,7 +250,7 @@ def check_payment(out_trade_no: str, order_id: str = Query("")):
                      detail=f"YPay支付成功(轮询) 金额:{ypay_order.get('money', '')}")
 
         # 支付成功后自动入队
-        from api.services.order_service import enqueue_paid_orders
+        from services.order_service import enqueue_paid_orders
         enqueue_paid_orders([actual_order_id])
 
         return _paid_response(actual_order_id)
@@ -379,7 +379,7 @@ def batch_check_payment(batch_id: str, out_trade_no: str = Query(""), token: str
             paid_count += 1
             continue
 
-        from api.services.task_queue import school_queue, chaoxing_queue
+        from services.task_queue import school_queue, chaoxing_queue
         if school_queue.get_job_by_order_id(oid) or chaoxing_queue.get_job_by_order_id(oid):
             paid_count += 1
             continue
@@ -392,7 +392,7 @@ def batch_check_payment(batch_id: str, out_trade_no: str = Query(""), token: str
                      detail=f"批量支付确认 batch={batch_id}")
 
     # 批量支付确认后自动入队
-    from api.services.order_service import enqueue_paid_orders
+    from services.order_service import enqueue_paid_orders
     enqueue_paid_orders(order_ids)
 
     if paid_count >= len(order_ids):

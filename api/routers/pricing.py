@@ -5,7 +5,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from api.database import db
-from api.services.pricing_service import (
+from services.pricing_service import (
     calculate_package_price as _calculate_package_price_backend,
     detect_course_type as _detect_course_type,
     get_or_default as _get_or_default,

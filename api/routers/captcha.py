@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
 from api.models import ApiResponse
-from api.services.captcha import captcha_service
+from services.captcha import captcha_service
 
 router = APIRouter(prefix="/api/captcha", tags=["验证码"])
 

@@ -37,7 +37,7 @@ class JobExecutor:
 
     def execute(self, job, release_worker_fn: Callable = None):
         """执行单个任务。release_worker_fn 用于在进入 study 阶段时释放 worker 槽位。"""
-        from api.services.task_queue import QueueJobStatus
+        from services.task_queue import QueueJobStatus
         job_id = job.job_id
         runner = None
         try:
@@ -49,7 +49,7 @@ class JobExecutor:
                 self._clear_password(job_id)
             logger.info(f"任务开始执行 job_id={job_id} username={job.username}")
 
-            from api.services.task_runner import TaskRunner
+            from services.task_runner import TaskRunner
             runner = TaskRunner(
                 username=job.username,
                 password=job.password,
@@ -179,7 +179,7 @@ class JobExecutor:
 
     def monitor_study(self, job_id: str, status_file: str):
         """监控 study 阶段的进度文件"""
-        from api.services.task_queue import QueueJobStatus
+        from services.task_queue import QueueJobStatus
 
         # 注册活跃监控线程，防止 recover_stuck_jobs 误重置
         with JobExecutor._monitors_lock:
@@ -319,9 +319,9 @@ class JobExecutor:
     def _start_verification(self, job_id: str, job):
         """启动后台线程核查任务是否真正在平台上完成"""
         def _verify():
-            from api.services.task_queue import QueueJobStatus
+            from services.task_queue import QueueJobStatus
             try:
-                from api.services.task_verifier import verify_task_completion
+                from services.task_verifier import verify_task_completion
                 result = verify_task_completion(
                     username=job.username,
                     website_id=job.website_id,
@@ -470,7 +470,7 @@ class JobExecutor:
         def _batch_verify():
             import time as _time
             _time.sleep(30)  # 等待会话恢复完成
-            from api.services.task_verifier import verify_task_completion
+            from services.task_verifier import verify_task_completion
             for job in jobs:
                 try:
                     result = verify_task_completion(

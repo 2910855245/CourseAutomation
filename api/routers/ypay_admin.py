@@ -18,8 +18,8 @@ from pydantic import BaseModel
 from api.auth import get_current_admin
 from api.database import db
 from api.models import ApiResponse
-from api.services.ypay_service import ypay
-from api.services.ypay_qr import generate_qrcode
+from services.ypay_service import ypay
+from services.ypay_qr import generate_qrcode
 from api.utils import make_qr_base64 as _make_qr_base64
 
 

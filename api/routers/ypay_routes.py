@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from api.database import db
-from api.services.ypay_service import ypay
+from services.ypay_service import ypay
 
 
 router = APIRouter(prefix="/api/ypay", tags=["YPay支付"])

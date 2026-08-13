@@ -170,7 +170,7 @@ def get_current_admin(user_info: dict = Depends(get_current_user)):
 
 def verify_captcha(token: str, answer: str):
     """验证验证码，失败抛 HTTPException。各接口在函数体内调用。"""
-    from api.services.captcha import captcha_service
+    from services.captcha import captcha_service
     if not captcha_service.verify(token, answer):
         raise HTTPException(status_code=400, detail="验证码错误或已过期")
 

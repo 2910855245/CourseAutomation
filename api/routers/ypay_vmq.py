@@ -12,7 +12,7 @@ from fastapi.responses import PlainTextResponse
 
 from api.compat import to_thread_impl
 from api.database import db
-from api.services.ypay_service import ypay
+from services.ypay_service import ypay
 
 
 from api.routers.ypay_routes import _process_paid_order

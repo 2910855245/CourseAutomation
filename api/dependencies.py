@@ -1,6 +1,6 @@
 from fastapi import HTTPException
 
-from api.services.session_pool import pool as session_pool
+from services.session_pool import pool as session_pool
 
 
 def get_session_or_401(username: str, password: str, website_id: int):

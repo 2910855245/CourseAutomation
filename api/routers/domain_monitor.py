@@ -3,7 +3,7 @@ from pydantic import BaseModel
 
 from api.auth import get_current_admin
 from api.models import ApiResponse
-from api.services import domain_monitor
+from services import domain_monitor
 
 router = APIRouter(prefix="/api/admin/domain-monitor", tags=["域名监听"])
 

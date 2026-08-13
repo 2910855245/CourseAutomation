@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.auth import get_current_admin, get_current_user
 from api.models import ApiResponse
-from api.services.task_queue import (
+from services.task_queue import (
     school_queue,
     chaoxing_queue,
     get_combined_stats,
@@ -30,7 +30,7 @@ def get_queue_stats(
 
 @router.get("/detect", response_model=ApiResponse)
 def detect_concurrency(admin: dict = Depends(_require_admin)):
-    from api.services.task_queue import QueueManager
+    from services.task_queue import QueueManager
     w, sw = school_queue.detect_concurrency()
     import os
     total_mem_gb = QueueManager._get_total_mem_gb()

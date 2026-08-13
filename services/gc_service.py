@@ -61,7 +61,7 @@ def cleanup_old_orders(days: int = 30) -> int:
 
 def cleanup_old_queue_jobs(days: int = 7) -> int:
     try:
-        from api.services.task_queue import school_queue, chaoxing_queue
+        from services.task_queue import school_queue, chaoxing_queue
         return school_queue.cleanup_old_jobs(days=days) + chaoxing_queue.cleanup_old_jobs(days=days)
     except Exception as e:
         logger.warning(f"GC: 清理队列任务失败 error={str(e)}")

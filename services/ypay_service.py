@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from api.services.ypay_qr import (
+from services.ypay_qr import (
     _detect_qr_content_type,
     _hash_md5,
     generate_qrcode,

@@ -49,7 +49,7 @@ def _setup_queue_callbacks(db, queue):
             if not order:
                 return
             # 在两个队列中查找该订单的活跃任务
-            from api.services.task_queue import school_queue, chaoxing_queue
+            from services.task_queue import school_queue, chaoxing_queue
             has_active_jobs = False
             for q in (school_queue, chaoxing_queue):
                 try:
@@ -175,8 +175,8 @@ def _recover_running_orders(db):
         if not running_orders:
             return
         logger.info(f"恢复运行中订单监控 count={len(running_orders)}")
-        from api.services.task_manager import recovered_order_mappings
-        from api.services.task_queue import school_queue, chaoxing_queue
+        from services.task_manager import recovered_order_mappings
+        from services.task_queue import school_queue, chaoxing_queue
         used_status_files = set()
         for order in running_orders:
             oid = order.get("order_id", "")
@@ -279,7 +279,7 @@ def _ensure_default_admin(db):
 
 def run_startup(settings):
     from api.database import db
-    from api.services.task_queue import school_queue, chaoxing_queue, migrate_old_queue_table
+    from services.task_queue import school_queue, chaoxing_queue, migrate_old_queue_table
 
     # 进程上下文最先初始化（daemon 线程继承此刻的 contextvars）
     from config import init_process_context
@@ -309,13 +309,13 @@ def run_startup(settings):
     threading.Thread(target=_ypay_heartbeat_monitor, args=(db,), daemon=True).start()
     threading.Thread(target=_recover_running_orders, args=(db,), daemon=True).start()
 
-    from api.services.gc_service import start_gc_service
+    from services.gc_service import start_gc_service
     start_gc_service()
 
-    from api.services.domain_monitor import start_domain_monitor
+    from services.domain_monitor import start_domain_monitor
     start_domain_monitor()
 
-    from api.services.session_pool import pool as session_pool
+    from services.session_pool import pool as session_pool
     _restore_sessions(session_pool)
 
     logger.info(f"API 服务启动 host={settings.host} port={settings.port}")

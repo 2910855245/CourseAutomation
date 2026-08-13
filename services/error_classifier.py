@@ -70,7 +70,7 @@ class ErrorClassifier:
         """扫描失败任务，自动重试可恢复的错误。返回重置数量。"""
         from api.db.models import ChaoxingJobModel, SchoolJobModel
         from api.database import SessionLocal
-        from api.services.task_queue import QueueJobStatus
+        from services.task_queue import QueueJobStatus
 
         total_reset = 0
         for JobModel in [SchoolJobModel, ChaoxingJobModel]:
@@ -152,7 +152,7 @@ class ErrorClassifier:
         """返回失败任务的错误分类统计"""
         from api.db.models import ChaoxingJobModel, SchoolJobModel
         from api.database import SessionLocal
-        from api.services.task_queue import QueueJobStatus
+        from services.task_queue import QueueJobStatus
 
         retryable = []
         fatal = []

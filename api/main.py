@@ -89,7 +89,7 @@ async def lifespan(app):
     # Graceful shutdown
     logger.info("API 服务正在关闭...")
     try:
-        from api.services.task_queue import school_queue, chaoxing_queue
+        from services.task_queue import school_queue, chaoxing_queue
         school_queue.stop()
         chaoxing_queue.stop()
         logger.info("任务队列已停止")
@@ -288,8 +288,8 @@ def redis_health(admin: dict = Depends(get_current_admin)):
 
 @app.get("/api/system/status")
 def system_status(admin: dict = Depends(get_current_admin)):
-    from api.services.task_manager import manager as tm
-    from api.services.task_queue import get_combined_stats
+    from services.task_manager import manager as tm
+    from services.task_queue import get_combined_stats
     tasks = tm.list_tasks()
     running = sum(1 for t in tasks if t.status == "running")
     pending = sum(1 for t in tasks if t.status == "pending")

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from api.auth import get_current_user, get_optional_user
 from api.database import db
 from api.models import ApiResponse, BatchOrderRequest, CreateOrderRequest
-from api.services.risk import risk_control
+from services.risk import risk_control
 
 
 def _scan_task_dirs() -> dict:
@@ -53,9 +53,9 @@ def _read_status_from_cache(cache: dict, sf: str) -> Optional[Dict[str, Any]]:
 
 
 def _inject_task_progress(orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    from api.services.task_manager import manager as task_manager
-    from api.services.task_manager import recovered_order_mappings
-    from api.services.task_queue import school_queue, chaoxing_queue
+    from services.task_manager import manager as task_manager
+    from services.task_manager import recovered_order_mappings
+    from services.task_queue import school_queue, chaoxing_queue
 
     task_dir_cache = _scan_task_dirs()
 
@@ -144,7 +144,7 @@ def create_order(
     background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_optional_user),
 ):
-    from api.services.order_service import validate_new_order
+    from services.order_service import validate_new_order
 
     uid = current_user["user_id"] if current_user["user_id"] != "guest" else None
     client_ip = current_user.get("ip", "")
@@ -198,7 +198,7 @@ def create_batch_orders(
                 is_privileged = True
 
     from api.auth import make_view_token
-    from api.services.order_service import compute_batch_price, submit_free_order
+    from services.order_service import compute_batch_price, submit_free_order
     computed_total, detail_lines = compute_batch_price(req.orders)
     total_price = round(sum(o.price for o in req.orders), 2)
 
@@ -264,7 +264,7 @@ def pay_orders(current_user: dict = Depends(get_optional_user)):
     if result.get("error"):
         return ApiResponse(success=False, message=result["error"], data=result)
 
-    from api.services.order_service import enqueue_paid_orders
+    from services.order_service import enqueue_paid_orders
     enqueue_paid_orders(result.get("paid_order_ids", []))
 
     return ApiResponse(
@@ -452,7 +452,7 @@ def retry_order(order_id: str, current_user: dict = Depends(get_optional_user)):
     if original.get("user_id") != uid:
         raise HTTPException(status_code=403, detail="无权操作")
 
-    from api.services.order_service import retry_order as _retry
+    from services.order_service import retry_order as _retry
     new_order = _retry(original, uid)
 
     return ApiResponse(data={"order_id": new_order["order_id"],

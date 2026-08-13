@@ -175,7 +175,7 @@ class TaskManager:
         task.add_log("开始执行（重阶段：登录+爬取）")
 
         try:
-            from api.services.task_runner import TaskRunner
+            from services.task_runner import TaskRunner
 
             def on_progress(pct, done, msg):
                 task.update(progress=pct, completed_items=done, current_item=msg)

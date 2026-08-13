@@ -212,7 +212,7 @@ def scan_platform(username: str, password: str, website_id: int,
     缺省时向后兼容 lazy 导入。
     """
     if session_provider is None:
-        from api.services.session_pool import pool as session_pool
+        from services.session_pool import pool as session_pool
         session_provider = session_pool
 
     if not platform_name:
@@ -377,7 +377,7 @@ def _discover_and_match(active_platforms: dict = None) -> Dict[int, Dict]:
     缺省时向后兼容 lazy 导入。
     """
     if active_platforms is None:
-        from api.services.domain_monitor import get_active_platforms
+        from services.domain_monitor import get_active_platforms
         platforms = get_active_platforms()
     else:
         platforms = active_platforms

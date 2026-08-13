@@ -14,7 +14,7 @@ from api.database import db
 def validate_new_order(uid: str, client_ip: str, course_ids: list, price: float,
                        video_count: int, username: str) -> None:
     """新订单的风控校验（黑名单、频率、参数、价格），不通过则抛 HTTPException"""
-    from api.services.risk import risk_control
+    from services.risk import risk_control
 
     if uid and risk_control.is_blacklisted(user_id=uid):
         raise HTTPException(status_code=403, detail="账户已被限制，请联系客服")
@@ -33,7 +33,7 @@ def validate_new_order(uid: str, client_ip: str, course_ids: list, price: float,
 
     # 价格校验：以后端计算为准，不拒绝订单
     if price > 0:
-        from api.services.pricing_service import calculate_package_price as _calculate_package_price_backend
+        from services.pricing_service import calculate_package_price as _calculate_package_price_backend
         expected = _calculate_package_price_backend(video_count, 0)
         if abs(price - expected) > 0.01:
             logger.bind(front_price=price, expected=expected).info("单订单价格校正")
@@ -83,8 +83,8 @@ def retry_order(original: dict, uid: str) -> dict:
 
 def compute_batch_price(orders: list, website_prices: Dict[str, float] = None) -> Tuple[float, List[str]]:
     """计算批量订单的后端校验总价（与 /api/pricing/calculate 逻辑一致）。"""
-    from api.services.pricing_service import calculate_package_price as _calculate_package_price_backend
-    from api.services.pricing_service import get_or_default as _pricing_get
+    from services.pricing_service import calculate_package_price as _calculate_package_price_backend
+    from services.pricing_service import get_or_default as _pricing_get
 
     price_exam_only = _pricing_get("price_exam_only", 5.0)
     price_homework_only = _pricing_get("price_homework_only", 3.0)
@@ -158,7 +158,7 @@ def validate_order_amount(front_total: float, back_total: float, detail_lines: L
 
 def submit_free_order(order: dict, username: str, password: str, website_id: int) -> None:
     """免费订单直接入队执行"""
-    from api.services.task_queue import get_queue_for_type
+    from services.task_queue import get_queue_for_type
 
     oid = order.get("order_id")
     db.pay_order(oid)
@@ -192,7 +192,7 @@ def submit_free_order(order: dict, username: str, password: str, website_id: int
 
 def enqueue_paid_orders(paid_order_ids: list) -> int:
     """将余额支付成功的订单提交到任务队列，返回成功提交数。"""
-    from api.services.task_queue import get_queue_for_type
+    from services.task_queue import get_queue_for_type
 
     submitted = 0
     for oid in paid_order_ids:

@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from api.compat import to_thread_impl
 from api.database import db
 from api.models import ApiResponse
-from api.services.ypay_service import ypay
+from services.ypay_service import ypay
 from config import settings
 
 

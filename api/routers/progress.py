@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconn
 from loguru import logger
 
 from api.models import ApiResponse, ProgressSummary
-from api.services.session_pool import pool as session_pool
+from services.session_pool import pool as session_pool
 
 router = APIRouter(prefix="/api/progress", tags=["学习进度"])
 
