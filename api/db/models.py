@@ -86,6 +86,7 @@ class Order(Base):
     payment_channel: Mapped[str] = mapped_column(S, default="")
     payment_time: Mapped[Optional[str]] = mapped_column(S, nullable=True)
     commission_status: Mapped[str] = mapped_column(S, default="unprocessed", index=True)
+    paid_processed: Mapped[str] = mapped_column(S, default="unprocessed", index=True)
     user_id: Mapped[str] = mapped_column(S, default="", index=True)
     customer_name: Mapped[str] = mapped_column(S, default="")
     customer_contact: Mapped[str] = mapped_column(S, default="")

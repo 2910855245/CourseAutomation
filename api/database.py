@@ -35,8 +35,8 @@ _KNOWN_TABLES = {
 }
 # 列名只允许小写字母和下划线
 _COL_RE = _re.compile(r'^[a-z_][a-z0-9_]*$')
-# 列定义只允许安全字符（类型、NOT NULL、DEFAULT 等）
-_COL_DEF_RE = _re.compile(r'^[a-zA-Z0-9_\s(),.]+$', )
+# 列定义只允许安全字符（类型、NOT NULL、DEFAULT 等；含单引号以支持字符串默认值）
+_COL_DEF_RE = _re.compile(r"^[a-zA-Z0-9_\s(),.'-]+$")
 
 
 def _validate_table_name(table_name: str):
@@ -121,6 +121,22 @@ def init_db():
     _add_columns_if_missing("withdrawals", {
         "fee_amount": "FLOAT DEFAULT 0.0",
     })
+    # paid_processed: 支付处理幂等列（取代 commission_status 的幂等语义）
+    _orders_cols_before = _get_existing_columns("orders")
+    _add_columns_if_missing("orders", {
+        "paid_processed": "VARCHAR(32) DEFAULT 'unprocessed'",
+    })
+    if "paid_processed" not in _orders_cols_before and "commission_status" in _orders_cols_before:
+        try:
+            with engine.connect() as _conn:
+                _conn.execute(text(
+                    "UPDATE orders SET paid_processed = commission_status "
+                    "WHERE commission_status IN ('processing', 'processed')"
+                ))
+                _conn.commit()
+            logger.info("迁移: orders.paid_processed 已从 commission_status 拷贝旧值")
+        except Exception as e:
+            logger.warning(f"迁移失败 paid_processed 拷贝 error={str(e)}")
     # Migrate vmq_settings data to ypay_settings if ypay_settings is empty
     try:
         Session = sessionmaker(bind=engine)
@@ -133,7 +149,6 @@ def init_db():
                     for row in vmq_rows:
                         session.add(YpaySetting(key=row.key, value=row.value))
                     session.commit()
-                    from loguru import logger
                     logger.info(f"migrated_vmq_settings_to_ypay count={len(vmq_rows)}")
         finally:
             session.close()

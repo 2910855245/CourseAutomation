@@ -174,7 +174,7 @@ def _payment_notify_sync(params: dict) -> str:
             session.close()
 
         for order_id in order_ids:
-            if not db.claim_commission(order_id):
+            if not db.claim_payment_processing(order_id):
                 continue
             db.confirm_payment(order_id, payment_trade_no=trade_no, payment_channel=channel_name)
             fresh_order = db.get_order(order_id)
@@ -186,7 +186,7 @@ def _payment_notify_sync(params: dict) -> str:
             if not agent and fresh_order and fresh_order.get("inviter_code"):
                 agent = db.get_agent_by_referral_code(fresh_order["inviter_code"])
             _process_order_commissions(fresh_order, agent=agent)
-            db.mark_commission_done(order_id)
+            db.mark_payment_processed(order_id)
             db.audit_log("payment_confirm", order_id=order_id,
                          detail=f"YPay批量支付成功 batch={out_trade_no} ¥{price} 实付¥{really_price}")
 
@@ -199,10 +199,10 @@ def _payment_notify_sync(params: dict) -> str:
         order = db.get_order(order_id)
         if not order:
             return "success"
-        if order.get("commission_status") == "processed":
+        if order.get("paid_processed") == "processed":
             return "success"
 
-        if not db.claim_commission(order_id):
+        if not db.claim_payment_processing(order_id):
             return "success"
 
         db.confirm_payment(order_id, payment_trade_no=trade_no, payment_channel=channel_name)
@@ -216,7 +216,7 @@ def _payment_notify_sync(params: dict) -> str:
         if not agent and fresh_order and fresh_order.get("inviter_code"):
             agent = db.get_agent_by_referral_code(fresh_order["inviter_code"])
         _process_order_commissions(fresh_order, agent=agent)
-        db.mark_commission_done(order_id)
+        db.mark_payment_processed(order_id)
 
         db.audit_log("payment_confirm", order_id=order_id,
                      detail=f"YPay支付成功 ¥{price} 实付¥{really_price}")
@@ -282,13 +282,13 @@ def check_payment(out_trade_no: str, order_id: str = Query("")):
             result = _handle_agent_upgrade(actual_order_id, str(ypay_order.get("money", "")), str(ypay_order.get("truemoney", "")))
             return _paid_response(actual_order_id) if result == "success" else {"code": -1, "message": "代理升级处理失败"}
 
-        # Regular order — check if commission already processed
+        # Regular order — check if payment already processed
         fresh_order = db.get_order(actual_order_id)
-        if fresh_order and fresh_order.get("commission_status") == "processed":
+        if fresh_order and fresh_order.get("paid_processed") == "processed":
             return _paid_response(actual_order_id)
 
-        # Fallback: process commission if notify callback missed it
-        if not db.claim_commission(actual_order_id):
+        # Fallback: process payment if notify callback missed it
+        if not db.claim_payment_processing(actual_order_id):
             return _paid_response(actual_order_id)
 
         from api.services.task_queue import school_queue, chaoxing_queue
@@ -306,7 +306,7 @@ def check_payment(out_trade_no: str, order_id: str = Query("")):
         if not agent and updated_order and updated_order.get("inviter_code"):
             agent = db.get_agent_by_referral_code(updated_order["inviter_code"])
         _process_order_commissions(updated_order, agent=agent)
-        db.mark_commission_done(actual_order_id)
+        db.mark_payment_processed(actual_order_id)
 
         db.audit_log("payment_confirm", order_id=actual_order_id,
                      detail=f"YPay支付成功(轮询) 金额:{ypay_order.get('money', '')}")
@@ -438,11 +438,11 @@ def batch_check_payment(batch_id: str, out_trade_no: str = Query(""), token: str
         order = db.get_order(oid)
         if not order:
             continue
-        if order.get("paid") and order.get("commission_status") == "processed":
+        if order.get("paid") and order.get("paid_processed") == "processed":
             paid_count += 1
             continue
 
-        if not db.claim_commission(oid):
+        if not db.claim_payment_processing(oid):
             paid_count += 1
             continue
 
@@ -461,7 +461,7 @@ def batch_check_payment(batch_id: str, out_trade_no: str = Query(""), token: str
         if not agent and fresh_order and fresh_order.get("inviter_code"):
             agent = db.get_agent_by_referral_code(fresh_order["inviter_code"])
         _process_order_commissions(fresh_order, agent=agent)
-        db.mark_commission_done(oid)
+        db.mark_payment_processed(oid)
         paid_count += 1
 
         db.audit_log("batch_payment_confirm", order_id=oid,

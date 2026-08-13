@@ -196,7 +196,7 @@ def pay_check(trade_no: str, order_id: str = Query("")):
         if anti_order and not anti_order.get("paid"):
             db.confirm_payment(actual_order_id, payment_trade_no=trade_no, payment_channel="ypay")
             _process_paid_order(actual_order_id, already_confirmed=True)
-        elif anti_order and anti_order.get("paid") and anti_order.get("commission_status") != "processed":
+        elif anti_order and anti_order.get("paid") and anti_order.get("paid_processed") != "processed":
             _process_paid_order(actual_order_id, already_confirmed=True)
         return JSONResponse(
             content={"code": 0, "paid": True, "message": "支付成功", "really_price": order_data.get("truemoney", 0)},
@@ -283,15 +283,15 @@ def _process_paid_order(order_id: str, already_confirmed: bool = False):
         fresh_order = db.get_order(order_id)
         if not fresh_order:
             return
-        if fresh_order.get("paid") and fresh_order.get("commission_status") == "processed":
+        if fresh_order.get("paid") and fresh_order.get("paid_processed") == "processed":
             return
 
         if not already_confirmed and not fresh_order.get("paid"):
             db.confirm_payment(order_id, payment_trade_no=f"YPAY-{order_id}", payment_channel="ypay")
             fresh_order = db.get_order(order_id)
 
-        if fresh_order.get("commission_status") != "processed":
-            if not db.claim_commission(order_id):
+        if fresh_order.get("paid_processed") != "processed":
+            if not db.claim_payment_processing(order_id):
                 return
             agent = None
             if fresh_order.get("user_id"):
@@ -301,7 +301,7 @@ def _process_paid_order(order_id: str, already_confirmed: bool = False):
             if not agent and fresh_order.get("inviter_code"):
                 agent = db.get_agent_by_referral_code(fresh_order["inviter_code"])
             _process_order_commissions(fresh_order, agent=agent)
-            db.mark_commission_done(order_id)
+            db.mark_payment_processed(order_id)
     except Exception as e:
         logger.error(f"ypay_process_paid_error order_id={order_id} error={str(e)}")
 

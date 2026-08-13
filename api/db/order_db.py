@@ -34,6 +34,7 @@ def _order_to_dict(order) -> dict:
         "payment_channel": order.payment_channel,
         "payment_time": order.payment_time,
         "commission_status": order.commission_status,
+        "paid_processed": order.paid_processed,
         "user_id": order.user_id,
         "customer_name": order.customer_name,
         "customer_contact": order.customer_contact,
@@ -702,6 +703,7 @@ class OrderDBMixin:
         now = datetime.now().isoformat()
         return self.update_order(
             order_id, status="completed", paid=True, commission_status="processed",
+            paid_processed="processed",
             payment_trade_no=payment_trade_no, payment_channel=payment_channel,
             payment_time=now, finished_at=now,
         )
@@ -750,3 +752,25 @@ class OrderDBMixin:
     def mark_commission_done(self, order_id: str) -> bool:
         Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
         return self.update_order(order_id, commission_status="processed")
+
+    def claim_payment_processing(self, order_id: str) -> bool:
+        """支付处理幂等闸门：unprocessed → processing，并发下只有一次返回 True"""
+        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        session = self._get_session()
+        try:
+            updated = session.execute(update(Order).filter(
+                Order.order_id == order_id,
+                Order.paid_processed == "unprocessed",
+            ).values(paid_processed="processing")).rowcount
+            session.commit()
+            return updated > 0
+        except Exception as e:
+            logger.exception("claim_payment_processing 失败")
+            session.rollback()
+            return False
+        finally:
+            session.close()
+
+    def mark_payment_processed(self, order_id: str) -> bool:
+        Order, User, Agent, Commission, WalletTransaction, YpayOrder = _resolve_models()
+        return self.update_order(order_id, paid_processed="processed")
