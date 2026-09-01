@@ -1,4 +1,4 @@
-# 在线课程自动化平台
+# CourseAutomationSaas — 在线课程自动化平台
 
 FastAPI + Vue3 全栈在线课程自动化 SaaS 平台，支持多平台视频学习、考试辅助、聚合支付、三级代理分销。
 
@@ -21,8 +21,8 @@ FastAPI + Vue3 全栈在线课程自动化 SaaS 平台，支持多平台视频�
 ### 本地部署
 
 ```bash
-# 1. 进入项目
-cd "Anti-Course Cheating Plugin"
+# 1. 进入项目（克隆后目录名即仓库名）
+cd CourseAutomationSaas
 
 # 2. 安装后端依赖
 pip install -r requirements.txt
