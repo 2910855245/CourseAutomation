@@ -85,8 +85,8 @@ onMounted(async () => {
         <div :class="['done-card', isLeaving ? 'fade-out-leave-active' : 'fade-in-enter-active']">
           <div class="done-icon">
             <svg width="72" height="72" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="11" stroke="#17181b" stroke-width="2" fill="rgba(20,20,24,.05)"/>
-              <path d="M7 13l3 3 7-7" stroke="#17181b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <circle cx="12" cy="12" r="11" stroke="#15803d" stroke-width="2" fill="rgba(21,128,61,.08)"/>
+              <path d="M7 13l3 3 7-7" stroke="#15803d" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </div>
           <h1>任务已完成</h1>
@@ -99,8 +99,8 @@ onMounted(async () => {
         <div :class="['done-card', 'inprogress-card', isLeaving ? 'fade-out-leave-active' : 'fade-in-enter-active']">
           <div class="done-icon inprogress-icon">
             <svg width="72" height="72" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="11" stroke="#17181b" stroke-width="2" fill="rgba(20,20,24,.05)"/>
-              <path d="M12 6v6l4 2" stroke="#17181b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <circle cx="12" cy="12" r="11" stroke="#0071e3" stroke-width="2" fill="rgba(0,113,227,.08)"/>
+              <path d="M12 6v6l4 2" stroke="#0071e3" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </div>
           <h1>所有任务正在进行中</h1>
@@ -227,7 +227,7 @@ onMounted(async () => {
           </div>
           <div class="plan-card single active">
             <div class="plan-card-top"><span class="plan-tag tag-green">推荐</span></div>
-            <div class="plan-icon" style="color:#17181b">
+            <div class="plan-icon" style="color:#0071e3">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="23 7 16 12 7 7 11 3 23 3 23 7"/><polygon points="12 7 5 12 1 9 1 13 5 16 12 13"/><polygon points="12 13 5 16 1 13 1 17 5 20 12 17"/><polygon points="22 10 17 13 17 17 22 20 23 16"/><polygon points="23 4 19 6 19 10 23 8"/></svg>
             </div>
             <div class="plan-name">视频刷课</div>
@@ -247,7 +247,7 @@ onMounted(async () => {
           </div>
           <div class="plan-card single active">
             <div class="plan-card-top"><span class="plan-tag tag-green">推荐</span></div>
-            <div class="plan-icon" style="color:#17181b">
+            <div class="plan-icon" style="color:#0071e3">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
             </div>
             <div class="plan-name">考试答题</div>
@@ -267,7 +267,7 @@ onMounted(async () => {
           </div>
           <div class="plan-card single active">
             <div class="plan-card-top"><span class="plan-tag tag-blue">标准计费</span></div>
-            <div class="plan-icon" style="color:#17181b">
+            <div class="plan-icon" style="color:#0071e3">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
             </div>
             <div class="plan-name">视频 + 考试</div>
@@ -627,15 +627,16 @@ onMounted(async () => {
 }
 .tab-switcher.minimal .tab-btn:hover:not(.active) { color: var(--c-text); }
 .tab-switcher.minimal .tab-btn.active {
-  color: var(--c-text);
+  color: var(--c-primary);
   background: transparent;
   box-shadow: none;
 }
 .tab-switcher.minimal .tab-btn.active::after {
   content: '';
   position: absolute; left: 0; right: 0; bottom: -1px;
-  height: 1.5px;
-  background: var(--c-text);
+  height: 2px;
+  border-radius: 1px;
+  background: var(--c-primary);
 }
 
 .field.minimal {
@@ -662,7 +663,7 @@ onMounted(async () => {
 }
 .field.minimal input:hover { border-color: #bdbdc2; }
 .field.minimal input:focus {
-  border-color: var(--c-text);
+  border-color: var(--c-primary);
   background: var(--c-surface);
 }
 .field.minimal input::placeholder { color: var(--c-text-muted); }
@@ -684,11 +685,11 @@ onMounted(async () => {
   white-space: nowrap;
 }
 .btn-primary {
-  background: var(--c-text);
+  background: var(--c-primary);
   color: #fff;
 }
-.btn-primary:hover:not(:disabled) { background: #000; }
-.btn-primary:active:not(:disabled) { background: #2e2f34; }
+.btn-primary:hover:not(:disabled) { background: var(--c-primary-hover); }
+.btn-primary:active:not(:disabled) { background: var(--c-primary-active); }
 .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
 .btn-ghost {
   background: transparent;
@@ -702,8 +703,8 @@ onMounted(async () => {
   color: var(--c-text-secondary);
 }
 .btn-outline:hover {
-  border-color: var(--c-text);
-  color: var(--c-text);
+  border-color: var(--c-primary);
+  color: var(--c-primary);
   background: transparent;
 }
 .btn-lg { padding: 11px 24px; font-size: 14px; border-radius: 6px; }
@@ -945,7 +946,7 @@ onMounted(async () => {
   background: var(--c-primary);
   transition: width .3s cubic-bezier(.32,.72,.35,1);
 }
-.cr-bar-fill.done { background: var(--c-text); }
+.cr-bar-fill.done { background: var(--c-primary); }
 .cr-bar-fill.low { background: #b6b6bc; }
 .cr-pct { font-size: 11px; color: var(--c-text-muted); min-width: 34px; text-align: right; }
 .cr-pill {

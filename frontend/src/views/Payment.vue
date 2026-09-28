@@ -406,7 +406,7 @@ onUnmounted(() => {
   cursor: pointer;
   text-decoration: none;
   text-align: center;
-  box-shadow: 0 2px 10px rgba(16, 16, 20, .16);
+  box-shadow: var(--shadow-primary);
   transition: transform .22s cubic-bezier(.32, .72, .35, 1), box-shadow .22s, background .22s;
 }
 .pay-btn-back:hover {

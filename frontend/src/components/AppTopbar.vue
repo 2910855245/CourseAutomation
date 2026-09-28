@@ -107,13 +107,14 @@ const roleBadge = computed(() => {
   opacity: 1;
 }
 .desktop-nav a.nav-active {
-  color: var(--c-text);
+  color: var(--c-primary);
 }
 .desktop-nav a.nav-active::after {
   content: '';
   position: absolute; left: 10px; right: 10px; bottom: 0;
-  height: 1px;
-  background: var(--c-text);
+  height: 2px;
+  border-radius: 1px;
+  background: var(--c-primary);
 }
 .logout-link { color: var(--c-danger) !important; }
 .topbar-role-badge {
