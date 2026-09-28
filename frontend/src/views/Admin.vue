@@ -518,6 +518,9 @@ useAdminStore().init({
 /* Main Content */
 .main-content {
   flex: 1; margin-left: 220px; min-height: 100vh;
+  /* flex 子项默认 min-width:auto，会被宽表格撑大，导致整页出现横向滚动；
+     置 0 后由 .table-wrap 的 overflow-x:auto 接管横向滚动 */
+  min-width: 0;
   display: flex; flex-direction: column; transition: margin-left .2s ease;
 }
 .sidebar.collapsed ~ .main-content { margin-left: 60px; }

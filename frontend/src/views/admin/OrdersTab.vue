@@ -202,10 +202,13 @@ const { taskTypeNames } = useAdminStore().state().sysConfig
   background: var(--c-surface);
   border: 1px solid var(--c-border);
   border-radius: 14px;
-  overflow: hidden;
+  /* 9 列表格在 769~859px 这个区间会挤爆容器：横向滚动必须常开，
+     原先只在 ≤768px 生效，导致中等宽度下内容被 overflow:hidden 裁掉 */
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   box-shadow: var(--shadow-xs);
 }
-.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table { width: 100%; min-width: 860px; border-collapse: collapse; font-size: 13px; }
 .data-table th {
   text-align: left;
   padding: 11px 16px;
@@ -294,8 +297,6 @@ const { taskTypeNames } = useAdminStore().state().sysConfig
 
 /* ==================== 响应式 ==================== */
 @media (max-width: 768px) {
-  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  .data-table { min-width: 860px; }
   .data-table th, .data-table td { padding: 9px 12px; font-size: 12px; }
   .total-label { margin-left: 0; }
 }
