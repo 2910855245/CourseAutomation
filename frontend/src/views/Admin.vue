@@ -289,6 +289,15 @@ useAdminStore().init({
             <span v-else-if="activeTab === 'queue_chaoxing'" class="topbar-tag">学习通</span>
           </div>
           <div class="topbar-right">
+            <button
+              class="theme-toggle-btn"
+              :title="store.isDark ? '切换到浅色' : '切换到暗色'"
+              :aria-label="store.isDark ? '切换到浅色' : '切换到暗色'"
+              @click="store.toggleTheme()"
+            >
+              <svg v-if="store.isDark" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></svg>
+              <svg v-else width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" /></svg>
+            </button>
             <span class="admin-badge">管理员</span>
             <button v-if="activeTab === 'overview'" class="btn btn-ghost btn-sm" :disabled="loadingDash" @click="loadDashboard(currentRole)">
               <span v-if="loadingDash" class="spinner" style="width:14px;height:14px"></span>
@@ -523,7 +532,17 @@ useAdminStore().init({
 .topbar-tag { font-size: 11px; font-weight: 600; padding: 2px 10px; border-radius: 12px; background: var(--c-border-light); color: var(--c-text-muted); }
 .topbar-tag-school { background: var(--c-success-bg); color: var(--c-success); }
 .topbar-tag-chaoxing { background: var(--c-primary-bg); color: var(--c-primary); }
-.topbar-right { display: flex; align-items: center; gap: 12px; }
+.topbar-right { display: flex; align-items: center; gap: 8px; }
+.theme-toggle-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; padding: 0;
+  background: none; border: none; cursor: pointer;
+  border-radius: 10px;
+  color: var(--c-text-secondary);
+  transition: background-color .2s ease, color .2s ease, transform .2s ease;
+}
+.theme-toggle-btn:hover { background: var(--c-surface-3); color: var(--c-text); }
+.theme-toggle-btn:active { transform: scale(.94); }
 .admin-badge {
   padding: 3px 12px; border-radius: 20px; font-size: 11.5px; font-weight: 600;
   background: var(--c-primary-bg);

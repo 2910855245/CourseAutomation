@@ -89,11 +89,16 @@ const { accountForm, aliAccounts, channelCodeHelp, channelCodeLabels, channelTes
               <div class="qr-spinner" />
             </div>
             <img
+              v-if="pairQrImage"
               :src="pairQrImage"
               class="ypay-qr-img"
               alt="APP扫码配对"
               :style="{ opacity: pairQrLoading ? 0 : 1 }"
             >
+            <span
+              v-else-if="!pairQrLoading"
+              class="qr-empty"
+            >暂无二维码</span>
           </div>
           <button
             class="btn btn-ghost btn-sm btn-block"
@@ -123,11 +128,16 @@ const { accountForm, aliAccounts, channelCodeHelp, channelCodeLabels, channelTes
               <div class="qr-spinner" />
             </div>
             <img
+              v-if="downloadQrImage"
               :src="downloadQrImage"
               class="ypay-qr-img"
               alt="APP下载"
               :style="{ opacity: downloadQrLoading ? 0 : 1 }"
             >
+            <span
+              v-else-if="!downloadQrLoading"
+              class="qr-empty"
+            >暂无二维码</span>
           </div>
           <a
             href="/api/ypay/app-download"
@@ -1313,6 +1323,12 @@ const { accountForm, aliAccounts, channelCodeHelp, channelCodeLabels, channelTes
   height: 160px;
   object-fit: contain;
   transition: opacity .25s ease;
+}
+
+/* 后端未返回二维码时不再渲染空 src 的 <img>（否则浏览器显示裂图图标） */
+.qr-empty {
+  font-size: 12px;
+  color: var(--c-text-muted);
 }
 
 .qr-loading {

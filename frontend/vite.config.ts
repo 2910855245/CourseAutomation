@@ -56,6 +56,10 @@ export default defineConfig({
             return 'vendor-vue'
           }
           if (NAIVE_DEPS.test(id)) return 'vendor-naive'
+          // 图表库只有后台概览用到，单独切块避免拖累前台首屏
+          if (/[\\/]node_modules[\\/](echarts|zrender|vue-echarts)[\\/]/.test(id)) {
+            return 'vendor-echarts'
+          }
         },
       },
     },

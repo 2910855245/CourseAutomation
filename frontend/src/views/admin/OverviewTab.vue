@@ -1,13 +1,120 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+import VChart from 'vue-echarts'
 import { useAdminStore } from '@/stores/admin'
-const { currentRole } = useAdminStore().state().auth
-const { getPlatformName } = useAdminStore().state().ui
-const { dash, dashError, fmtMoney, fmtShortDate, loadDashboard, loadingDash, maxBarOrders, maxBarRevenue, maxStatusCount, orderStatusClass, orderStatusLabel, totalPlatformOrders } = useAdminStore().state().dashboard
-const { orders } = useAdminStore().state().orders
-const { platformColors, taskTypeNames } = useAdminStore().state().sysConfig
+import { useAppStore } from '@/stores/app'
+import { chartPalette } from '@/theme/charts'
+
+const appStore = useAppStore()
+const adminStore = useAdminStore()
+const { currentRole } = adminStore.state().auth
+const { getPlatformName } = adminStore.state().ui
+const { dash, dashError, fmtMoney, fmtShortDate, loadDashboard, loadingDash, orderStatusClass, orderStatusLabel, totalPlatformOrders } = adminStore.state().dashboard
+const { platformColors, taskTypeNames } = adminStore.state().sysConfig
 
 // v-for 的索引在 dash 为宽松类型时不被推断为 number，这里统一收敛为数字下标
 const platColor = (i: unknown): string => platformColors[Number(i)] || '#6b7280'
+
+const palette = computed(() => chartPalette(appStore.isDark))
+
+function tooltipStyle(p: ReturnType<typeof chartPalette>) {
+  return {
+    trigger: 'axis' as const,
+    backgroundColor: p.tooltipBg,
+    borderColor: p.tooltipBorder,
+    textStyle: { color: p.text, fontSize: 12 },
+  }
+}
+
+/** 近 7 天：收入折线（左轴）+ 订单柱（右轴），图例由面板头部 HTML 承担 */
+const trendOption = computed(() => {
+  const p = palette.value
+  const days = (dash.value?.recent_7_days || []) as { date: string; orders: number; revenue: number }[]
+  return {
+    grid: { left: 4, right: 4, top: 16, bottom: 0, containLabel: true },
+    tooltip: tooltipStyle(p),
+    legend: { show: false },
+    xAxis: {
+      type: 'category',
+      data: days.map(d => d.date),
+      axisTick: { show: false },
+      axisLine: { lineStyle: { color: p.split } },
+      axisLabel: { color: p.axis, fontSize: 11 },
+    },
+    yAxis: [
+      {
+        type: 'value',
+        splitLine: { lineStyle: { color: p.split } },
+        axisLabel: { color: p.axis, fontSize: 11 },
+      },
+      {
+        type: 'value',
+        splitLine: { show: false },
+        axisLabel: { color: p.axis, fontSize: 11 },
+      },
+    ],
+    series: [
+      {
+        name: '收入',
+        type: 'line',
+        smooth: true,
+        symbolSize: 6,
+        data: days.map(d => d.revenue),
+        itemStyle: { color: p.primary },
+        lineStyle: { width: 2.5, color: p.primary },
+        areaStyle: { color: p.primary, opacity: 0.10 },
+      },
+      {
+        name: '订单',
+        type: 'bar',
+        yAxisIndex: 1,
+        barWidth: 12,
+        data: days.map(d => d.orders),
+        itemStyle: { color: p.info, opacity: 0.75, borderRadius: [4, 4, 0, 0] },
+      },
+    ],
+  }
+})
+
+/** 订单状态分布：横向条形，颜色沿用状态语义（ok/bad/warn/primary/muted） */
+const statusOption = computed(() => {
+  const p = palette.value
+  const colorOf: Record<string, string> = {
+    ok: p.success, bad: p.danger, warn: p.warning, primary: p.primary, muted: p.axis,
+  }
+  const rows = ((dash.value?.status_distribution || []) as { status: string; count: number }[])
+    .map(sd => ({
+      label: orderStatusLabel[sd.status] || sd.status,
+      count: sd.count,
+      color: colorOf[orderStatusClass[sd.status] || 'primary'] || p.primary,
+    }))
+  return {
+    grid: { left: 4, right: 16, top: 8, bottom: 0, containLabel: true },
+    tooltip: tooltipStyle(p),
+    xAxis: {
+      type: 'value',
+      splitLine: { lineStyle: { color: p.split } },
+      axisLabel: { color: p.axis, fontSize: 11 },
+    },
+    yAxis: {
+      type: 'category',
+      data: rows.map(r => r.label),
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { color: p.axis, fontSize: 12 },
+    },
+    series: [{
+      type: 'bar',
+      barWidth: 10,
+      data: rows.map(r => ({ value: r.count, itemStyle: { color: r.color, borderRadius: [0, 5, 5, 0] } })),
+    }],
+  }
+})
+
+/** 状态条数不固定，高度跟着行数走，避免出现大片留白或挤压 */
+const statusChartHeight = computed(() =>
+  `${Math.max(120, ((dash.value?.status_distribution?.length || 0) * 30) + 24)}px`,
+)
 </script>
 
 <template>
@@ -160,29 +267,11 @@ const platColor = (i: unknown): string => platformColors[Number(i)] || '#6b7280'
               <span class="legend"><b class="ldot ldot-ord" />订单</span>
             </div>
           </div>
-          <div class="chart-area">
-            <div
-              v-for="day in dash.recent_7_days"
-              :key="day.date"
-              class="bar-group"
-            >
-              <div class="bars">
-                <div
-                  class="bar bar-rev"
-                  :style="{ height: (day.revenue / maxBarRevenue * 100) + '%' }"
-                  :title="'收入 ' + fmtMoney(day.revenue)"
-                />
-                <div
-                  class="bar bar-ord"
-                  :style="{ height: (day.orders / maxBarOrders * 100) + '%' }"
-                  :title="'订单 ' + day.orders"
-                />
-              </div>
-              <div class="bar-label">
-                {{ day.date }}
-              </div>
-            </div>
-          </div>
+          <v-chart
+            class="chart"
+            :option="trendOption"
+            autoresize
+          />
         </div>
       </div>
 
@@ -191,27 +280,12 @@ const platColor = (i: unknown): string => platformColors[Number(i)] || '#6b7280'
           <div class="panel-head">
             <h3>订单状态分布</h3>
           </div>
-          <div class="status-bars">
-            <div
-              v-for="sd in dash.status_distribution"
-              :key="sd.status"
-              class="sb-row"
-            >
-              <div class="sb-label">
-                {{ orderStatusLabel[sd.status] || sd.status }}
-              </div>
-              <div class="sb-track">
-                <div
-                  class="sb-fill"
-                  :class="'sb-' + (orderStatusClass[sd.status] || 'primary')"
-                  :style="{ width: maxStatusCount > 0 ? (sd.count / maxStatusCount * 100) + '%' : '0%' }"
-                />
-              </div>
-              <div class="sb-val">
-                {{ sd.count }}
-              </div>
-            </div>
-          </div>
+          <v-chart
+            class="chart"
+            :style="{ height: statusChartHeight }"
+            :option="statusOption"
+            autoresize
+          />
         </div>
       </div>
 
@@ -460,72 +534,10 @@ const platColor = (i: unknown): string => platformColors[Number(i)] || '#6b7280'
 .ldot-rev { background: var(--c-primary); }
 .ldot-ord { background: var(--c-info); }
 
-/* ==================== 柱状图 ==================== */
-.chart-area {
-  display: flex;
-  gap: 10px;
-  height: 180px;
-}
-.bar-group {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  height: 100%;
-}
-.bars {
-  flex: 1;
+/* ==================== 图表（ECharts） ==================== */
+.chart {
   width: 100%;
-  display: flex;
-  align-items: flex-end;
-  gap: 4px;
-  justify-content: center;
-}
-.bar {
-  width: 14px;
-  border-radius: 5px 5px 0 0;
-  min-height: 3px;
-  transition: height .35s cubic-bezier(.32, .72, .35, 1), opacity .2s ease;
-}
-.bar:hover { opacity: .8; }
-.bar-rev { background: var(--c-primary); }
-.bar-ord { background: var(--c-info); opacity: .65; }
-.bar-label { font-size: 10.5px; color: var(--c-text-muted); margin-top: 8px; }
-
-/* ==================== 状态分布条 ==================== */
-.status-bars { display: flex; flex-direction: column; gap: 12px; }
-.sb-row { display: flex; align-items: center; gap: 12px; }
-.sb-label {
-  width: 56px;
-  font-size: 12px;
-  color: var(--c-text-secondary);
-  text-align: right;
-  flex-shrink: 0;
-}
-.sb-track {
-  flex: 1;
-  height: 8px;
-  background: var(--c-bg);
-  border-radius: 999px;
-  overflow: hidden;
-}
-.sb-fill {
-  height: 100%;
-  border-radius: 999px;
-  transition: width .35s cubic-bezier(.32, .72, .35, 1);
-}
-.sb-primary { background: var(--c-primary); }
-.sb-ok { background: var(--c-success); }
-.sb-warn { background: var(--c-warning); }
-.sb-bad { background: var(--c-danger); }
-.sb-muted { background: var(--c-text-muted); }
-.sb-val {
-  width: 36px;
-  font-size: 12.5px;
-  color: var(--c-text);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
+  height: 200px;
 }
 
 /* ==================== 平台分布 ==================== */
@@ -648,7 +660,7 @@ const platColor = (i: unknown): string => platformColors[Number(i)] || '#6b7280'
   .panel-row { grid-template-columns: 1fr; }
   .panel-wide, .panel-wide-sm { grid-column: span 1; }
   .panel { padding: 18px; }
-  .chart-area { height: 150px; }
+  .chart { height: 170px; }
 }
 @media (max-width: 480px) {
   .kpi-row { gap: 8px; }
