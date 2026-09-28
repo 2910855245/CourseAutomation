@@ -14,7 +14,7 @@ anyhow = "1"
 base64 = "0.23"
 axum = { version = "0.8", features = ["ws"] }
 md5 = "0.8"
-scraper = "0.20"
+scraper = "0.27"
 # ── 后端 API 骨架（纯 Rust 化阶段 0）──
 rusqlite = { version = "0.40", features = ["bundled"] }
 r2d2 = "0.8"
