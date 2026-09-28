@@ -12,13 +12,20 @@ use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 
 /// 全局请求间隔：跨所有任务共享，任意两个 HTTP 请求间隔 ≥ 0.5s
-static SPACING: Mutex<Option<Instant>> = Mutex::const_new(None);
-const REQUEST_SPACING_SECS: f64 = 0.5;
+/// （实现集中在 platform_client::wait_rate_limit，与登录/扫描链路共用同一道闸）
 
 /// 墙钟/时长安全比率：studyTime 报满后仍须等 2.1×时长（防 beginTime/finalTime 重叠检测）
 const MIN_RATIO: f64 = 2.1;
 
-const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
+/// 全局请求间隔门（原 _wait_rate_limit：所有线程共享 _next_request_time）
+async fn wait_spacing() {
+    crate::platform_client::wait_rate_limit().await;
+}
+
+fn make_client() -> Client {
+    crate::platform_client::build_client_with_ua(
+        crate::platform_client::SHORT_UA, true, None)
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Video {
@@ -72,27 +79,6 @@ struct Progress {
     total: u64,
     total_study: u64,
     total_duration: u64,
-}
-
-/// 全局请求间隔门（模拟原 _wait_rate_limit：所有线程共享 _next_request_time）
-async fn wait_spacing() {
-    let mut guard = SPACING.lock().await;
-    let now = Instant::now();
-    if let Some(next) = *guard {
-        if now < next {
-            tokio::time::sleep(next - now).await;
-        }
-    }
-    *guard = Some(Instant::now() + Duration::from_secs_f64(REQUEST_SPACING_SECS));
-}
-
-fn make_client() -> Client {
-    Client::builder()
-        .danger_accept_invalid_certs(true)
-        .user_agent(UA)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("构建 HTTP client 失败")
 }
 
 #[derive(Debug, Serialize)]

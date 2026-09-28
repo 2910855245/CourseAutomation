@@ -15,7 +15,6 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::db::Db;
-use crate::login::login_school;
 use crate::scan::ScanTaskInput;
 use crate::AppState;
 
@@ -155,8 +154,8 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
     let _ = tokio::fs::create_dir_all(&tmpdir).await;
     let status_file = tmpdir.join("status.json").to_string_lossy().to_string();
 
-    // 登录（验证码由本地 OCR 引擎识别）
-    let session = match login_school(&base_url, &job.username, &job.password).await {
+    // 会话复用：缓存/落盘 cookie 有效则跳过登录（避免频繁登录触发平台风控）
+    let session = match crate::session::get_session(&base_url, &job.username, &job.password).await {
         Ok(s) => s,
         Err(e) => {
             let _ = update_job(&state.db, &job.job_id,
@@ -209,25 +208,41 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
 }
 
 /// 调度器主循环（每队列一个 tokio task）
+///
+/// 并发上限与暂停状态都从 system_config 动态读取（管理端可热更新）：
+///   - `queue_max_workers`：同时执行的任务数上限
+///   - `queue_paused` / `queue_paused_school` / `queue_paused_chaoxing`：暂停开关
 pub async fn dispatcher_loop(state: Arc<AppState>) {
     tracing::info!("Rust 队列调度器启动（学校任务）");
-    let semaphore = Arc::new(tokio::sync::Semaphore::new(
-        std::env::var("RUST_QUEUE_MAX_WORKERS").ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8)),
-    ));
+    let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    // 配置缓存：(上次刷新时间, 并发上限, 是否暂停)，避免每轮都查库
+    let mut cfg_cache: (std::time::Instant, usize, bool) =
+        (std::time::Instant::now(), default_max_workers(), false);
     loop {
         if !std::env::var("RUST_QUEUE_ENABLED").map(|v| v == "true").unwrap_or(false) {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
             continue;
         }
+        if cfg_cache.0.elapsed() > std::time::Duration::from_secs(5) {
+            let (max, paused) = read_runtime_config(&state.db).await;
+            cfg_cache = (std::time::Instant::now(), max, paused);
+        }
+        if cfg_cache.2 {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            continue;
+        }
+        if active.load(std::sync::atomic::Ordering::Relaxed) >= cfg_cache.1 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            continue;
+        }
         match claim_next_job(&state.db).await {
             Ok(Some(job)) => {
                 let state2 = state.clone();
-                let sem = semaphore.clone();
+                let active2 = active.clone();
+                active.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 tokio::spawn(async move {
-                    let _permit = sem.acquire().await;
                     execute_school_job(&state2, &job).await;
+                    active2.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                 });
             }
             Ok(None) => tokio::time::sleep(std::time::Duration::from_secs(2)).await,
@@ -237,6 +252,61 @@ pub async fn dispatcher_loop(state: Arc<AppState>) {
             }
         }
     }
+}
+
+/// 默认并发上限：环境变量 > CPU 核数-1（夹在 1..=8）
+fn default_max_workers() -> usize {
+    std::env::var("RUST_QUEUE_MAX_WORKERS").ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).saturating_sub(1).clamp(1, 8))
+}
+
+/// 读取运行期配置（并发上限 + 暂停），失败时退回默认值
+async fn read_runtime_config(db: &Db) -> (usize, bool) {
+    let max = config_get(db, "queue_max_workers").await
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or_else(default_max_workers);
+    let paused = config_get(db, "queue_paused").await.map(|v| v == "1").unwrap_or(false)
+        || config_get(db, "queue_paused_school").await.map(|v| v == "1").unwrap_or(false);
+    (max, paused)
+}
+
+/// 读系统配置（键不存在返回 None）
+pub async fn config_get(db: &Db, key: &str) -> Option<String> {
+    let pool = db.clone_pool();
+    let key = key.to_string();
+    tokio::task::spawn_blocking(move || -> Option<String> {
+        let conn = pool.get().ok()?;
+        conn.query_row(
+            "SELECT config_value FROM system_config WHERE config_key=?1",
+            rusqlite::params![key],
+            |r| r.get::<_, String>(0),
+        ).ok()
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// 写系统配置（upsert）
+pub async fn config_set(db: &Db, key: &str, value: &str) -> Result<()> {
+    let pool = db.clone_pool();
+    let key = key.to_string();
+    let value = value.to_string();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let conn = pool.get()?;
+        conn.execute(
+            "INSERT INTO system_config (config_key, config_value, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(config_key) DO UPDATE SET config_value=excluded.config_value,
+                                                  updated_at=excluded.updated_at",
+            rusqlite::params![key, value, now_str()],
+        )?;
+        Ok(())
+    })
+    .await??;
+    Ok(())
 }
 
 /// 提交任务（对齐 Python queue.submit_job 的核心字段）

@@ -8,6 +8,7 @@
 
 mod api;
 mod auth;
+mod crypto;
 mod cx_quiz;
 mod cx_scan;
 mod cx_study;
@@ -20,11 +21,13 @@ mod ocr_ort;
 mod order;
 mod pay;
 mod pay_routes;
+mod platform_client;
 mod progress;
 mod queue;
 mod scan;
 mod schema;
 mod school_exam;
+mod session;
 mod study;
 mod ypay_db;
 mod ypay_qr;

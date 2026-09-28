@@ -11,24 +11,19 @@
 //! 鉴权说明：scan/relogin 对齐 Python get_optional_user（可选登录），本 router 不加 auth；
 //! test-deepseek 对齐 get_current_admin，需由主 agent 注册时加 auth layer（见模块总结）。
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use axum::extract::State;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::stream::{self, StreamExt};
 use regex::Regex;
-use reqwest::cookie::CookieStore;
 use reqwest::Client;
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
 use crate::exam;
 use crate::llm::cached_config;
-use crate::login::SchoolSession;
-use crate::ocr;
 use crate::scan;
 use crate::AppState;
 
@@ -43,6 +38,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/courses/platforms", get(list_platforms))
         .route("/api/courses/scan", post(scan_courses))
+        .route("/api/courses/scan/chaoxing", post(scan_chaoxing))
         .route("/api/courses/relogin", post(relogin_platform))
         .route("/api/exam/solve", post(solve_exam_api))
         .route("/api/admin/config/test-deepseek", post(test_deepseek))
@@ -59,119 +55,42 @@ async fn list_platforms() -> Json<Value> {
     Json(json!({"success": true, "message": "ok", "data": items}))
 }
 
-// ── 登录（本地 OCR 薄壳：login.rs 只支持 HTTP sidecar，这里复用内置引擎）──
+// ── /api/courses/scan/chaoxing ───────────────────────────────────────────
+//
+// 学习通站点启用 TLS 指纹校验（JA3），reqwest/native-tls 会被直接拒绝，
+// 需 wreq（TLS 指纹伪装）才能登录。当前依赖尚未落地，故本端点返回明确的
+// 业务失败（而非 404/SPA HTML），前端据此提示用户，不影响学校平台链路。
 
-async fn login_with_local_ocr(base_url: &str, username: &str, password: &str) -> Result<SchoolSession> {
-    // cur_code 传空：do_login_with_code 内部每轮自取验证码 + 本地 OCR。
-    // OCR 引擎不可用时验证码为空，由平台返回"验证码有误"触发重取，行为对齐 login_school("")。
-    let mut last_err = anyhow::anyhow!("登录失败");
-    for _attempt in 0..10 {
-        match do_login_with_code(base_url, username, password, "").await {
-            Ok(s) => return Ok(s),
-            Err(e) => {
-                warn!(base_url, error = %format!("{e:#}"), "do_login_with_code 失败");
-                last_err = e;
-            }
-        }
-    }
-    Err(last_err.context("登录失败: 重试10次未成功"))
+#[derive(serde::Deserialize)]
+struct ScanChaoxingRequest {
+    #[serde(default)]
+    username: String,
+    #[serde(default)]
+    password: String,
 }
 
-/// 手工登录（对齐 login.rs 主流程，验证码由本地 OCR 预先识别）
-async fn do_login_with_code(base_url: &str, username: &str, password: &str,
-                            code: &str) -> Result<SchoolSession> {
-    let base = base_url.trim_end_matches('/').to_string();
-    let login_url = format!("{base}/user/login");
-    // 显式 cookie jar：平台把会话 cookie（token=sid.xxx）放在取验证码的响应里，
-    // 登录成功响应本身不带 set-cookie，必须从 jar 里提取。
-    let jar = Arc::new(reqwest::cookie::Jar::default());
-    let client = Client::builder()
-        .danger_accept_invalid_certs(true)
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .redirect(reqwest::redirect::Policy::none())
-        .cookie_provider(Arc::clone(&jar)) // 验证码与 cookie 中的 session 绑定，必须持久化
-        .build()?;
-
-    // 注：旧逻辑会先 GET /user/login 预检提取 <select id="schoolId">，
-    // 现行平台登录页已无该字段（schoolId 为 localStorage 隐藏项），预检纯属
-    // 浪费一次整页请求，已移除。school_ids 恒为 None，不会附加 schoolId。
-    let school_ids: Option<Vec<String>> = None;
-    let mut school_id_index = 0usize;
-
-    // 验证码识别一次成功才算一次尝试；失败重取
-    let mut cur_code = code.to_string();
-    for _attempt in 0..10 {
-        if cur_code.is_empty() {
-            // 重取验证码 + OCR
-            let img = client.get(format!("{base}/service/code"))
-                .header("Referer", &login_url)
-                .header("X-Requested-With", "XMLHttpRequest")
-                .send().await.context("获取验证码失败")?
-                .bytes().await.context("验证码读取失败")?;
-            if let Ok(engine) = ocr::engine() {
-                let bytes = img.to_vec();
-                cur_code = tokio::task::spawn_blocking(move || engine.recognize(&bytes))
-                    .await.ok().and_then(|r| r.ok()).unwrap_or_default();
-            }
-            info!(base_url = %base, code = %cur_code, "OCR 识别验证码");
-        }
-
-        let mut form = vec![
-            ("username", username.to_string()),
-            ("password", password.to_string()),
-            ("code", cur_code.clone()),
-            ("redirect", String::new()),
-            ("remember", "on".to_string()),
-        ];
-        if let Some(ids) = &school_ids {
-            if school_id_index < ids.len() {
-                form.push(("schoolId", ids[school_id_index].clone()));
-            }
-        }
-
-        let resp = client.post(&login_url)
-            .header("Referer", &login_url)
-            .header("X-Requested-With", "XMLHttpRequest")
-            .form(&form)
-            .send().await
-            .context("登录请求失败")?;
-
-        let status = resp.status().as_u16();
-        let text = resp.text().await.unwrap_or_default();
-        let snippet: String = text.chars().take(120).collect();
-        info!(base_url = %base, status, code = %cur_code, resp = %snippet, "登录响应");
-
-        if text.contains("验证码有误") || text.contains("验证码错误") {
-            cur_code = String::new(); // 下轮重取
-            continue;
-        }
-        // 登录成功两种形态：302 跳转（老版）或 200 + {"status":true,...}（yee ajax 弹"操作成功提示"）
-        let success = status == 302
-            || (text.contains("\"status\":true") && text.contains("登录成功"));
-        if success {
-            // 会话 cookie 是取验证码时由服务端种进 jar 的（token=sid.xxx），
-            // 登录响应本身不带 set-cookie，所以从 jar 提取。
-            let url: reqwest::Url = match base.parse() {
-                Ok(u) => u,
-                Err(e) => anyhow::bail!("base_url 解析失败: {e}"),
-            };
-            let cookie_str = jar.cookies(&url)
-                .and_then(|h| h.to_str().ok().map(String::from))
-                .unwrap_or_default();
-            info!(base_url = %base, cookie = %cookie_str, "登录成功提取 cookie");
-            if cookie_str.is_empty() {
-                anyhow::bail!("登录成功但未获取到 cookie");
-            }
-            return Ok(SchoolSession { cookie_str, base_url: base });
-        }
-        if text.contains("密码错误") || text.contains("账号或密码") || text.contains("用户名或密码") {
-            anyhow::bail!("登录失败: 账号或密码错误");
-        }
-        let _ = school_id_index; // school_ids 恒 None，保留变量避免大改
-        warn!(base_url = %base, "登录未成功（非验证码/密码错误），继续重试");
-    }
-    anyhow::bail!("登录失败: 重试10次未成功")
+async fn scan_chaoxing(Json(req): Json<ScanChaoxingRequest>) -> Json<Value> {
+    let _ = (req.username, req.password);
+    Json(json!({
+        "success": false,
+        "message": "学习通扫描暂不可用：该站点需 TLS 指纹伪装客户端（wreq）支持",
+        "data": {"platform": {
+            "website_id": 4,
+            "name": "超星学习通",
+            "status": "unsupported",
+            "error": "后端尚未接入 wreq，学习通链路暂不可用",
+            "courses": [],
+            "tasks": [],
+        }},
+    }))
 }
+
+// ── 登录：统一走 session 模块（缓存/落盘复用 + 失效才登录）────────────
+//
+// 历史实现（login_with_local_ocr / do_login_with_code）每次扫描都重新登录，
+// 频繁触发平台风控；且密码错误判定不全（缺「账号密码不正确 / 已被锁定」），
+// 会一路重试到锁号。现已收敛到 login::login_school + session::get_session。
+
 
 // ── 考试/作业分页拉取 + 清洗（对齐 course_crawler + data_cleaner + task_filter）──
 
@@ -402,7 +321,7 @@ async fn scan_courses(Json(req): Json<ScanRequest>) -> Json<Value> {
         let (u, p, n) = (req.username.clone(), req.password.clone(), name.to_string());
         let (wid, include) = (*wid, req.include_records);
         handles.push(tokio::spawn(async move {
-            scan_one_platform(&u, &p, wid, &n, include).await
+            scan_one_platform(&u, &p, wid, &n, include, false).await
         }));
     }
     let mut results = Vec::new();
@@ -431,9 +350,11 @@ async fn scan_courses(Json(req): Json<ScanRequest>) -> Json<Value> {
     }))
 }
 
-/// 扫描单个平台（对齐 scan_platform：登录 → 课程列表 → 逐课程扫描）
+/// 扫描单个平台（对齐 scan_platform：取会话 → 课程列表 → 逐课程扫描）
+/// `force_login = true` 时跳过会话复用（/api/courses/relogin 语义：用户主动重新登录）
 async fn scan_one_platform(username: &str, password: &str, website_id: i64,
-                           platform_name: &str, include_records: bool) -> Value {
+                           platform_name: &str, include_records: bool,
+                           force_login: bool) -> Value {
     let base_url = scan::platform_base_url(website_id);
     let fail = |status: &str, error: String| json!({
         "website_id": website_id,
@@ -444,15 +365,20 @@ async fn scan_one_platform(username: &str, password: &str, website_id: i64,
         "tasks": [],
     });
 
-    // 登录（本地 OCR：验证码由内置引擎识别）
-    let session = match login_with_local_ocr(&base_url, username, password).await {
+    // 会话复用（缓存/落盘 cookie 有效则跳过登录，避免频繁登录被风控）
+    if force_login {
+        crate::session::invalidate(username, &base_url);
+    }
+    let session = match crate::session::get_session(&base_url, username, password).await {
         Ok(s) => {
-            info!(website_id, cookie = %s.cookie_str, "登录成功 cookie");
+            info!(website_id, cookie = %s.cookie_str, "会话就绪");
             s
         }
         Err(e) => {
             let detail = format!("{e:#}");
-            let error_msg = if detail.contains("验证码") {
+            let error_msg = if detail.contains("锁定") {
+                "账号已被锁定，请稍后再试"
+            } else if detail.contains("验证码") {
                 "验证码识别失败，请重试"
             } else if detail.contains("密码") || detail.to_lowercase().contains("password") {
                 "密码错误"
@@ -467,15 +393,7 @@ async fn scan_one_platform(username: &str, password: &str, website_id: i64,
         }
     };
 
-    let client = match Client::builder()
-        .danger_accept_invalid_certs(true)
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .cookie_store(true) // 登录态在 cookie_store 里（token 验证码会话 + 登录成功新会话），手动 cookie_str 只有最后一轮不完整
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => return fail("error", format!("构建 HTTP client 失败: {e}")),
-    };
+    let client = crate::platform_client::build_client(false, None);
 
     // 课程列表页只抓一次：解析课程 + 提取学生姓名（降负载：省一次 17KB 整页请求）
     let index_html = match scan::fetch_course_list_html(&client, &session.cookie_str, &base_url).await {
@@ -610,7 +528,7 @@ async fn relogin_platform(Json(req): Json<ReloginRequest>) -> Json<Value> {
     let name = PLATFORMS.iter().find(|(id, _)| *id == req.website_id)
         .map(|(_, n)| *n).unwrap_or("未知平台");
     let result = scan_one_platform(&req.username, &req.password,
-                                   req.website_id, name, req.include_records).await;
+                                   req.website_id, name, req.include_records, true).await;
     let ok = result["status"].as_str() == Some("ok");
     Json(json!({
         "success": true,

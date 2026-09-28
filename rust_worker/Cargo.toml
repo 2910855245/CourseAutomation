@@ -28,6 +28,8 @@ regex = "1.13.1"
 bcrypt = "0.15"
 jsonwebtoken = "9"
 sha2 = "0.11.0"
+# 凭据加密（AES-256-GCM）：orders 表不再落明文密码
+aes-gcm = "0.10"
 futures-util = "0.3.34"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 ddddocr-core = "0.2.4"

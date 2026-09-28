@@ -4,22 +4,43 @@
 //! 受保护路由经 auth_middleware 校验 Bearer token。
 
 use axum::extract::{Path, Query, State};
+use axum::http::header::AUTHORIZATION;
+use axum::http::HeaderMap;
 use axum::middleware;
-use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::routing::{delete, get, post};
+use axum::{Extension, Json, Router};
 use serde_json::{json, Map, Value};
 
-use crate::db::Db;
+use crate::auth::Claims;
 use crate::AppState;
 
 pub fn router(state: AppState) -> Router<AppState> {
-    // 受保护读路径（Bearer 鉴权）
+    // 受保护读/写路径（Bearer 鉴权）
     let protected = Router::new()
         .route("/api/orders/", get(orders_list))
-        .route("/api/orders/{order_id}", get(order_get))
         .route("/api/admin/dashboard", get(admin_dashboard))
         .route("/api/queue/stats", get(queue_stats))
         .route("/api/pricing", get(pricing))
+        .route("/api/pricing/apply-package", post(apply_package))
+        .route("/api/admin/orders", get(admin_orders_list))
+        .route("/api/admin/orders/{order_id}/accept", post(admin_order_accept))
+        .route("/api/admin/orders/{order_id}/enqueue", post(admin_order_enqueue))
+        .route("/api/admin/orders/{order_id}/execute", post(admin_order_execute))
+        .route("/api/admin/orders/{order_id}/fail", post(admin_order_fail))
+        .route("/api/admin/orders/{order_id}/complete", post(admin_order_complete))
+        .route("/api/admin/change-password", post(admin_change_password))
+        .route("/api/admin/config", get(admin_config_get).post(admin_config_set))
+        .route("/api/queue/jobs", get(queue_jobs))
+        .route("/api/queue/jobs/{job_id}/cancel", post(queue_job_cancel))
+        .route("/api/queue/jobs/{job_id}/retry", post(queue_job_retry))
+        .route("/api/queue/jobs/{job_id}", delete(queue_job_delete))
+        .route("/api/queue/clear", post(queue_clear))
+        .route("/api/queue/pause", post(queue_pause_all))
+        .route("/api/queue/pause/{queue}", post(queue_pause_one))
+        .route("/api/queue/resume", post(queue_resume_all))
+        .route("/api/queue/resume/{queue}", post(queue_resume_one))
+        .route("/api/queue/config", post(queue_config))
+        .route("/api/queue/detect", get(queue_detect))
         .route_layer(middleware::from_fn_with_state(state.clone(), crate::auth::auth_middleware));
 
     Router::new()
@@ -27,12 +48,34 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/api/system/status", get(system_status))
         .route("/api/jobs/submit", post(submit_job))
         .route("/api/orders/batch", post(batch_orders))
+        // 游客可达：Bearer 或 view_token 二选一（handler 内校验）
+        .route("/api/orders/{order_id}", get(order_get).delete(order_delete))
+        .route("/api/orders/audit-log/{order_id}", get(order_audit_log))
+        .route("/api/orders/active-courses", get(orders_active_courses))
+        .route("/api/orders/clear-history", post(orders_clear_history))
+        .route("/api/pricing/calculate", post(pricing_calculate))
         .route("/api/ypay/vmq/heart", post(vmq_heart))
         .route("/api/ypay/vmq/push", post(vmq_push))
         .route("/api/admin/login", post(crate::auth::admin_login))
         .route("/health", get(health))
         .merge(protected)
 }
+
+/// Bearer 是否有效（可选鉴权路由用）
+fn bearer_ok(headers: &HeaderMap) -> bool {
+    headers
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|t| crate::auth::verify_token(t).is_some())
+        .unwrap_or(false)
+}
+
+/// 订单访问鉴权：管理员 Bearer，或游客 view_token（sha256(order_id:secret)[:24]）
+fn order_access_ok(headers: &HeaderMap, order_id: &str, token: &str) -> bool {
+    bearer_ok(headers) || (!token.is_empty() && token == crate::order::view_token(order_id))
+}
+
 
 /// VMQ 心跳（签名验证，对齐 ypay_vmq.vmq_heart 的 success/fail 纯文本协议）
 async fn vmq_heart(
@@ -246,7 +289,16 @@ async fn orders_list(
     }
 }
 
-async fn order_get(State(state): State<AppState>, Path(order_id): Path<String>) -> Json<Value> {
+async fn order_get(
+    State(state): State<AppState>,
+    Path(order_id): Path<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Json<Value> {
+    let token = params.get("token").cloned().unwrap_or_default();
+    if !order_access_ok(&headers, &order_id, &token) {
+        return Json(json!({"success": false, "message": "无权查看该订单"}));
+    }
     let db = state.db.clone_pool();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Value>> {
         let conn = db.get()?;
@@ -420,6 +472,16 @@ fn day_label(secs: u64) -> (String, String) {
 }
 
 async fn queue_stats(State(state): State<AppState>) -> Json<Value> {
+    // 运行期配置（管理端可热更新，调度器每 5s 同步一次）
+    let max_workers = crate::queue::config_get(&state.db, "queue_max_workers").await
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or_else(|| default_max_workers() as i64);
+    let paused_all = crate::queue::config_get(&state.db, "queue_paused").await
+        .map(|v| v == "1").unwrap_or(false);
+    let paused_school = paused_all || crate::queue::config_get(&state.db, "queue_paused_school").await
+        .map(|v| v == "1").unwrap_or(false);
+    let paused_cx = paused_all || crate::queue::config_get(&state.db, "queue_paused_chaoxing").await
+        .map(|v| v == "1").unwrap_or(false);
     let db = state.db.clone_pool();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
         let conn = db.get()?;
@@ -439,16 +501,16 @@ async fn queue_stats(State(state): State<AppState>) -> Json<Value> {
         let mut school = table_stats("queue_jobs_school")?;
         let mut chaoxing = table_stats("queue_jobs_chaoxing")?;
         school.insert("active_workers".into(), json!(0));
-        school.insert("max_workers".into(), json!(15));
+        school.insert("max_workers".into(), json!(max_workers));
         school.insert("active_study_workers".into(), json!(0));
-        school.insert("max_study_workers".into(), json!(15));
-        school.insert("paused".into(), json!(false));
+        school.insert("max_study_workers".into(), json!(max_workers));
+        school.insert("paused".into(), json!(paused_school));
         school.insert("queue_name".into(), json!("school"));
         chaoxing.insert("active_workers".into(), json!(0));
-        chaoxing.insert("max_workers".into(), json!(15));
+        chaoxing.insert("max_workers".into(), json!(max_workers));
         chaoxing.insert("active_study_workers".into(), json!(0));
-        chaoxing.insert("max_study_workers".into(), json!(15));
-        chaoxing.insert("paused".into(), json!(false));
+        chaoxing.insert("max_study_workers".into(), json!(max_workers));
+        chaoxing.insert("paused".into(), json!(paused_cx));
         chaoxing.insert("queue_name".into(), json!("chaoxing"));
 
         let sum = |k: &str| -> i64 {
@@ -458,7 +520,7 @@ async fn queue_stats(State(state): State<AppState>) -> Json<Value> {
         Ok(json!({
             "pending": sum("pending"), "running": sum("running"), "waiting": sum("waiting"),
             "completed": sum("completed"), "failed": sum("failed"), "total": sum("total"),
-            "active_workers": 0, "max_workers": 30, "paused": false,
+            "active_workers": 0, "max_workers": max_workers, "paused": paused_all,
             "school": school, "chaoxing": chaoxing,
         }))
     })
@@ -471,25 +533,37 @@ async fn queue_stats(State(state): State<AppState>) -> Json<Value> {
     }
 }
 
+/// 定价配置键：前端 camelCase ↔ 库内 snake_case（对齐 useSystemConfig.loadPricing）
+const PRICING_KEYS: &[(&str, &str, f64)] = &[
+    ("priceSmall", "price_small", 3.0),
+    ("priceMedium", "price_medium", 5.0),
+    ("priceLarge", "price_large", 6.0),
+    ("discount25", "discount_25", 0.7),
+    ("discount50", "discount_50", 0.5),
+    ("discount75", "discount_75", 0.3),
+    ("priceMinimum", "price_minimum", 2.0),
+    ("priceExamOnly", "price_exam_only", 5.0),
+    ("priceHomeworkOnly", "price_homework_only", 3.0),
+    ("priceChaoxing", "price_chaoxing", 8.0),
+];
+
 async fn pricing(State(state): State<AppState>) -> Json<Value> {
     let db = state.db.clone_pool();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
         let conn = db.get()?;
-        let defaults = [
-            ("priceSmall", 3.0), ("priceMedium", 5.0), ("priceLarge", 6.0),
-            ("discount25", 0.7), ("discount50", 0.5), ("discount75", 0.3),
-            ("priceMinimum", 2.0), ("priceExamOnly", 5.0), ("priceHomeworkOnly", 3.0),
-            ("priceChaoxing", 8.0),
-        ];
         let mut data = Map::new();
-        for (key, default) in defaults {
+        for (camel, snake, default) in PRICING_KEYS {
             let v: Option<String> = conn.query_row(
                 "SELECT config_value FROM system_config WHERE config_key=?1",
-                rusqlite::params![key], |r| r.get(0),
+                rusqlite::params![snake], |r| r.get(0),
             ).ok().flatten();
-            let val = v.and_then(|s| s.parse::<f64>().ok()).unwrap_or(default);
-            data.insert(key.to_string(), json!(val));
+            data.insert(camel.to_string(), json!(v.and_then(|s| s.parse::<f64>().ok()).unwrap_or(*default)));
         }
+        // 前端类型里声明的单价/模式字段（当前按打包定价，单价位占位）
+        data.insert("videoUnitPrice".into(), json!(0));
+        data.insert("examUnitPrice".into(), json!(0));
+        data.insert("homeworkUnitPrice".into(), json!(0));
+        data.insert("pricingMode".into(), json!("package"));
         Ok(Value::Object(data))
     })
     .await
@@ -500,3 +574,826 @@ async fn pricing(State(state): State<AppState>) -> Json<Value> {
         Err(e) => Json(json!({"code": -1, "data": {}, "message": e.to_string()})),
     }
 }
+
+/// 保存打包定价（前端传 camelCase，落库 snake_case）
+async fn apply_package(State(state): State<AppState>, Json(body): Json<Value>) -> Json<Value> {
+    let db = state.db.clone_pool();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+        let conn = db.get()?;
+        let now = crate::queue::now_str();
+        let mut n = 0usize;
+        for (camel, snake, _) in PRICING_KEYS {
+            if let Some(v) = body.get(*camel).and_then(|v| v.as_f64()) {
+                conn.execute(
+                    "INSERT INTO system_config (config_key, config_value, updated_at)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT(config_key) DO UPDATE SET config_value=excluded.config_value,
+                                                          updated_at=excluded.updated_at",
+                    rusqlite::params![snake, v.to_string(), now],
+                )?;
+                n += 1;
+            }
+        }
+        Ok(n)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .and_then(|v| v);
+    match result {
+        Ok(n) => Json(json!({"success": true, "message": format!("已保存 {n} 项定价配置")})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+/// 试算价格（对齐 /api/pricing/calculate：逐课 type/price/label + 总价）
+async fn pricing_calculate(State(state): State<AppState>, Json(body): Json<Value>) -> Json<Value> {
+    let courses = body["courses"].as_array().cloned().unwrap_or_default();
+    let cfg = match crate::order::pricing_config(&state.db).await {
+        Ok(c) => c,
+        Err(e) => return Json(json!({"success": false, "message": e.to_string()})),
+    };
+    let (entries, total) = crate::order::price_courses(&cfg, &courses);
+    Json(json!({
+        "success": true,
+        "message": "ok",
+        "data": {"courses": entries, "total": total, "pricing_mode": "package"},
+    }))
+}
+
+// ── 订单：游客可写/可读（token 或 Bearer）────────────────────────────────
+
+/// 取消订单（前端走 DELETE /api/orders/{id}）
+async fn order_delete(
+    State(state): State<AppState>,
+    Path(order_id): Path<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Json<Value> {
+    let token = params.get("token").cloned().unwrap_or_default();
+    if !order_access_ok(&headers, &order_id, &token) {
+        return Json(json!({"success": false, "message": "无权操作该订单"}));
+    }
+    let db = state.db.clone_pool();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<i64> {
+        let conn = db.get()?;
+        // 终态订单不可取消（已跑完/已失败）
+        let n = conn.execute(
+            "UPDATE orders SET status='cancelled', updated_at=?2
+             WHERE order_id=?1 AND status NOT IN ('completed','failed','running')",
+            rusqlite::params![order_id, crate::queue::now_str()],
+        )?;
+        if n > 0 {
+            log_event(&conn, "order_cancelled", "user", "用户取消订单", &order_id)?;
+        }
+        Ok(n as i64)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .and_then(|v| v);
+    match result {
+        Ok(n) if n > 0 => Json(json!({"success": true, "message": "订单已取消"})),
+        Ok(_) => Json(json!({"success": false, "message": "订单当前状态不可取消"})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+/// 订单操作日志（audit_logs.event_type → event，对齐前端字段名）
+async fn order_audit_log(State(state): State<AppState>, Path(order_id): Path<String>) -> Json<Value> {
+    let db = state.db.clone_pool();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Value>> {
+        let conn = db.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT event_type, detail, created_at FROM audit_logs
+             WHERE order_id=?1 ORDER BY created_at DESC LIMIT 50",
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![order_id], |r| {
+                Ok(json!({
+                    "event": r.get::<_, String>(0)?,
+                    "detail": r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    "created_at": r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                }))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .and_then(|v| v);
+    match result {
+        Ok(data) => Json(json!({"success": true, "message": "ok", "data": data})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+/// 进行中订单的课程 ID 列表（前端据此禁止重复下单）
+async fn orders_active_courses(
+    State(state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Json<Value> {
+    let username = params.get("username").cloned().unwrap_or_default();
+    if username.is_empty() {
+        return Json(json!({"success": true, "message": "ok", "data": []}));
+    }
+    let db = state.db.clone_pool();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<String>> {
+        let conn = db.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT course_ids FROM orders
+             WHERE username=?1 AND deleted_at IS NULL
+               AND status IN ('pending','accepted','queued','running','retrying','paid','waiting')",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![username], |r| r.get::<_, String>(0))?;
+        let mut ids = Vec::new();
+        for r in rows {
+            let raw = r?;
+            if let Ok(arr) = serde_json::from_str::<Value>(&raw) {
+                if let Some(list) = arr.as_array() {
+                    for v in list {
+                        if let Some(s) = v.as_str() {
+                            // "courseId:classId" 只取课程 ID（与扫描结果对齐）
+                            ids.push(s.split(':').next().unwrap_or(s).to_string());
+                        }
+                    }
+                }
+            }
+        }
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .and_then(|v| v);
+    match result {
+        Ok(data) => Json(json!({"success": true, "message": "ok", "data": data})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+/// 清空历史订单：管理员软删除全部终态订单；游客仅返回成功（前端据此清本地缓存）
+async fn orders_clear_history(State(state): State<AppState>, headers: HeaderMap) -> Json<Value> {
+    if !bearer_ok(&headers) {
+        return Json(json!({"success": true, "message": "已清空本地历史"}));
+    }
+    let db = state.db.clone_pool();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+        let conn = db.get()?;
+        let n = conn.execute(
+            "UPDATE orders SET deleted_at=?1
+             WHERE deleted_at IS NULL AND status IN ('completed','failed','cancelled')",
+            rusqlite::params![crate::queue::now_str()],
+        )?;
+        Ok(n)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .and_then(|v| v);
+    match result {
+        Ok(n) => Json(json!({"success": true, "message": format!("已清空 {n} 条历史订单")})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+// ── 管理端：订单 ────────────────────────────────────────────────────────
+
+/// 审计日志写入（统一入口，避免各处手拼 INSERT）
+fn log_event(conn: &rusqlite::Connection, event_type: &str, operator: &str,
+             detail: &str, order_id: &str) -> rusqlite::Result<()> {
+    let log_id = format!("LOG-{:08X}", rand::random::<u32>());
+    conn.execute(
+        "INSERT INTO audit_logs (log_id, event_type, operator, detail, order_id, user_id, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, '', ?6)",
+        rusqlite::params![log_id, event_type, operator, detail, order_id, crate::queue::now_str()],
+    )?;
+    Ok(())
+}
+
+/// 单条订单（含 course_ids 解析），供管理端动作复用
+fn fetch_order(conn: &rusqlite::Connection, order_id: &str) -> rusqlite::Result<Option<Value>> {
+    conn.query_row(
+        "SELECT order_id, out_trade_no, ezfpy_trade_no, payment_channel, payment_time,
+                paid_processed, user_id, customer_name, customer_contact, username,
+                website_id, task_type, course_ids, video_count, exam_count, price,
+                notes, status, paid, task_id, admin_note, created_at, updated_at,
+                accepted_at, started_at, finished_at
+         FROM orders WHERE order_id=?1 AND deleted_at IS NULL",
+        rusqlite::params![order_id],
+        |r| {
+            let cids: String = r.get(12)?;
+            order_row_to_json(r, &cids)
+        },
+    )
+    .map(Some)
+    .or_else(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => Ok(None),
+        other => Err(other),
+    })
+}
+
+/// 管理端订单列表（limit/offset + status/user_id 过滤）
+async fn admin_orders_list(
+    State(state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Json<Value> {
+    let limit = params.get("limit").and_then(|v| v.parse::<i64>().ok()).unwrap_or(50);
+    let offset = params.get("offset").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+    let status_filter = params.get("status").cloned().unwrap_or_default();
+    let user_id = params.get("user_id").cloned().unwrap_or_default();
+    let db = state.db.clone_pool();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
+        let conn = db.get()?;
+        let mut where_sql = String::from("deleted_at IS NULL");
+        let mut args: Vec<String> = Vec::new();
+        if !status_filter.is_empty() {
+            where_sql.push_str(" AND status=?");
+            args.push(status_filter);
+        }
+        if !user_id.is_empty() {
+            where_sql.push_str(" AND user_id=?");
+            args.push(user_id);
+        }
+        let total: i64 = conn.query_row(
+            &format!("SELECT COUNT(*) FROM orders WHERE {where_sql}"),
+            rusqlite::params_from_iter(args.iter()),
+            |r| r.get(0),
+        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT order_id, out_trade_no, ezfpy_trade_no, payment_channel, payment_time,
+                    paid_processed, user_id, customer_name, customer_contact, username,
+                    website_id, task_type, course_ids, video_count, exam_count, price,
+                    notes, status, paid, task_id, admin_note, created_at, updated_at,
+                    accepted_at, started_at, finished_at
+             FROM orders WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        ))?;
+        let page_args: Vec<String> = args.iter().cloned()
+            .chain([limit.to_string(), offset.to_string()])
+            .collect();
+        let mut rows: Vec<Value> = stmt
+            .query_map(rusqlite::params_from_iter(page_args.iter()), |r| {
+                let cids: String = r.get(12)?;
+                order_row_to_json(r, &cids)
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        inject_progress(&conn, &mut rows)?;
+        Ok(json!({"total": total, "items": rows}))
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .and_then(|v| v);
+    match result {
+        Ok(data) => Json(json!({"success": true, "message": "ok", "data": data})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+/// 管理端订单状态迁移（accept/fail/complete 共用）
+async fn transition_order(state: &AppState, order_id: &str, set_sql: &str,
+                          event: &str, detail: &str) -> Json<Value> {
+    let db = state.db.clone_pool();
+    let sql = set_sql.to_string();
+    let order_id = order_id.to_string();
+    let event = event.to_string();
+    let detail = detail.to_string();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+        let conn = db.get()?;
+        let n = conn.execute(&sql, rusqlite::params![crate::queue::now_str(), order_id])?;
+        if n > 0 {
+            log_event(&conn, &event, "admin", &detail, &order_id)?;
+        }
+        Ok(n)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .and_then(|v| v);
+    match result {
+        Ok(_) => Json(json!({"success": true, "message": "ok"})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+async fn admin_order_accept(State(state): State<AppState>, Path(order_id): Path<String>) -> Json<Value> {
+    transition_order(
+        &state, &order_id,
+        "UPDATE orders SET status='accepted', accepted_at=?1, updated_at=?1
+         WHERE order_id=?2 AND status IN ('pending','cancelled')",
+        "order_accepted", "管理员接单",
+    ).await
+}
+
+async fn admin_order_complete(State(state): State<AppState>, Path(order_id): Path<String>) -> Json<Value> {
+    transition_order(
+        &state, &order_id,
+        "UPDATE orders SET status='completed', finished_at=?1, updated_at=?1
+         WHERE order_id=?2 AND status <> 'completed'",
+        "order_completed", "管理员标记完成",
+    ).await
+}
+
+#[derive(serde::Deserialize)]
+struct FailBody {
+    #[serde(default)]
+    admin_note: String,
+}
+
+async fn admin_order_fail(
+    State(state): State<AppState>,
+    Path(order_id): Path<String>,
+    body: Option<Json<FailBody>>,
+) -> Json<Value> {
+    let note = body.map(|b| b.0.admin_note).unwrap_or_default();
+    let note = if note.is_empty() { "管理员手动标记失败".to_string() } else { note };
+    let db = state.db.clone_pool();
+    let oid = order_id.clone();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+        let conn = db.get()?;
+        let now = crate::queue::now_str();
+        let n = conn.execute(
+            "UPDATE orders SET status='failed', admin_note=?2, finished_at=?1, updated_at=?1
+             WHERE order_id=?3 AND status <> 'failed'",
+            rusqlite::params![now, note, oid],
+        )?;
+        if n > 0 {
+            log_event(&conn, "order_failed", "admin", &note, &oid)?;
+        }
+        Ok(n)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .and_then(|v| v);
+    match result {
+        Ok(_) => Json(json!({"success": true, "message": "订单已标记失败"})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+/// 入队：把订单转成 queue_jobs_school 行（密码从加密凭据表解密）
+async fn admin_order_enqueue(State(state): State<AppState>, Path(order_id): Path<String>) -> Json<Value> {
+    match enqueue_order_impl(&state, &order_id).await {
+        Ok(job_id) => Json(json!({"success": true, "message": "订单已入队", "data": {"job_id": job_id}})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+async fn enqueue_order_impl(state: &AppState, order_id: &str) -> anyhow::Result<String> {
+    let db = state.db.clone_pool();
+    let oid = order_id.to_string();
+    let job_id = format!("JOB-{:08X}", rand::random::<u32>());
+    let job_id_out = job_id.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let conn = db.get()?;
+        let order = fetch_order(&conn, &oid)?
+            .ok_or_else(|| anyhow::anyhow!("订单不存在"))?;
+        let username = order["username"].as_str().unwrap_or("").to_string();
+        let password = crate::crypto::load_password(&conn, &oid)
+            .ok_or_else(|| anyhow::anyhow!("订单凭据缺失（加密记录与明文列均无）"))?;
+        conn.execute(
+            "INSERT INTO queue_jobs_school
+             (job_id, username, password, website_id, job_type, course_ids, status, priority,
+              progress, total_steps, completed_steps, current_step_name, error_message,
+              retry_count, max_retries, task_id, order_id, result_data, verified,
+              created_at, started_at, finished_at, deleted_at)
+             VALUES (?1,?2,?3,?4,?5,?6,'pending',0,0,0,0,'','',0,3,NULL,?7,'{}',0,?8,NULL,NULL,NULL)",
+            rusqlite::params![
+                job_id, username, password,
+                order["website_id"].as_i64().unwrap_or(1),
+                order["task_type"].as_str().unwrap_or("video"),
+                serde_json::to_string(&order["course_ids"])?,
+                oid, crate::queue::now_str(),
+            ],
+        )?;
+        conn.execute(
+            "UPDATE orders SET status='queued', updated_at=?1 WHERE order_id=?2",
+            rusqlite::params![crate::queue::now_str(), oid],
+        )?;
+        log_event(&conn, "order_enqueued", "admin", "订单已入队", &oid)?;
+        Ok(())
+    })
+    .await??;
+    Ok(job_id_out)
+}
+
+/// 立即执行：直接派发刷课任务（不等待队列调度器）
+async fn admin_order_execute(State(state): State<AppState>, Path(order_id): Path<String>) -> Json<Value> {
+    if state.tasks.contains_key(&order_id) {
+        return Json(json!({"success": false, "message": "该订单任务已在执行中"}));
+    }
+    // 取订单 + 解密凭据
+    let db = state.db.clone_pool();
+    let oid = order_id.clone();
+    let loaded = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<(Value, String)>> {
+        let conn = db.get()?;
+        match fetch_order(&conn, &oid)? {
+            Some(order) => {
+                let pwd = crate::crypto::load_password(&conn, &oid).unwrap_or_default();
+                conn.execute(
+                    "UPDATE orders SET status='running', started_at=?1, updated_at=?1 WHERE order_id=?2",
+                    rusqlite::params![crate::queue::now_str(), oid],
+                )?;
+                log_event(&conn, "order_executing", "admin", "管理员手动执行", &oid)?;
+                Ok(Some((order, pwd)))
+            }
+            None => Ok(None),
+        }
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .and_then(|v| v);
+
+    let (order, password) = match loaded {
+        Ok(Some(v)) => v,
+        Ok(None) => return Json(json!({"success": false, "message": "订单不存在"})),
+        Err(e) => return Json(json!({"success": false, "message": e.to_string()})),
+    };
+    let username = order["username"].as_str().unwrap_or("").to_string();
+    if username.is_empty() || password.is_empty() {
+        return Json(json!({"success": false, "message": "订单账号或凭据缺失，无法执行"}));
+    }
+    let website_id = order["website_id"].as_i64().unwrap_or(1);
+    let course_ids: Vec<String> = order["course_ids"].as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+
+    let push_url = state.push_url.clone();
+    let push_token = state.push_token.clone();
+    let tasks = state.tasks.clone();
+    let oid_task = order_id.clone();
+    let oid_resp = order_id.clone();
+    let handle = tokio::spawn(async move {
+        let base_url = crate::scan::platform_base_url(website_id);
+        let session = match crate::session::get_session(&base_url, &username, &password).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(order_id = %oid_task, error = %e, "手动执行：登录失败");
+                tasks.remove(&oid_task);
+                return;
+            }
+        };
+        let tmpdir = std::env::temp_dir().join(format!("task_{oid_task}"));
+        let _ = tokio::fs::create_dir_all(&tmpdir).await;
+        let task = crate::scan::ScanTaskInput {
+            order_id: oid_task.clone(),
+            username,
+            password,
+            base_url,
+            cookie_str: session.cookie_str,
+            course_ids,
+            status_file: tmpdir.join("status.json").to_string_lossy().to_string(),
+            push_ws: false,
+        };
+        if let Err(e) = crate::scan::run_scan_and_study(&task, &push_url, &push_token).await {
+            tracing::warn!(order_id = %oid_task, error = %e, "手动执行任务失败");
+        }
+        let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+        tasks.remove(&oid_task);
+    });
+    state.tasks.insert(oid_resp.clone(), handle);
+    Json(json!({"success": true, "message": "订单执行中", "data": {"order_id": oid_resp}}))
+}
+
+// ── 管理端：改密 / 配置 ─────────────────────────────────────────────────
+
+async fn admin_change_password(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(body): Json<Value>,
+) -> Json<Value> {
+    let old = body["old_password"].as_str().unwrap_or("");
+    let new = body["new_password"].as_str().unwrap_or("");
+    if new.len() < 6 {
+        return Json(json!({"success": false, "message": "新密码至少 6 位"}));
+    }
+    // 用当前登录身份校验旧密码
+    if crate::auth::check_user(&state, &claims.sub, old).await.is_none() {
+        return Json(json!({"success": false, "message": "原密码错误"}));
+    }
+    let hash = match bcrypt::hash(new, 10) {
+        Ok(h) => h,
+        Err(e) => return Json(json!({"success": false, "message": format!("哈希失败: {e}")})),
+    };
+    let db = state.db.clone_pool();
+    let username = claims.sub.clone();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+        let conn = db.get()?;
+        Ok(conn.execute(
+            "UPDATE users SET password_hash=?1 WHERE username=?2 AND deleted_at IS NULL",
+            rusqlite::params![hash, username],
+        )?)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .and_then(|v| v);
+    match result {
+        Ok(n) if n > 0 => Json(json!({"success": true, "message": "密码已修改"})),
+        Ok(_) => Json(json!({"success": false, "message": "用户不存在"})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+/// 系统配置读取：全部非敏感配置键值对（前端 ConfigTab 用）
+async fn admin_config_get(State(state): State<AppState>) -> Json<Value> {
+    let db = state.db.clone_pool();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Map<String, Value>> {
+        let conn = db.get()?;
+        let mut stmt = conn.prepare("SELECT config_key, config_value FROM system_config")?;
+        let mut out = Map::new();
+        for r in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+            let (k, v) = r?;
+            // 密钥类配置脱敏返回
+            if k.contains("api_key") || k.contains("secret") {
+                out.insert(k, json!("***"));
+            } else {
+                out.insert(k, json!(v));
+            }
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .and_then(|v| v);
+    match result {
+        Ok(data) => Json(json!({"success": true, "message": "ok", "data": data})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+async fn admin_config_set(State(state): State<AppState>, Json(body): Json<Value>) -> Json<Value> {
+    let key = body["key"].as_str().unwrap_or("").to_string();
+    if key.is_empty() {
+        return Json(json!({"success": false, "message": "key 不能为空"}));
+    }
+    let value = match body.get("value") {
+        Some(Value::String(s)) => s.clone(),
+        Some(v) => v.to_string(),
+        None => String::new(),
+    };
+    match crate::queue::config_set(&state.db, &key, &value).await {
+        Ok(()) => Json(json!({"success": true, "message": "配置已保存"})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+// ── 队列管理 ────────────────────────────────────────────────────────────
+
+const QUEUE_TABLES: &[&str] = &["queue_jobs_school", "queue_jobs_chaoxing"];
+
+/// 队列任务列表（两表合并，附 queue 标识）
+async fn queue_jobs(
+    State(state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Json<Value> {
+    let queue_filter = params.get("queue").cloned().unwrap_or_default();
+    let status_filter = params.get("status").cloned().unwrap_or_default();
+    let db = state.db.clone_pool();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Value>> {
+        let conn = db.get()?;
+        let mut out = Vec::new();
+        for table in QUEUE_TABLES {
+            let queue_tag = if *table == "queue_jobs_chaoxing" { "chaoxing" } else { "school" };
+            if !queue_filter.is_empty() && queue_filter != queue_tag {
+                continue;
+            }
+            let mut sql = format!(
+                "SELECT job_id, username, order_id, status, progress, current_step_name,
+                        error_message, retry_count, verified, job_type, created_at,
+                        started_at, finished_at
+                 FROM {table} WHERE deleted_at IS NULL"
+            );
+            let mut args: Vec<String> = Vec::new();
+            if !status_filter.is_empty() {
+                sql.push_str(" AND status=?");
+                args.push(status_filter.clone());
+            }
+            sql.push_str(" ORDER BY created_at DESC LIMIT 200");
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(args.iter()), |r| {
+                Ok(json!({
+                    "job_id": r.get::<_, String>(0)?,
+                    "username": r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    "order_id": r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    "status": r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                    "progress": r.get::<_, f64>(4)?,
+                    "current_step_name": r.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                    "error_message": r.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                    "retry_count": r.get::<_, i64>(7)?,
+                    "verified": r.get::<_, i64>(8)?,
+                    "job_type": r.get::<_, Option<String>>(9)?.unwrap_or_default(),
+                    "created_at": r.get::<_, Option<String>>(10)?.unwrap_or_default(),
+                    "started_at": r.get::<_, Option<String>>(11)?,
+                    "finished_at": r.get::<_, Option<String>>(12)?,
+                    "queue": queue_tag,
+                }))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+            out.extend(rows);
+        }
+        out.sort_by(|a, b| b["created_at"].as_str().cmp(&a["created_at"].as_str()));
+        Ok(out)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .and_then(|v| v);
+    match result {
+        Ok(data) => Json(json!({"success": true, "message": "ok", "data": data})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+/// 在两张队列表中定位 job_id 所属表
+fn find_job_table(conn: &rusqlite::Connection, job_id: &str) -> Option<&'static str> {
+    for t in QUEUE_TABLES {
+        let exists: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {t} WHERE job_id=?1"), rusqlite::params![job_id], |r| r.get(0))
+            .unwrap_or(0);
+        if exists > 0 {
+            return Some(t);
+        }
+    }
+    None
+}
+
+async fn queue_job_cancel(State(state): State<AppState>, Path(job_id): Path<String>) -> Json<Value> {
+    queue_job_action(&state, &job_id,
+        "UPDATE {t} SET status='cancelled', finished_at=?1 WHERE job_id=?2 AND status IN ('pending','running','retrying','waiting')",
+        "任务已取消").await
+}
+
+async fn queue_job_retry(State(state): State<AppState>, Path(job_id): Path<String>) -> Json<Value> {
+    queue_job_action(&state, &job_id,
+        "UPDATE {t} SET status='retrying', retry_count=retry_count+1, error_message='', finished_at=NULL WHERE job_id=?2 AND status IN ('failed','cancelled')",
+        "任务已重新入队").await
+}
+
+async fn queue_job_delete(State(state): State<AppState>, Path(job_id): Path<String>) -> Json<Value> {
+    queue_job_action(&state, &job_id,
+        "UPDATE {t} SET deleted_at=?1 WHERE job_id=?2", "任务已删除").await
+}
+
+/// 队列 job 通用动作：定位表 → 执行 UPDATE（?1=now, ?2=job_id）
+async fn queue_job_action(state: &AppState, job_id: &str, sql_tpl: &str, ok_msg: &str) -> Json<Value> {
+    let db = state.db.clone_pool();
+    let jid = job_id.to_string();
+    let tpl = sql_tpl.to_string();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+        let conn = db.get()?;
+        let table = find_job_table(&conn, &jid).ok_or_else(|| anyhow::anyhow!("任务不存在"))?;
+        let sql = tpl.replace("{t}", table);
+        Ok(conn.execute(&sql, rusqlite::params![crate::queue::now_str(), jid])?)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .and_then(|v| v);
+    match result {
+        Ok(_) => Json(json!({"success": true, "message": ok_msg})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+/// 清空历史任务（软删除全部终态）
+async fn queue_clear(State(state): State<AppState>) -> Json<Value> {
+    let db = state.db.clone_pool();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+        let conn = db.get()?;
+        let now = crate::queue::now_str();
+        let mut n = 0usize;
+        for t in QUEUE_TABLES {
+            n += conn.execute(
+                &format!(
+                    "UPDATE {t} SET deleted_at=?1
+                     WHERE deleted_at IS NULL AND status IN ('completed','failed','cancelled')"
+                ),
+                rusqlite::params![now],
+            )?;
+        }
+        Ok(n)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .and_then(|v| v);
+    match result {
+        Ok(n) => Json(json!({"success": true, "message": format!("已清除 {n} 条历史任务")})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+async fn queue_pause_all(State(state): State<AppState>) -> Json<Value> {
+    set_pause(&state, &["queue_paused"], "1", "全部队列已暂停").await
+}
+
+async fn queue_resume_all(State(state): State<AppState>) -> Json<Value> {
+    set_pause(&state, &["queue_paused"], "0", "全部队列已恢复").await
+}
+
+async fn queue_pause_one(State(state): State<AppState>, Path(queue): Path<String>) -> Json<Value> {
+    let key = pause_key(&queue);
+    set_pause(&state, &[key.as_str()], "1", "队列已暂停").await
+}
+
+async fn queue_resume_one(State(state): State<AppState>, Path(queue): Path<String>) -> Json<Value> {
+    let key = pause_key(&queue);
+    set_pause(&state, &[key.as_str()], "0", "队列已恢复").await
+}
+
+fn pause_key(queue: &str) -> String {
+    format!("queue_paused_{queue}")
+}
+
+async fn set_pause(state: &AppState, keys: &[&str], value: &str, msg: &str) -> Json<Value> {
+    for k in keys {
+        if let Err(e) = crate::queue::config_set(&state.db, k, value).await {
+            return Json(json!({"success": false, "message": e.to_string()}));
+        }
+    }
+    Json(json!({"success": true, "message": msg}))
+}
+
+/// 并发数配置：?max_workers=N 或 ?auto=true（按机器规格推荐）
+async fn queue_config(
+    State(state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Json<Value> {
+    let specs = tokio::task::spawn_blocking(|| server_specs().clone())
+        .await
+        .unwrap_or(Value::Null);
+    let current = crate::queue::config_get(&state.db, "queue_max_workers").await
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(default_max_workers());
+    let auto = params.get("auto").map(|v| v == "true").unwrap_or(false);
+    let value = if auto {
+        specs["recommended_workers"].as_u64().unwrap_or(current as u64) as usize
+    } else {
+        match params.get("max_workers").and_then(|v| v.parse::<usize>().ok()) {
+            Some(n) if n > 0 => n,
+            _ => {
+                return Json(json!({"success": false, "message": "max_workers 非法"}));
+            }
+        }
+    };
+    match crate::queue::config_set(&state.db, "queue_max_workers", &value.to_string()).await {
+        Ok(()) => Json(json!({"success": true, "message": "并发数已更新", "data": {"max_workers": value}})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+/// 机器规格检测（CPU/内存/推荐并发），结果进程内缓存（探测较重）
+fn server_specs() -> &'static Value {
+    static SPECS: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    SPECS.get_or_init(|| {
+        let cpu = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+        let mem_gb = detect_memory_gb();
+        // 推荐并发：CPU 核数 - 1（留一颗给系统），内存每 1GB 允许 2 个任务，取小值，夹在 1..=16
+        let by_cpu = cpu.saturating_sub(1).max(1);
+        let by_mem = if mem_gb > 0.0 { (mem_gb * 2.0) as usize } else { by_cpu };
+        let recommended = by_cpu.min(by_mem).clamp(1, 16);
+        json!({
+            "cpu_count": cpu,
+            "total_mem_gb": (mem_gb * 10.0).round() / 10.0,
+            "recommended_workers": recommended,
+        })
+    })
+}
+
+/// 默认并发：CPU 核数 - 1（夹在 1..=8），与队列调度器启动默认一致
+fn default_max_workers() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).saturating_sub(1).clamp(1, 8)
+}
+
+#[cfg(target_os = "linux")]
+fn detect_memory_gb() -> f64 {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|s| {
+            s.lines().find(|l| l.starts_with("MemTotal:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|v| v.parse::<f64>().ok())
+        })
+        .map(|kb| kb / 1024.0 / 1024.0)
+        .unwrap_or(0.0)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn detect_memory_gb() -> f64 {
+    // Windows：CIM 查询物理内存（按需调用，结果已被 OnceLock 缓存）
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command",
+               "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory"])
+        .output();
+    out.ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .map(|bytes| bytes / 1024.0 / 1024.0 / 1024.0)
+        .unwrap_or(0.0)
+}
+
+async fn queue_detect(State(state): State<AppState>) -> Json<Value> {
+    let mut data = tokio::task::spawn_blocking(|| server_specs().clone())
+        .await
+        .unwrap_or(Value::Null);
+    let current = crate::queue::config_get(&state.db, "queue_max_workers").await
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(default_max_workers());
+    data["current_workers"] = json!(current);
+    Json(json!({"success": true, "message": "ok", "data": data}))
+}
+
+

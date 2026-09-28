@@ -15,11 +15,8 @@ use std::sync::LazyLock;
 use crate::llm::{confidence_heuristic, LlmClient};
 
 fn make_client() -> Client {
-    Client::builder()
-        .danger_accept_invalid_certs(true)
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .build()
-        .expect("构建考试 client 失败")
+    crate::platform_client::build_client_with_ua(
+        crate::platform_client::SHORT_UA, false, None)
 }
 
 /// 题级答案缓存（对齐 AIAnswerer._cache：key = 题干前 100 字符）

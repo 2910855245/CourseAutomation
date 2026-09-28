@@ -17,7 +17,7 @@ fn gen_order_id() -> String {
 }
 
 /// 游客查单凭证（对齐 make_view_token：sha256(order_id:secret)[:24]）
-fn view_token(order_id: &str) -> String {
+pub(crate) fn view_token(order_id: &str) -> String {
     let secret = std::env::var("JWT_SECRET_KEY").unwrap_or_default();
     let digest = Sha256::digest(format!("{order_id}:{secret}").as_bytes());
     let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
@@ -79,6 +79,45 @@ impl Round2 for f64 {
     fn round_to_2(self) -> f64 {
         (self * 100.0).round() / 100.0
     }
+}
+
+/// 单门课定价 + 档位标签（对齐 order_service 的 course 条目输出）
+/// 返回 (course_id, type, price, label)，供 /api/pricing/calculate 逐课回显
+pub fn price_course_entry(cd: &Value, cfg: &Value) -> Value {
+    let course_id = cd["course_id"].as_str().unwrap_or("").to_string();
+    let video_total = cd["video_total"].as_i64().unwrap_or(0);
+    let video_completed = cd["video_completed"].as_i64().unwrap_or(0);
+    let exam_total = cd["exam_total"].as_i64().unwrap_or(0);
+    let exam_done = cd["exam_done"].as_i64().unwrap_or(0);
+    let homework_total = cd["homework_total"].as_i64().unwrap_or(0);
+    let homework_done = cd["homework_done"].as_i64().unwrap_or(0);
+
+    let video_all_done = video_total > 0 && video_completed >= video_total;
+    let has_exam = exam_total > 0 && exam_done < exam_total;
+    let has_homework = homework_total > 0 && homework_done < homework_total;
+    // 视频尚未刷完 → 走打包价；否则按剩余项定价
+    let use_package = video_total > 0 && !video_all_done;
+
+    let (kind, label) = if use_package {
+        let base = if video_total <= 30 { "小档" } else if video_total <= 80 { "中档" } else { "大档" };
+        ("package", format!("视频打包·{base}"))
+    } else {
+        match (has_exam, has_homework) {
+            (true, true) => ("exam_homework", "考试+作业".to_string()),
+            (true, false) => ("exam", "仅考试".to_string()),
+            (false, true) => ("homework", "仅作业".to_string()),
+            (false, false) => ("done", "已完成".to_string()),
+        }
+    };
+    let price = price_single_course(cd, cfg);
+    json!({"course_id": course_id, "type": kind, "price": price, "label": label})
+}
+
+/// 批量定价（/api/pricing/calculate）→ (逐课条目, 总价)
+pub fn price_courses(cfg: &Value, courses: &[Value]) -> (Vec<Value>, f64) {
+    let entries: Vec<Value> = courses.iter().map(|c| price_course_entry(c, cfg)).collect();
+    let total = entries.iter().map(|e| e["price"].as_f64().unwrap_or(0.0)).sum::<f64>().round_to_2();
+    (entries, total)
 }
 
 /// 单门课定价（对齐 order_service._price_single_course）
@@ -168,19 +207,21 @@ async fn create_order(db: &Db, username: &str, password: &str, item: &Value,
 
     tokio::task::spawn_blocking(move || -> Result<()> {
         let conn = pool.get()?;
+        // 密码不落 orders 明文列，统一进加密凭据表（crypto::store）
         conn.execute(
             "INSERT INTO orders (order_id, out_trade_no, ezfpy_trade_no, payment_channel,
                                  paid_processed, user_id, customer_name, customer_contact,
                                  username, password, website_id, task_type, course_ids,
                                  video_count, exam_count, price, notes, status, paid,
                                  admin_note, created_at, updated_at)
-             VALUES (?1,'','','','unprocessed',?2,'','',?3,?4,?5,?6,?7,?8,?9,?10,'',
-                     'pending',0,'',?11,?11)",
+             VALUES (?1,'','','','unprocessed',?2,'','',?3,'',?4,?5,?6,?7,?8,?9,'',
+                     'pending',0,'',?10,?10)",
             rusqlite::params![
-                order_id2, user_id, username, password, website_id, task_type,
+                order_id2, user_id, username, website_id, task_type,
                 course_ids, video_count, exam_count, price, now,
             ],
         )?;
+        crate::crypto::store(&conn, &order_id2, &username, &password)?;
         Ok(())
     })
     .await??;

@@ -4,7 +4,6 @@
 //! 登录成功后返回 cookie_str 供后续扫描/刷课使用。重试上限 10 次（与 Python 一致）。
 
 use anyhow::{bail, Context, Result};
-use reqwest::cookie::CookieStore;
 use reqwest::Client;
 use std::sync::Arc;
 
@@ -18,16 +17,38 @@ pub struct SchoolSession {
 /// 构建带显式 cookie jar 的 client。平台把会话 cookie（token=sid.xxx）
 /// 放在取验证码的响应里，登录成功响应本身不带 set-cookie，
 /// 因此必须从 jar 里提取，返回 jar 供调用方读取。
+/// 统一走 platform_client（UA/重定向/TLS 策略集中管理）。
 fn make_client() -> (Client, Arc<reqwest::cookie::Jar>) {
     let jar = Arc::new(reqwest::cookie::Jar::default());
-    let client = Client::builder()
-        .danger_accept_invalid_certs(true)
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .redirect(reqwest::redirect::Policy::none())
-        .cookie_provider(Arc::clone(&jar)) // 验证码与 cookie 中的 session 绑定，必须持久化
-        .build()
-        .expect("构建登录 client 失败");
+    let client = crate::platform_client::build_client(true, Some(Arc::clone(&jar)));
     (client, jar)
+}
+
+/// 取验证码并 OCR，最多重取 3 次直到结果「看起来合法」（4 位字母数字）。
+/// 非法结果直接丢弃重取，避免把噪声送去平台白白计一次失败。
+async fn fetch_captcha_code(client: &Client, captcha_url: &str, login_url: &str) -> String {
+    for _ in 0..3 {
+        let img = match client.get(captcha_url)
+            .header("Referer", login_url)
+            .header("X-Requested-With", "XMLHttpRequest")
+            .send().await
+        {
+            Ok(r) => match r.bytes().await { Ok(b) => b, Err(_) => continue },
+            Err(_) => continue,
+        };
+        let code = if let Ok(engine) = ocr::engine() {
+            let bytes = img.to_vec();
+            tokio::task::spawn_blocking(move || engine.recognize(&bytes))
+                .await.ok().and_then(|r| r.ok()).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        if ocr::plausible(&code) {
+            return code;
+        }
+    }
+    // 3 次都不可信：返回空串，交回主循环（平台返回「验证码有误」后重取）
+    String::new()
 }
 
 /// 登录学校平台（对齐 login_single_platform 主流程）
@@ -43,26 +64,11 @@ pub async fn login_school(base_url: &str, username: &str, password: &str) -> Res
     // 现行平台登录页已无该字段（schoolId 为 localStorage 隐藏项），预检纯属
     // 浪费一次整页请求，已移除。school_ids 恒为 None，不会附加 schoolId。
     let school_ids: Option<Vec<String>> = None;
-    let mut school_id_index = 0usize;
+    let school_id_index = 0usize;
 
     for _attempt in 0..10 {
-        // 获取验证码图片
-        let img = client.get(&captcha_url)
-            .header("Referer", &login_url)
-            .header("X-Requested-With", "XMLHttpRequest")
-            .send().await
-            .context("获取验证码失败")?
-            .bytes().await
-            .context("验证码读取失败")?;
-
-        // 本地 OCR 识别（CPU 密集，放阻塞线程池）
-        let code = if let Ok(engine) = ocr::engine() {
-            let bytes = img.to_vec();
-            tokio::task::spawn_blocking(move || engine.recognize(&bytes))
-                .await.ok().and_then(|r| r.ok()).unwrap_or_default()
-        } else {
-            String::new()
-        };
+        // 获取验证码图片 + 本地 OCR（含合法性预校验，见 fetch_captcha_code）
+        let code = fetch_captcha_code(&client, &captcha_url, &login_url).await;
 
         let mut form = vec![
             ("username", username.to_string()),
@@ -94,10 +100,7 @@ pub async fn login_school(base_url: &str, username: &str, password: &str) -> Res
         if status == 302 || (text.contains("\"status\":true") && text.contains("登录成功")) {
             // 会话 cookie 是取验证码时种进 jar 的（token=sid.xxx），
             // 登录响应本身不带 set-cookie，从 jar 提取。
-            let url: reqwest::Url = base.parse().context("base_url 解析失败")?;
-            let cookie_str = jar.cookies(&url)
-                .and_then(|h| h.to_str().ok().map(String::from))
-                .unwrap_or_default();
+            let cookie_str = crate::platform_client::jar_cookie_str(&jar, &base);
             if cookie_str.is_empty() {
                 bail!("登录成功但未获取到 cookie");
             }

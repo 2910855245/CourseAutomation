@@ -95,6 +95,16 @@ impl CaptchaOcr {
     }
 }
 
+/// 验证码合法性预校验（提交前本地过滤，减少无效提交与平台风控计数）
+///
+/// 平台 `/service/code` 固定返回 4 位字母数字。OCR 结果若长度不符或含
+/// 非字母数字（噪声、标点、空格），必然被平台判为「验证码有误」，
+/// 直接丢弃重新取图，而不是白送一次失败请求。
+pub fn plausible(code: &str) -> bool {
+    let code = code.trim();
+    code.chars().count() == 4 && code.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
 pub static ENGINE: OnceLock<Result<CaptchaOcr, String>> = OnceLock::new();
 
 pub fn engine() -> Result<&'static CaptchaOcr> {

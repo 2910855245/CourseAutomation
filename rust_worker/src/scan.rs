@@ -272,11 +272,8 @@ async fn write_scan_status(status_file: &str, phase: &str, message: &str,
 pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
                                 push_token: &str) -> Result<()> {
     let base_url = task.base_url.trim_end_matches('/').to_string();
-    let client = Client::builder()
-        .danger_accept_invalid_certs(true)
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .build()
-        .context("构建 HTTP client 失败")?;
+    let client = crate::platform_client::build_client_with_ua(
+        crate::platform_client::SHORT_UA, false, None);
 
     // course_ids 过滤集（兼容 "courseId" 与 "courseId:classId" 两种格式）
     let filter: HashSet<String> = task.course_ids.iter()

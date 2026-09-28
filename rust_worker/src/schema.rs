@@ -61,6 +61,14 @@ CREATE TABLE IF NOT EXISTS orders (
     deleted_at VARCHAR(255)
 );
 
+CREATE TABLE IF NOT EXISTS credentials (
+    order_id VARCHAR(255) PRIMARY KEY,
+    username VARCHAR(255) DEFAULT '',
+    password_enc TEXT DEFAULT '',
+    nonce VARCHAR(64) DEFAULT '',
+    created_at VARCHAR(255) NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS system_config (
     config_key VARCHAR(255) PRIMARY KEY,
     config_value TEXT DEFAULT '',
@@ -260,6 +268,13 @@ pub fn ensure_schema(pool: &Pool<SqliteConnectionManager>) -> Result<()> {
          WHERE NOT EXISTS (SELECT 1 FROM ypay_settings)",
     )
     .context("迁移失败: vmq_settings -> ypay_settings")?;
+
+    // orders.password 明文 → 加密凭据表（幂等，仅首次有效）
+    match crate::crypto::migrate_plaintext_credentials(&conn) {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(migrated = n, "明文密码已迁移至加密凭据表"),
+        Err(e) => tracing::warn!(error = %e, "明文凭据迁移失败（保留原列，下次启动重试）"),
+    }
 
     Ok(())
 }
