@@ -1,4 +1,0 @@
-# OCR sidecar 独立依赖（ocr_sidecar.py，127.0.0.1:17018）
-# 主服务不加载 ddddocr，部署时单独安装：
-#   pip install -r requirements-ocr.txt
-ddddocr>=1.4.0

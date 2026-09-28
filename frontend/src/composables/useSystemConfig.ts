@@ -218,7 +218,6 @@ export function useSystemConfig() {
 
   // ── Risk / Health ──
   const riskDomainStatus = ref<any>(null)
-  const riskJsStatus = ref<any>(null)
   const riskHealth = ref<any>(null)
   const riskAlerts = ref<any[]>([])
   const loadingRisk = ref(false)
@@ -277,11 +276,6 @@ export function useSystemConfig() {
     const domainCount = riskDomainStatus.value?.known_domains ? Object.keys(riskDomainStatus.value.known_domains).length : 0
     checks.push({ id: 'domain', name: '域名监控', expanded: false, desc: `正在监控 ${domainCount} 个域名`, status: domainCount > 0 ? 'pass' : 'warn' })
 
-    const jsFiles = riskJsStatus.value?.files?.length || 0
-    const jsChecked = !!riskJsStatus.value?.last_check
-    const jsChanged = riskJsStatus.value?.last_change && (Date.now() - new Date(riskJsStatus.value.last_change).getTime()) < 86400000
-    checks.push({ id: 'js', name: 'JS 反作弊监控', expanded: false, desc: jsChanged ? '检测到近期 JS 变更' : jsChecked ? `监控 ${jsFiles} 个文件，无变更` : '尚未执行过检查', status: jsChanged ? 'warn' : 'pass' })
-
     const alertCount = riskAlerts.value?.length || 0
     checks.push({ id: 'alerts', name: '安全告警', expanded: false, desc: alertCount > 0 ? `${alertCount} 条未处理告警` : '无告警', status: alertCount === 0 ? 'pass' : alertCount < 5 ? 'warn' : 'fail' })
 
@@ -294,11 +288,11 @@ export function useSystemConfig() {
   async function loadRiskData() {
     loadingRisk.value = true
     try {
-      const [ds, js, health, alerts] = await Promise.all([
-        api.adminDomainMonitor.status(), api.adminDomainMonitor.jsStatus(),
+      const [ds, health, alerts] = await Promise.all([
+        api.adminDomainMonitor.status(),
         api.adminDomainMonitor.health(), api.adminDomainMonitor.alerts(30),
       ])
-      riskDomainStatus.value = ds.data; riskJsStatus.value = js.data
+      riskDomainStatus.value = ds.data
       riskHealth.value = health.data; riskAlerts.value = alerts.data || []
       riskIntervalInput.value = ds.data?.interval || 3600
       buildRiskChecks()
@@ -318,17 +312,6 @@ export function useSystemConfig() {
     finally { riskChecking.value = false }
   }
 
-  async function runJsCheck() {
-    riskChecking.value = true
-    try {
-      const res = await api.adminDomainMonitor.jsCheck()
-      if (res.data?.changes?.length) { store.toast(`检测到 ${res.data.changes.length} 个JS文件变更`, 'warning') }
-      else { store.toast(`JS检查完成，共检查 ${res.data?.files_checked || 0} 个文件，无变更`, 'success') }
-      loadRiskData()
-    } catch (e: any) { store.toast(e.message, 'error') }
-    finally { riskChecking.value = false }
-  }
-
   async function saveRiskInterval() {
     try { await api.adminDomainMonitor.setInterval(riskIntervalInput.value); store.toast('检查间隔已保存', 'success') }
     catch (e: any) { store.toast(e.message, 'error') }
@@ -342,9 +325,6 @@ export function useSystemConfig() {
       if (dsRes.data?.new_domains?.length || dsRes.data?.changed_domains?.length) {
         store.toast(`检测到变更: ${dsRes.data.new_domains?.length || 0}个新域名, ${dsRes.data.changed_domains?.length || 0}个变更`, 'warning')
       }
-      riskCheckStep.value = 'JS 反作弊'
-      const jsRes = await api.adminDomainMonitor.jsCheck()
-      if (jsRes.data?.changes?.length) { store.toast(`检测到 ${jsRes.data.changes.length} 个JS文件变更`, 'warning') }
       riskCheckStep.value = '刷新数据'
       await loadRiskData()
       store.toast('全面检查完成', 'success')
@@ -393,11 +373,11 @@ export function useSystemConfig() {
     proxyForm, proxySaving, proxyTesting, proxyTestResult, proxyTestOk, serverPublicIp,
     loadProxySettings, saveProxy, testProxy, fetchServerPublicIp,
     // Risk
-    riskDomainStatus, riskJsStatus, riskHealth, riskAlerts, loadingRisk, riskChecking,
+    riskDomainStatus, riskHealth, riskAlerts, loadingRisk, riskChecking,
     riskIntervalInput, showAddDomainModal, addDomainForm, riskCheckStep,
     riskChecks,
     riskScore, riskScoreColor, riskScoreLevel, riskScoreText, riskScoreDesc, riskScoreDash,
-    buildRiskChecks, loadRiskData, runDomainCheck, runJsCheck, saveRiskInterval,
+    buildRiskChecks, loadRiskData, runDomainCheck, saveRiskInterval,
     runFullRiskCheck, addDomain, removeDomain, clearRiskAlerts,
     // Constants
     platformColors, taskTypeNames, tierNames,

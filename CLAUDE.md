@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Multi-project workspace for an online course automation SaaS platform. The primary project is **Anti-Course Cheating Plugin** — a FastAPI + Vue3 full-stack system that automates video watching and exam completion for online course platforms (粟湾平台, 劳动教育平台, 中嘉鑫盛, 学习通). Supports multi-user accounts, aggregated payment processing, and background task workers.
+Multi-project workspace for an online course automation SaaS platform. The primary project is **Anti-Course Cheating Plugin** — a Rust (axum) + Vue3 full-stack system that automates video watching and exam completion for online course platforms (粟湾平台, 劳动教育平台, 中嘉鑫盛, 学习通). Supports multi-user accounts, aggregated payment processing, and in-process background task workers. **Python 后端已彻底移除，唯一服务进程是 `rust_worker`。**
 
 ## Sub-Projects
 
 | Directory | Tech | Purpose |
 |-----------|------|---------|
-| `Anti-Course Cheating Plugin/` | Python (FastAPI) + Vue3 | Main SaaS platform |
+| `Anti-Course Cheating Plugin/` | Rust (axum) + Vue3 | Main SaaS platform |
 | `Vmq-App-3.0/` | Android (Gradle) | Payment monitoring APP |
 
 ## Common Commands
@@ -21,107 +21,73 @@ Multi-project workspace for an online course automation SaaS platform. The prima
 cd "Anti-Course Cheating Plugin"
 
 # Backend
-pip install -r requirements.txt
-python run.py                                    # Dev server (uvicorn, port 8000, hot reload)
-granian --interface asgi --host 0.0.0.0 --port 8000 run:app  # Production (Rust ASGI)
-python manage.py                                 # Interactive management menu (Linux)
+cd rust_worker
+cargo build --release      # Build the single-binary backend (Rust 1.97+)
+cargo run --release        # Run API + SPA hosting + OCR + study daemon on :17017
+cargo test                 # Unit tests
 
 # Frontend
 cd frontend
 npm install
-npm run dev                                      # Dev server (port 5173, proxies /api to :8000)
-npm run build                                    # Type check (vue-tsc) + build to ../static/
-
-# Workers (auto-started by API as subprocesses)
-python worker.py                                 # Course crawling worker
-python chaoxing_worker.py                        # 学习通 worker
-
+npm run dev                # Dev server (port 5173, proxies /api to :17017)
+npm run build              # Type check (vue-tsc) + build to ../static/
 ```
 
 ## Architecture — Anti-Course Cheating Plugin
 
 ### Request Flow
 
-1. Vue3 SPA built to `static/`, served by FastAPI SPA fallback
-2. `/api/` routes handled by `api/routers/`
-3. JWT auth + in-memory token blacklist
+1. Vue3 SPA built to `static/`, served by rust_worker SPA fallback
+2. `/api/` routes handled by axum routers in `rust_worker/src/`
+3. JWT auth + in-memory token blacklist (`auth.rs`)
 4. In-memory sliding-window rate limit middleware
 5. All non-API/non-static routes return `static/index.html`
 
-### Backend Layers (4-layer architecture)
+### Backend Modules (`rust_worker/src/`)
 
-**Router → services（单层）→ Database → Infrastructure**
+- **`main.rs`** — axum entry. Registers all routers, CORS, rate-limit, no-cache middleware, SPA fallback. Startup: `ensure_schema`, auto-create admin, init pricing, start task queues, recover running orders
+- **`schema.rs`** — Idempotent schema bootstrap: 11 tables + 17 indexes (`CREATE TABLE IF NOT EXISTS`), ypay_account column patches, `ypay_settings` ← `vmq_settings` migration. Runs on every startup via `Db::open`
+- **`db.rs`** — SQLite access layer (rusqlite, WAL + busy_timeout). `Db::open` invokes `schema::ensure_schema`
+- **`auth.rs`** — JWT create/verify, password hashing, token blacklist (in-memory), view token
+- **`api.rs` / `order.rs` / `progress.rs`** — Order lifecycle, pricing, progress query APIs
+- **`scan.rs` / `login.rs` / `study.rs` / `queue.rs`** — Course scan, school-platform login (local OCR captcha), study loop (tokio), persistent task queue
+- **`exam.rs` / `school_exam.rs`** — Exam answering (school platforms), exam list scraping, submission/heartbeat/cache
+- **`llm.rs`** — DeepSeek API client for AI answers
+- **`cx_scan.rs` / `cx_study.rs` / `cx_quiz.rs`** — 学习通专用：课程扫描、刷课（enc MD5 签名 + dtoken + 上报循环）、测评/讨论/笔记
+- **`pay.rs` / `pay_routes.rs` / `ypay_db.rs` / `ypay_qr.rs`** — 支付：YPay 集成 + HMAC 校验、VMQ 协议、通道分发 + 二维码、订单创建/回调/入队
+- **`ocr.rs` / `ocr_ort.rs`** — 验证码识别，进程内 ONNX Runtime 推理（无外部 OCR 服务）
 
-- **`run.py`** — Entry point. Sets China timezone, working dir, imports `api.main:app`. Exports `app` for granian/uvicorn compatibility
-- **`api/main.py`** — FastAPI entry. Registers all routers, CORS, rate-limit, no-cache middleware, SPA fallback. Lifecycle: auto-creates admin, initializes pricing, starts dual task queues, recovers running orders, starts GC/domain-monitor services
-- **`api/startup.py`** — Extracted startup logic: price init, queue callbacks, auto-cancel/heartbeat/order-recovery/session-restore daemon threads
-- **`api/database.py`** — SQLAlchemy ORM models (User, Order, WalletTransaction) + `Database` singleton. SQLite default, MySQL via `DATABASE_URL`. Table/column name whitelisting prevents SQL injection
-- **`api/db/`** — DB submodules: `models.py` (ORM models, dynamic queue job models `SchoolJobModel`/`ChaoxingJobModel`), `order_db.py`, `payment_db.py`, `config_db.py`, `user_db.py`
-- **`api/auth.py`** — JWT create/verify, bcrypt password hashing, token blacklist (in-memory), view token
-- **`api/routers/`** — Route handlers by domain: `orders.py`, `payment.py`, `admin.py`, `ypay_routes.py`, `ypay_vmq.py`, `ypay_app.py`, `pricing.py`, `users.py`, `captcha.py`, `domain_monitor.py`, `scan.py`, `progress.py`, `queue.py`
-- **`services/`** — Business logic: `task_queue.py` (persistent queue, SQLAlchemy-backed, split into `school_queue` + `chaoxing_queue`), `task_runner.py` (subprocess launcher), `ypay_service.py`, `risk.py`, `session_pool.py`, `proxy_config.py`, `job_executor.py`, `order_service.py`
-- **`config/`** — 包结构：`settings.py`（纯 env）、`platforms.py`（WEBSITES 静态数据）、`context.py`（contextvars 平台上下文）、`__init__.py`（兼容 shim + 账号路径）
+### 任务执行模型（单进程，无子进程 worker）
 
-### Worker Subprocess Model
-
-`worker_common.py` 提供 worker 共享样板：`send_status`（原子写+终态清理+WS 推送开关）、`push_ws_update`（X-Worker-Token 鉴权）、`register_signal_handlers`、`ensure_terminal_status`、`apply_proxy`、`bootstrap_worker`。
-
-Tasks dispatched as child processes by `task_runner.py`:
-- `worker.py` — Crawls course structure (videos, chapters)
-- 视频学习由 Rust daemon（rust_worker，:17017）执行，worker.py 提交任务；study_worker.py 已退役
-- `chaoxing_worker.py` — 学习通专用 worker
-
-**阶段拆分（固定，无回退）**：
-- 学校任务：crawl 阶段登录后提交 `/submit_full`（daemon 链式扫描+刷课）即退出；
-  学习完成后 monitor_study 起 exam 子进程（重扫 + 考试）
-- 学习通：crawl 阶段构造视频计划（积分+必学）提交 `/submit_cx`（cx_study.rs，
-  enc MD5 签名 + dtoken + 上报循环，上报走系统 TLS/HTTP1.1），
-  quiz 阶段（重新登录走 cookie 缓存）做测评/讨论/笔记/考试，daily_done 语义保留
-- Rust daemon 为硬依赖（reporter.py / 完整流程 / study_worker.py 均已删除）
-
-- `phase=crawl`：worker.py 登录/爬取 → 提交 Rust daemon → 写 heavy_done → **立即退出**
-- 主进程 monitor_study 线程监控 daemon 的 status.json（学习期数小时，无 Python 子进程空转）
-- 学习完成后 monitor_study 起 `phase=exam` 短命子进程（复用同一 tmpdir/status_file，重登走 cookie 缓存）
-- 回滚：WORKER_PHASE_SPLIT=false → phase=full 完整流程
-
-Workers write status to `{tmp}/task_*/status.json` and params to `/tmp/task_*/params.json`（原子写 + 退出兜底由 worker_common.py 统一）。Main API monitors these files.
-
-### Infrastructure Layer (`infrastructure/`)
-
-Low-level platform interaction:
-- `http_session.py` — HTTP wrapper with proxy/anti-detection support
-- `ocr.py` — ddddocr singleton
-- `school/` — 学校平台模块（course_crawler/captcha/exam_*/anti_test 等）
-- `chaoxing/` — 学习通专用模块（session 含 rnet TLS 指纹、quiz/reporter/discuss/points/crawler/scanner）
-
-### Services Layer (`services/`)
-
-Cross-domain business services: `multi_platform_auth.py` (multi-site login), `ai_service.py` (DeepSeek API for exam answers), `scan_service.py`
+- 所有任务（扫描/登录/刷课/考试/支付轮询）都是 rust_worker 进程内的 tokio 任务，每任务 ~1-2MB 内存
+- 学校任务：登录（本地 OCR 图形码）→ 链式扫描+刷课；学习完成后同进程进考试阶段
+- 学习通：`cx_study.rs` 刷课（上报走系统 TLS/HTTP1.1），`cx_quiz.rs` 做测评/讨论/笔记/考试，daily_done 语义保留
+- 点选验证码（易盾 dunclick, need_code=2）不支持：遇到直接报错；图形码（need_code=1）走本地 OCR
 
 ### Frontend (`frontend/src/`)
 
-Vue3 SPA with Pinia, Vue Router, TypeScript. Views: Home (scan + order + pay), Admin (full admin panel with tabs), Orders, Payment.
+Vue3 SPA with Pinia, Vue Router, TypeScript. Views: Home (scan + order + pay), Admin (full admin panel with tabs), Orders, Payment. Dev server proxies `/api` to `:17017`; production build is served by rust_worker itself.
 
 ### Key Design Patterns
 
-- **Multi-website support**: `config/platforms.py` `WEBSITES` dict; `config/context.py` contextvars（线程级平台上下文 + 进程默认回退）. User data isolated per `data/accounts/<username>/`
-- **Dual task queues**: `school_queue` (school platforms) and `chaoxing_queue` (学习通) independent, each with SQLAlchemy-backed task tables
+- **Multi-website support**: `WEBSITES` 静态数据在 Rust 侧（`scan.rs` 平台表常量）. User data isolated per `data/accounts/<username>/`
+- **Dual task queues**: `school_queue` (school platforms) and `chaoxing_queue` (学习通) independent, each backed by SQLite task tables
 - **Payment**: YPay integration + HMAC verification; VMQ protocol for WeChat/Alipay monitoring; Android APP (`static/ypay-monitor.apk`) for real-time payment detection
-- **Tunnel proxy**: Configured via admin panel, applied to all worker HTTP requests to prevent IP bans
-- **Anti-detection**: rnet TLS fingerprint spoofing for 学习通, random user agents, semaphore-limited concurrency (max 8 per course, 10 global), randomized delays
+- **Tunnel proxy**: Configured via admin panel, applied to outbound HTTP requests to prevent IP bans
+- **Anti-detection**: TLS fingerprint handling for 学习通, random user agents, semaphore-limited concurrency, randomized delays
 
 ### Configuration
 
-- **`.env`** — Required: `JWT_SECRET_KEY`, `DATABASE_URL`. See `.env.example`
-- Database: SQLite default (`data/orders.db`, WAL + busy_timeout), MySQL via `DATABASE_URL`
+- **`.env`** — Required: `JWT_SECRET_KEY`. See `.env.example`
+- Database: SQLite (`data/orders.db`, WAL + busy_timeout); schema auto-created/migrated by `schema.rs` at startup
+- Port: `RUST_DAEMON_PORT` (default 17017)
 - Default admin: `2910855245` / `woainima123` (auto-created on first startup)
 
 ### Data Directory Structure
 
 ```
 data/
-├── orders.db              # SQLite database
-├── task_queue.db          # Persistent task queue database
+├── orders.db              # SQLite database (all tables, incl. task queues)
 ├── accounts/<username>/   # Per-user isolated data
 │   ├── cookies/           # Platform session cookies (per website)
 │   ├── courses/<website>/ # Crawled course JSON
@@ -132,13 +98,10 @@ data/
 
 ## Coding Conventions
 
-- Python target: 3.10+
+- Rust: 1.97+, `cargo check` + `cargo test` must pass before closing out changes
 - Frontend: vue-tsc type check + vite build
-- Logging: loguru (not stdlib logging)
-- HTTP clients: httpx (general), rnet (anti-detection for 学习通)
-- HTML parsing: lxml (C 加速 xpath，已替换 scrapling/beautifulsoup4)
+- Logging: `tracing` / `log` crates (Rust side)
+- HTTP client: reqwest (rustls); ONNX Runtime via `ort` crate for captcha OCR
 - Sidecar services (systemd units in deploy/):
-  - `rust_worker` (Rust, :17017) — 刷课循环，Python 侧经 worker.py 提交任务
-  - `ocr_sidecar.py` (:17018) — ddddocr 验证码识别独立进程，主进程经 infrastructure/ocr.py HTTP 客户端调用（OcrClient.classification）
-  - `worker_pool_master.py` (:17019, 仅 Linux) — fork-COW 进程池：预热导入 worker 依赖后 fork 出任务子进程（每任务 ~35MB 而非 ~100MB）；WORKER_POOL_ENABLED=true 启用，Windows/不可达自动回退 spawn
+  - `rust-study-daemon.service` — the one and only backend service (API + SPA + OCR + study)
 - Platform passwords stored in plaintext (no encryption)

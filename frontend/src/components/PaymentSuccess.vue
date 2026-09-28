@@ -46,8 +46,8 @@ onUnmounted(() => { if (timer) clearTimeout(timer) })
     <div v-if="show" :class="['ps-overlay', { 'ps-exiting': exiting }]">
       <div :class="['ps-card', { 'ps-exiting': exiting }]">
         <svg class="ps-icon" viewBox="0 0 52 52">
-          <circle class="ps-circle" cx="26" cy="26" r="24" fill="none" stroke="#16a34a" stroke-width="2.5"/>
-          <path class="ps-check" fill="none" stroke="#16a34a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="M14 27l8 8 16-16"/>
+          <circle class="ps-circle" cx="26" cy="26" r="24" fill="none" stroke="#15803d" stroke-width="2.5"/>
+          <path class="ps-check" fill="none" stroke="#15803d" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="M14 27l8 8 16-16"/>
         </svg>
         <h2 class="ps-title">
 支付成功
@@ -71,27 +71,26 @@ onUnmounted(() => { if (timer) clearTimeout(timer) })
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  animation: overlayIn 0.25s ease-out both;
+  background: rgba(22, 22, 26, .42);
+  animation: overlayIn 0.25s cubic-bezier(.32,.72,.35,1) both;
 }
 .ps-overlay.ps-exiting {
-  animation: overlayOut 0.35s ease-in both;
+  animation: overlayOut 0.35s cubic-bezier(.32,.72,.35,1) both;
 }
 
 .ps-card {
-  background: #fff;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-light);
   border-radius: 20px;
   padding: 40px 48px 36px;
   text-align: center;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-  animation: cardIn 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  box-shadow: 0 8px 24px rgba(20, 20, 24, .09), 0 32px 80px rgba(20, 20, 24, .14);
+  animation: cardIn 0.45s cubic-bezier(0.34, 1.4, 0.64, 1) both;
   animation-delay: 0.1s;
   min-width: 240px;
 }
 .ps-card.ps-exiting {
-  animation: cardOut 0.3s ease-in both;
+  animation: cardOut 0.3s cubic-bezier(.32,.72,.35,1) both;
 }
 
 .ps-icon {
@@ -104,40 +103,42 @@ onUnmounted(() => { if (timer) clearTimeout(timer) })
 .ps-circle {
   stroke-dasharray: 151;
   stroke-dashoffset: 151;
-  animation: circleDraw 0.5s ease-out 0.2s both;
+  animation: circleDraw 0.5s cubic-bezier(.32,.72,.35,1) 0.2s both;
 }
 
 .ps-check {
   stroke-dasharray: 48;
   stroke-dashoffset: 48;
-  animation: checkDraw 0.35s ease-out 0.6s both;
+  animation: checkDraw 0.35s cubic-bezier(.32,.72,.35,1) 0.6s both;
 }
 
 .ps-title {
   font-size: 20px;
   font-weight: 700;
-  color: #1a1a1a;
+  letter-spacing: -0.01em;
+  color: var(--c-text, #1d1d1f);
   margin: 0 0 8px;
   opacity: 0;
-  animation: textIn 0.3s ease-out 0.85s both;
+  animation: textIn 0.3s cubic-bezier(.32,.72,.35,1) 0.85s both;
 }
 
 .ps-amount {
   font-size: 28px;
   font-weight: 700;
-  color: #16a34a;
+  letter-spacing: -0.02em;
+  color: var(--c-success, #34c759);
   margin: 0 0 6px;
   opacity: 0;
-  animation: textIn 0.3s ease-out 0.95s both;
+  animation: textIn 0.3s cubic-bezier(.32,.72,.35,1) 0.95s both;
   font-variant-numeric: tabular-nums;
 }
 
 .ps-subtitle {
   font-size: 14px;
-  color: #666;
+  color: var(--c-text-secondary, #6e6e73);
   margin: 0;
   opacity: 0;
-  animation: textIn 0.3s ease-out 1.05s both;
+  animation: textIn 0.3s cubic-bezier(.32,.72,.35,1) 1.05s both;
 }
 
 @keyframes overlayIn {

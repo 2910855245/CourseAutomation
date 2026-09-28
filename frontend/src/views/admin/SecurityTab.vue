@@ -276,3 +276,228 @@ const { DEEPSEEK_MODELS, chaoxingModel, clearDeepseekKey, deepseekApiKey, deepse
     </div>
   </div>
 </template>
+
+<style scoped>
+.security-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.security-tab > * {
+  animation: security-in .35s cubic-bezier(.32, .72, .35, 1) both;
+}
+
+.security-tab > *:nth-child(2) { animation-delay: .07s; }
+.security-tab > *:nth-child(3) { animation-delay: .14s; }
+
+@keyframes security-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.settings-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 16px;
+  padding: 26px 28px;
+  box-shadow: var(--shadow-xs);
+}
+
+.settings-card h3 {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--c-text);
+  margin-bottom: 18px;
+}
+
+.settings-hint {
+  font-size: 12.5px;
+  color: var(--c-text-muted);
+  margin-bottom: 22px;
+}
+
+.btn {
+  transition: all .2s cubic-bezier(.32, .72, .35, 1);
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(.97);
+}
+
+.btn-link {
+  transition: color .2s ease, opacity .2s ease;
+}
+
+.ai-section + .ai-section {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--c-border);
+}
+
+.ai-section-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--c-text-muted);
+  letter-spacing: .02em;
+  margin-bottom: 10px;
+}
+
+.ai-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--c-bg);
+  border-radius: 12px;
+}
+
+.ai-key-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ai-key-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+
+.ai-key-badge.on {
+  background: var(--c-success-bg);
+  color: var(--c-success);
+}
+
+.ai-key-badge.off {
+  background: var(--c-danger-bg);
+  color: var(--c-danger);
+}
+
+.ai-key-val {
+  font-family: var(--font-mono, 'SF Mono', Menlo, monospace);
+  font-size: 12.5px;
+  color: var(--c-text-secondary);
+}
+
+.ai-key-input-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 240px;
+}
+
+.ai-key-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.ai-row-bottom {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.ai-link {
+  color: var(--c-primary);
+  text-decoration: none;
+  transition: color .2s ease;
+}
+
+.ai-link:hover {
+  color: var(--c-primary-hover, var(--c-primary));
+  text-decoration: underline;
+}
+
+.ai-status-ok {
+  color: var(--c-success);
+  font-weight: 600;
+}
+
+.ai-status-fail {
+  color: var(--c-danger);
+}
+
+.ai-model-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.ai-model-card {
+  flex: 1 1 200px;
+  min-width: 180px;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  transition: transform .25s cubic-bezier(.32, .72, .35, 1), box-shadow .25s cubic-bezier(.32, .72, .35, 1), border-color .2s ease;
+}
+
+.ai-model-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+  border-color: transparent;
+}
+
+.ai-model-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--c-text);
+  margin-bottom: 10px;
+}
+
+.ai-model-head svg {
+  color: var(--c-primary);
+  flex-shrink: 0;
+}
+
+.ai-model-select {
+  width: 100%;
+}
+
+.ai-model-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ai-model-desc {
+  font-size: 12px;
+  color: var(--c-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  .settings-card {
+    padding: 18px;
+  }
+
+  .ai-model-grid {
+    flex-direction: column;
+  }
+
+  .ai-model-card {
+    flex: none;
+    width: 100%;
+  }
+
+  .ai-row-bottom {
+    flex-wrap: wrap;
+    gap: 8px 14px;
+  }
+}
+</style>

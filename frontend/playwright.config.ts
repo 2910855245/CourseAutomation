@@ -5,13 +5,13 @@ export default defineConfig({
   timeout: 30000,
   retries: 0,
   use: {
-    baseURL: 'http://localhost:8000',
+    baseURL: 'http://localhost:17017',
     headless: true,
   },
   webServer: {
-    command: 'cd .. && python run.py',
-    port: 8000,
-    timeout: 15000,
+    command: 'cd ../rust_worker && cargo run --release',
+    port: 17017,
+    timeout: 120000,
     reuseExistingServer: true,
   },
 })

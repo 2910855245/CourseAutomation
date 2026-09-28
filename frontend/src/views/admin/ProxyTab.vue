@@ -100,3 +100,155 @@ const { proxyForm, proxySaving, proxyTestOk, proxyTestResult, proxyTesting, save
     </div>
   </div>
 </template>
+
+<style scoped>
+.proxy-tab {
+  width: 100%;
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.proxy-tab > * {
+  animation: proxy-in .35s cubic-bezier(.32, .72, .35, 1) both;
+}
+
+.proxy-tab > *:nth-child(2) {
+  animation-delay: .07s;
+}
+
+@keyframes proxy-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.settings-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 16px;
+  padding: 26px 28px;
+  box-shadow: var(--shadow-xs);
+}
+
+.settings-card h3 {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--c-text);
+  margin-bottom: 6px;
+}
+
+.settings-hint {
+  font-size: 12.5px;
+  color: var(--c-text-muted);
+  margin-bottom: 22px;
+}
+
+.btn {
+  transition: all .2s cubic-bezier(.32, .72, .35, 1);
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(.97);
+}
+
+.proxy-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  background: var(--c-bg);
+  border-radius: 12px;
+  margin-bottom: 20px;
+}
+
+.proxy-toggle-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+.field input:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.proxy-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.proxy-test-result {
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  background: var(--c-danger-bg);
+  color: var(--c-danger);
+  animation: proxy-in .25s cubic-bezier(.32, .72, .35, 1) both;
+}
+
+.proxy-test-result.ok {
+  background: var(--c-success-bg);
+  color: var(--c-success);
+}
+
+.guide-details summary {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--c-text);
+  outline: none;
+  cursor: pointer;
+  transition: color .2s ease;
+}
+
+.guide-details summary:hover {
+  color: var(--c-primary);
+}
+
+.proxy-guide {
+  font-size: 13px;
+  line-height: 1.9;
+  color: var(--c-text-secondary);
+  padding-top: 14px;
+}
+
+.guide-step {
+  margin-bottom: 6px;
+}
+
+.guide-step code {
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.code-warn {
+  background: var(--c-danger-bg);
+  color: var(--c-danger);
+  border-color: transparent;
+}
+
+@media (max-width: 768px) {
+  .proxy-tab {
+    max-width: 100%;
+  }
+
+  .settings-card {
+    padding: 18px;
+  }
+
+  .proxy-actions {
+    flex-direction: column;
+  }
+
+  .proxy-actions .btn {
+    width: 100%;
+  }
+}
+</style>

@@ -116,7 +116,7 @@ watch(() => route.path, (_to, from) => {
 <style scoped>
 .page-fade-enter-active,
 .page-fade-leave-active {
-  transition: opacity .3s ease, transform .3s ease;
+  transition: opacity .3s cubic-bezier(.32,.72,.35,1), transform .3s cubic-bezier(.32,.72,.35,1);
 }
 .page-fade-enter-from {
   opacity: 0;
@@ -129,15 +129,15 @@ watch(() => route.path, (_to, from) => {
 
 .page-slide-enter-active,
 .page-slide-leave-active {
-  transition: opacity .35s cubic-bezier(.4,0,.2,1), transform .35s cubic-bezier(.4,0,.2,1);
+  transition: opacity .35s cubic-bezier(.32,.72,.35,1), transform .35s cubic-bezier(.32,.72,.35,1);
 }
 .page-slide-enter-from {
   opacity: 0;
-  transform: translateX(30px);
+  transform: translateX(24px);
 }
 .page-slide-leave-to {
   opacity: 0;
-  transform: translateX(-30px);
+  transform: translateX(-24px);
 }
 
 .app-root {
@@ -159,35 +159,65 @@ watch(() => route.path, (_to, from) => {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 18px;
-  border-radius: var(--radius);
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
   font-size: 13px;
   font-weight: 500;
   color: var(--c-text);
   background: var(--c-surface);
-  border: 1px solid var(--c-border);
+  border: 1px solid var(--c-border-light);
   box-shadow: var(--shadow-md);
-  animation: slideIn .3s ease;
+  animation: toastIn .3s cubic-bezier(.32,.72,.35,1) both;
   pointer-events: auto;
   max-width: 360px;
 }
-
-.toast.success { border-left: 3px solid var(--c-success); }
-.toast.success .toast-icon { color: var(--c-success); }
-.toast.error { border-left: 3px solid var(--c-danger); }
-.toast.error .toast-icon { color: var(--c-danger); }
-.toast.warning { border-left: 3px solid var(--c-warning); }
-.toast.warning .toast-icon { color: var(--c-warning); }
-.toast.info { border-left: 3px solid var(--c-info); }
-.toast.info .toast-icon { color: var(--c-info); }
 
 .toast-icon {
   flex-shrink: 0;
   display: flex;
   align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
 }
+
+.toast-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.toast.success .toast-icon { background: var(--c-success); color: #fff; }
+.toast.error .toast-icon { background: var(--c-danger); color: #fff; }
+.toast.warning .toast-icon { background: var(--c-warning); color: #fff; }
+.toast.info .toast-icon { background: var(--c-info); color: #fff; }
 
 .toast-msg {
   line-height: 1.4;
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateX(16px) scale(.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@media (max-width: 768px) {
+  .toast-container {
+    top: 12px;
+    right: 12px;
+    left: 12px;
+    align-items: center;
+  }
+
+  .toast {
+    max-width: 100%;
+    width: 100%;
+  }
 }
 </style>

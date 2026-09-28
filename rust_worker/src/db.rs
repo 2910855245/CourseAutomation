@@ -1,8 +1,7 @@
-//! SQLite 访问层 — 与 Python 侧共享同一 data/*.db（WAL 多进程安全）
+//! SQLite 访问层 — data/*.db（WAL 模式）
 //!
 //! rusqlite 直连 SQL（无 ORM），r2d2 连接池 + spawn_blocking 执行。
-//! 与 Python api/database.py 的建表/迁移职责分离：Rust 只读+写业务数据，
-//! 表结构由 Python 侧的 create_all 保证（迁移期双跑，Phase 7 后 Rust 接管建表）。
+//! 建表/迁移已由 Rust 接管（schema.rs，Phase 7），不再依赖 Python create_all。
 
 use anyhow::{Context, Result};
 use r2d2::Pool;
@@ -38,6 +37,8 @@ impl Db {
             .with_context(|| format!("打开数据库失败: {path}"))?;
         // 连接预热
         pool.get().context("数据库连接预热失败")?;
+        // 保证 schema 存在（Rust 接管建表，幂等）
+        crate::schema::ensure_schema(&pool).context("初始化数据库 schema 失败")?;
         Ok(Db { pool })
     }
 

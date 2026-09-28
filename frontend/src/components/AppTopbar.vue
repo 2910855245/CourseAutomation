@@ -39,25 +39,22 @@ const roleBadge = computed(() => {
   <header class="topbar">
     <div class="topbar-inner">
       <router-link to="/" class="logo">
-        <svg class="logo-icon" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M22 10.5V6a2 2 0 00-2-2H4a2 2 0 00-2 2v12a2 2 0 002 2h7"/><path d="M22 10.5L12 16l-3-1.7"/><path d="M12 16v5"/><path d="M22 10.5V12"/>
-        </svg>
-        <span>{{ title }}</span>
+        {{ title }}
       </router-link>
       <nav class="desktop-nav">
-        <router-link to="/">
+        <router-link to="/" exact-active-class="nav-active">
 首页
 </router-link>
-        <router-link to="/orders">
+        <router-link to="/orders" active-class="nav-active">
 我的订单
 </router-link>
-        <router-link v-if="isAdmin" to="/admin">
+        <router-link v-if="isAdmin" to="/admin" active-class="nav-active">
 管理后台
 </router-link>
-        <span v-if="showRoleBadge && roleBadge" class="topbar-role-badge" :class="'role-' + primaryRole">{{ roleBadge }}</span>
+        <span v-if="showRoleBadge && roleBadge" class="topbar-role-badge">{{ roleBadge }}</span>
         <a v-if="showLogout" href="#" class="logout-link" @click.prevent="emit('logout')">退出</a>
       </nav>
-      <button class="hamburger" :class="{ open: mobileMenuOpen }" @click="toggleMobileMenu">
+      <button class="hamburger" :class="{ open: mobileMenuOpen }" aria-label="菜单" @click="toggleMobileMenu">
         <span></span><span></span><span></span>
       </button>
     </div>
@@ -72,7 +69,7 @@ const roleBadge = computed(() => {
         <router-link v-if="isAdmin" to="/admin" class="mn-item">
 管理后台
 </router-link>
-        <span v-if="showRoleBadge && roleBadge" class="mn-badge" :class="'role-' + primaryRole">{{ roleBadge }}</span>
+        <span v-if="showRoleBadge && roleBadge" class="mn-badge">{{ roleBadge }}</span>
         <a v-if="showLogout" href="#" class="mn-item logout-link" @click.prevent="emit('logout'); closeMobileMenu()">退出</a>
       </div>
     </Transition>
@@ -82,55 +79,75 @@ const roleBadge = computed(() => {
 <style scoped>
 .topbar {
   position: sticky; top: 0; z-index: 100;
-  background: rgba(255,255,255,.82); backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--c-border);
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border-light);
 }
 .topbar-inner {
-  max-width: 1120px; margin: 0 auto; height: var(--topbar-h);
-  display: flex; align-items: center; justify-content: space-between; padding: 0 24px;
+  max-width: 820px; margin: 0 auto; height: 52px;
+  display: flex; align-items: center; justify-content: space-between; padding: 0 20px;
 }
 .logo {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 18px; font-weight: 700; color: var(--c-text); text-decoration: none;
+  font-size: 14px; font-weight: 600;
+  color: var(--c-text); text-decoration: none;
+  transition: opacity .2s ease;
 }
-.logo-icon { color: var(--c-primary); }
-.logo:hover { text-decoration: none; }
-.desktop-nav { display: flex; gap: 28px; align-items: center; }
+.logo:hover { opacity: .6; text-decoration: none; }
+
+.desktop-nav { display: flex; gap: 6px; align-items: center; }
 .desktop-nav a {
-  font-size: 13.5px; font-weight: 500; color: var(--c-text-secondary);
-  text-decoration: none; transition: color .15s;
+  position: relative;
+  font-size: 13px; font-weight: 500; color: var(--c-text-secondary);
+  text-decoration: none;
+  padding: 6px 10px;
+  transition: color .2s ease;
 }
-.desktop-nav a:hover, .desktop-nav a.router-link-active { color: var(--c-primary); text-decoration: none; }
-.logout-link { color: #ef4444 !important; }
+.desktop-nav a:hover {
+  color: var(--c-text);
+  text-decoration: none;
+  opacity: 1;
+}
+.desktop-nav a.nav-active {
+  color: var(--c-text);
+}
+.desktop-nav a.nav-active::after {
+  content: '';
+  position: absolute; left: 10px; right: 10px; bottom: 0;
+  height: 1px;
+  background: var(--c-text);
+}
+.logout-link { color: var(--c-danger) !important; }
 .topbar-role-badge {
-  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px;
-  letter-spacing: 0.5px; white-space: nowrap;
+  font-size: 11px; font-weight: 600; padding: 4px 11px; border-radius: var(--radius-pill);
+  letter-spacing: .04em; white-space: nowrap;
+  background: var(--c-primary-bg);
+  color: var(--c-primary);
+  border: 1px solid var(--c-border-light);
 }
-.topbar-role-badge.role-admin { background: #fef2f2; color: #dc2626; }
 
 .hamburger {
   display: none;
   background: none; border: none; cursor: pointer;
   width: 40px; height: 40px; position: relative;
   flex-direction: column; justify-content: center; align-items: center; gap: 5px;
-  padding: 6px; border-radius: 8px;
+  padding: 6px; border-radius: 10px;
+  transition: background-color .2s cubic-bezier(.32,.72,.35,1);
 }
-.hamburger:active { background: var(--c-bg); }
+.hamburger:active { background: var(--c-surface-3); transform: scale(.96); }
 .hamburger span {
-  display: block; width: 22px; height: 2px;
+  display: block; width: 20px; height: 1.5px;
   background: var(--c-text); border-radius: 2px;
-  transition: all .25s ease;
+  transition: all .28s cubic-bezier(.32,.72,.35,1);
 }
-.hamburger.open span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+.hamburger.open span:nth-child(1) { transform: translateY(6.5px) rotate(45deg); }
 .hamburger.open span:nth-child(2) { opacity: 0; }
-.hamburger.open span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+.hamburger.open span:nth-child(3) { transform: translateY(-6.5px) rotate(-45deg); }
 
 .mobile-nav {
   display: none;
   flex-direction: column;
   padding: 8px 16px 16px;
-  background: rgba(255,255,255,.98);
-  border-bottom: 1px solid var(--c-border);
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border-light);
 }
 .mn-item {
   display: block;
@@ -138,23 +155,27 @@ const roleBadge = computed(() => {
   font-size: 14px; font-weight: 500;
   color: var(--c-text-secondary);
   text-decoration: none;
-  border-radius: 8px;
-  transition: all .15s;
+  border-radius: 12px;
+  transition: all .2s cubic-bezier(.32,.72,.35,1);
 }
 .mn-item:hover, .mn-item.router-link-active {
-  color: var(--c-primary);
-  background: var(--c-primary-bg);
+  color: var(--c-text);
+  background: var(--c-surface-2);
   text-decoration: none;
 }
 .mn-badge {
   display: inline-block;
   margin: 8px 16px;
   font-size: 11px; font-weight: 600;
-  padding: 3px 10px; border-radius: 10px;
+  padding: 4px 11px; border-radius: var(--radius-pill);
+  background: var(--c-primary-bg);
+  color: var(--c-primary);
+  border: 1px solid var(--c-border-light);
 }
-.mn-badge.role-admin { background: #fef2f2; color: #dc2626; }
 
-.slide-down-enter-active, .slide-down-leave-active { transition: all .2s ease; }
+.slide-down-enter-active, .slide-down-leave-active {
+  transition: opacity .28s cubic-bezier(.32,.72,.35,1), transform .28s cubic-bezier(.32,.72,.35,1);
+}
 .slide-down-enter-from, .slide-down-leave-to { opacity: 0; transform: translateY(-8px); }
 
 @media (max-width: 768px) {

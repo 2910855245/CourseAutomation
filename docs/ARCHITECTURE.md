@@ -2,108 +2,99 @@
 
 ## 项目概述
 
-Anti-Course Cheating Plugin 是一个在线课程自动化 SaaS 平台，支持视频自动观看、考试自动答题、多用户管理和聚合支付处理。
+Anti-Course Cheating Plugin 是一个在线课程自动化 SaaS 平台，支持视频自动观看、考试自动答题、多用户管理和聚合支付处理。后端为单个 Rust 二进制（axum），无 Python 依赖。
 
 ## 技术栈
 
 | 层级 | 技术 | 说明 |
 |------|------|------|
-| 后端 | Python 3.9+ / FastAPI | RESTful API 服务 |
+| 后端 | Rust / axum / tokio | RESTful API + SPA 托管 + 任务执行，单进程 |
 | 前端 | Vue 3 / TypeScript / Vite | SPA 单页应用 |
-| 数据库 | SQLite (默认) / MySQL | 通过 SQLAlchemy ORM |
-| 缓存 | Redis (可选) | 速率限制、JWT 黑名单 |
+| 数据库 | SQLite | rusqlite，启动时幂等建表（schema.rs） |
+| OCR | ONNX Runtime (ort) | 进程内验证码识别 |
 | 支付 | YPay | 微信/支付宝聚合支付 |
 
 ## 目录结构
 
 ```
 Anti-Course Cheating Plugin/
-├── api/                          # 后端 API 层
-│   ├── main.py                   # FastAPI 入口，注册路由、中间件
-│   ├── auth.py                   # JWT 认证
-│   ├── database.py               # SQLAlchemy ORM 模型 + 数据库操作
-│   ├── models.py                 # Pydantic 数据模型
-│   ├── routers/                  # 路由处理器
-│   │   ├── admin.py              # 管理员后台 CRUD
-│   │   ├── orders.py             # 订单生命周期
-│   │   ├── payment.py            # 支付 + 回调
-│   │   ├── pricing.py            # 定价系统 (打包/按量)
-│   │   ├── courses.py            # 课程扫描
-│   │   ├── users.py              # 用户管理
-│   │   └── ...
-│   └── services/                 # 业务逻辑层
-│       ├── task_queue.py         # 持久化任务队列
-│       ├── task_runner.py        # 子进程管理
-│       ├── ypay_service.py       # YPay 集成
-│       └── ...
-├── services/                     # 跨切面业务服务
-│   ├── ai_service.py             # DeepSeek AI 答题
-│   ├── auth_service.py           # 登录认证
-│   ├── course_service.py         # 课程处理
-│   └── study_service.py          # 学习调度
-├── infrastructure/               # 底层爬虫/报告
-│   ├── anti_test.py              # AI 自动答题核心
-│   ├── course_crawler.py         # 课程数据提取
-│   ├── study_reporter.py         # 视频进度上报
-│   └── http_session.py           # HTTP 会话管理
-├── frontend/                     # Vue3 前端
+├── rust_worker/                    # 后端（唯一服务进程，:17017）
 │   └── src/
-│       ├── views/                # 页面组件
-│       │   ├── Home.vue          # 首页 (扫描+下单+支付)
-│       │   ├── Admin.vue         # 管理员后台
-│       │   └── Orders.vue        # 订单列表
-│       ├── api/index.ts          # API 接口定义
-│       ├── stores/app.ts         # Pinia 状态管理
-│       └── router/index.ts       # 路由配置
-├── script/                       # 部署脚本
-│   ├── deploy.py                 # 主部署脚本
-│   └── remote.py                 # 远程服务器操作
-├── worker.py                     # 课程爬取 Worker
-├── run.py                        # 服务启动入口
-├── config.py                     # 配置管理
-└── run.py                        # 服务启动入口 (granian/uvicorn)
+│       ├── main.rs                 # axum 入口：路由、中间件、启动初始化
+│       ├── auth.rs                 # JWT 认证 + 黑名单
+│       ├── api.rs / order.rs       # 订单生命周期、定价
+│       ├── progress.rs             # 进度查询
+│       ├── scan.rs                 # 课程扫描（平台表常量）
+│       ├── login.rs                # 学校平台登录（本地 OCR 图形码）
+│       ├── study.rs                # 刷课循环（tokio 多并发）
+│       ├── queue.rs                # 持久化任务队列
+│       ├── exam.rs / school_exam.rs# 考试答题、考试列表抓取
+│       ├── llm.rs                  # DeepSeek AI 答题
+│       ├── cx_scan.rs / cx_study.rs / cx_quiz.rs  # 学习通专用模块
+│       ├── pay.rs / pay_routes.rs  # 支付 + 回调 + 通道分发
+│       ├── ypay_db.rs / ypay_qr.rs # YPay/VMQ 数据层 + 二维码
+│       ├── ocr.rs / ocr_ort.rs     # 验证码识别（ONNX Runtime）
+│       ├── db.rs                   # SQLite 访问层
+│       └── schema.rs               # 启动建表/迁移（幂等）
+├── frontend/                       # Vue3 前端
+│   └── src/
+│       ├── views/                  # 页面组件
+│       │   ├── Home.vue            # 首页 (扫描+下单+支付)
+│       │   ├── Admin.vue           # 管理员后台
+│       │   └── Orders.vue          # 订单列表
+│       ├── api/index.ts            # API 接口定义
+│       ├── stores/app.ts           # Pinia 状态管理
+│       └── router/index.ts         # 路由配置
+├── static/                         # 前端构建产物（rust_worker 直接托管）
+├── deploy/                         # systemd 单元
+│   └── rust-study-daemon.service   # 唯一的后端服务单元
+├── start_local.bat                 # 本地一键启动
+└── .env.example                    # 配置模板
 ```
 
 ## 核心模块说明
 
-### 1. API 层 (`api/`)
+### 1. 后端 (`rust_worker/src/`)
 
-#### `main.py` - 应用入口
-- 注册所有路由、CORS、速率限制中间件
-- 启动时：自动创建管理员、初始化定价配置、启动任务队列、恢复运行中订单
+#### `main.rs` - 应用入口
+- 注册所有路由、CORS、速率限制中间件、SPA fallback
+- 启动时：`ensure_schema` 建表/迁移、自动创建管理员、初始化定价配置、启动任务队列、恢复运行中订单
 
-#### `routers/pricing.py` - 定价系统
-```python
-# 两种定价模式
+#### `schema.rs` - 数据库引导
+- 11 张表 + 17 个索引，全部 `CREATE TABLE IF NOT EXISTS` 幂等
+- ypay_account 列级补丁、`ypay_settings` ← `vmq_settings` 数据迁移
+- 每次启动经 `Db::open` 执行，可安全重复运行
+
+#### 定价系统
+```
+两种定价模式
 1. 打包模式 (package): 按视频数分档 + 进度折扣
 2. 按量模式 (unit): 视频/作业/考试分别按次计价
 
-# 核心 API
+核心 API
 GET  /api/pricing           # 获取当前定价配置
 POST /api/pricing/calculate # 计算课程价格 (后端唯一真相源)
 POST /api/pricing/recommend # AI 推荐定价方案
 POST /api/pricing/apply-package  # 应用打包定价
 ```
 
-#### `routers/orders.py` - 订单系统
-```python
-# 订单生命周期
+#### 订单系统
+```
+订单生命周期
 创建 -> 待支付 -> 已支付 -> 接单中 -> 执行中 -> 已完成
 
-# API
+API
 POST /api/orders/batch    # 批量创建订单
 GET  /api/orders/my       # 用户订单列表
 POST /api/orders/{id}/accept  # 接单
 ```
 
-### 2. Worker 子进程
+### 2. 任务执行（进程内 tokio 任务）
 
-#### `worker.py` - 课程爬取
-- 从目标平台爬取课程结构（视频、章节）
-- 写入状态到 `/tmp/task_*/status.json`
-
-- 模拟视频观看，定期发送学习报告
-- 支持多平台、多账号并发
+- 扫描/登录/刷课/考试全部在 rust_worker 进程内并发执行，无子进程
+- 学校任务：登录（本地 OCR）→ 链式扫描+刷课 → 考试
+- 学习通：`cx_study.rs` 刷课（enc MD5 签名 + dtoken + 上报循环），`cx_quiz.rs` 测评/讨论/笔记/考试
+- 点选验证码（need_code=2）不支持，直接报错；图形码（need_code=1）走进程内 ONNX OCR
 
 ### 3. 前端 (`frontend/`)
 
@@ -125,16 +116,15 @@ Admin.vue (管理员后台)
 ### 4. 定价系统详解
 
 #### 课程类型检测
-```python
-def _detect_course_type(course) -> str:
-    # "video"       - 有视频的课程
-    # "exam_only"   - 纯考试 (无视频)
-    # "homework_only" - 纯作业 (无视频)
-    # "exam_homework" - 考试+作业 (无视频)
+```
+"video"        - 有视频的课程
+"exam_only"    - 纯考试 (无视频)
+"homework_only"- 纯作业 (无视频)
+"exam_homework"- 考试+作业 (无视频)
 ```
 
 #### 价格计算逻辑
-```python
+```
 # 打包模式
 if video_total <= 30:   base = price_small      # ¥3
 elif video_total <= 80: base = price_medium     # ¥5
@@ -171,13 +161,13 @@ homework_only_price = ¥3  # 可配置
 ### 开发环境
 ```bash
 # 后端
-pip install -r requirements.txt
-python run.py  # 启动在 http://localhost:8000
+cd rust_worker
+cargo run --release   # 启动在 http://localhost:17017（含前端静态页）
 
 # 前端
 cd frontend
 npm install
-npm run dev   # 启动在 http://localhost:5173
+npm run dev           # 启动在 http://localhost:5173，代理 /api 到 :17017
 ```
 
 ### 生产环境
@@ -185,16 +175,9 @@ npm run dev   # 启动在 http://localhost:5173
 # 构建前端
 cd frontend && npm run build
 
-# 启动服务
-granian --interface asgi --host 0.0.0.0 --port 8000 run:app
-
-# 或使用管理脚本
-python manage.py  # 交互式菜单
-```
-
-### Worker 启动
-```bash
-python worker.py        # 课程爬取 Worker
+# 构建并启动后端（唯一进程）
+cd rust_worker && cargo build --release
+./rust_worker         # :17017，API + SPA + OCR + 刷课一体
 ```
 
 ## 数据流
@@ -202,17 +185,16 @@ python worker.py        # 课程爬取 Worker
 ```
 用户登录 -> 扫描课程 -> 获取价格(POST /api/pricing/calculate)
     -> 选择课程 -> 创建订单(POST /api/orders/batch)
-    -> 支付 -> 接单 -> 入队 -> Worker 执行 -> 完成
+    -> 支付 -> 接单 -> 入队 -> 进程内任务执行 -> 完成
 ```
 
 ## 部署架构
 
 ```
 Nginx (443/80)
-    ├── /static/* -> 静态文件
-    └── /* -> proxy_pass http://127.0.0.1:8000
-                └── Granian (ASGI, Rust)
-                    └── FastAPI App
-                        ├── SQLite/MySQL
-                        └── Redis (可选)
+    └── /* -> proxy_pass http://127.0.0.1:17017
+                └── rust_worker (axum, 单二进制)
+                        ├── static/ (Vue3 SPA)
+                        ├── SQLite (data/orders.db)
+                        └── ONNX Runtime (验证码 OCR)
 ```

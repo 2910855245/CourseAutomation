@@ -153,8 +153,6 @@ export const api = {
     add: (d: { domain: string; name: string; url: string }) => post<ApiResponse<any>>('/api/admin/domain-monitor/add', d),
     remove: (domain: string) => post<ApiResponse<any>>('/api/admin/domain-monitor/remove', { domain }),
     setInterval: (interval: number) => post<ApiResponse<any>>('/api/admin/domain-monitor/interval', { interval }),
-    jsStatus: () => get<ApiResponse<{ files: {url:string;hash:string}[]; total: number; last_check: string; last_change: string }>>('/api/admin/domain-monitor/js-status'),
-    jsCheck: () => post<ApiResponse<{ checked_at: string; changes: any[]; errors: string[]; files_checked: number }>>('/api/admin/domain-monitor/js-check'),
     health: () => get<ApiResponse<{ checked_at: string; platforms: {domain:string;name:string;url:string;reachable:boolean;status_code:number;response_time_ms:number;error:string}[] }>>('/api/admin/domain-monitor/health'),
     alerts: (limit?: number) => get<ApiResponse<{ time:string;type:string;message:string;domain:string }[]>>('/api/admin/domain-monitor/alerts' + (limit ? '?limit=' + limit : '')),
     clearAlerts: () => post<ApiResponse<any>>('/api/admin/domain-monitor/alerts/clear'),

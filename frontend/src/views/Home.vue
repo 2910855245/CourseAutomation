@@ -85,15 +85,13 @@ onMounted(async () => {
         <div :class="['done-card', isLeaving ? 'fade-out-leave-active' : 'fade-in-enter-active']">
           <div class="done-icon">
             <svg width="72" height="72" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="11" stroke="var(--c-success)" stroke-width="2" fill="var(--c-success-bg)"/>
-              <path d="M7 13l3 3 7-7" stroke="var(--c-success)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <circle cx="12" cy="12" r="11" stroke="#17181b" stroke-width="2" fill="rgba(20,20,24,.05)"/>
+              <path d="M7 13l3 3 7-7" stroke="#17181b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </div>
           <h1>任务已完成</h1>
           <p>所有课程均已 100% 完成</p>
-          <div class="countdown">
-{{ countdown }} 秒后返回登录页面
-</div>
+          <div class="countdown">{{ countdown }} 秒后返回登录页</div>
         </div>
       </div>
 
@@ -101,15 +99,13 @@ onMounted(async () => {
         <div :class="['done-card', 'inprogress-card', isLeaving ? 'fade-out-leave-active' : 'fade-in-enter-active']">
           <div class="done-icon inprogress-icon">
             <svg width="72" height="72" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="11" stroke="var(--c-primary)" stroke-width="2" fill="var(--c-primary-bg)"/>
-              <path d="M12 6v6l4 2" stroke="var(--c-primary)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <circle cx="12" cy="12" r="11" stroke="#17181b" stroke-width="2" fill="rgba(20,20,24,.05)"/>
+              <path d="M12 6v6l4 2" stroke="#17181b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </div>
           <h1>所有任务正在进行中</h1>
           <p>所有课程已提交下单，系统正在自动刷课处理中，请耐心等待</p>
-          <p style="margin-top:12px;font-size:14px;color:var(--c-text-secondary)">
-{{ autoRedirectCountdown }}秒后自动跳转到订单页面...
-</p>
+          <div class="countdown">{{ autoRedirectCountdown }} 秒后自动跳转到订单页面</div>
         </div>
       </div>
 
@@ -117,49 +113,26 @@ onMounted(async () => {
         <div :class="['done-card', 'error-card', isLeaving ? 'fade-out-leave-active' : 'fade-in-enter-active']">
           <div class="done-icon error-icon">
             <svg width="72" height="72" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="11" stroke="var(--c-danger)" stroke-width="2" fill="var(--c-danger-bg)"/>
-              <path d="M15 9l-6 6M9 9l6 6" stroke="var(--c-danger)" stroke-width="2.5" stroke-linecap="round"/>
+              <circle cx="12" cy="12" r="11" stroke="#dc2626" stroke-width="2" fill="rgba(220,38,38,.06)"/>
+              <path d="M15 9l-6 6M9 9l6 6" stroke="#dc2626" stroke-width="2.5" stroke-linecap="round"/>
             </svg>
           </div>
           <h1>登录失败</h1>
-          <p v-if="activeTab === 'chaoxing'">
-学习通登录失败，请检查账号密码是否正确
-</p>
-          <p v-else>
-所有平台均登录失败，请检查学号密码是否正确
-</p>
-          <div class="countdown error-countdown">
-{{ loginErrorCountdown }} 秒后自动返回
-</div>
+          <p v-if="activeTab === 'chaoxing'">学习通登录失败，请检查账号密码是否正确</p>
+          <p v-else>所有平台均登录失败，请检查学号密码是否正确</p>
+          <div class="countdown error-countdown">{{ loginErrorCountdown }} 秒后自动返回</div>
         </div>
       </div>
 
       <template v-else>
-        <div v-if="!scanDone" class="landing-center">
-          <h1 class="lc-title">
-一键躺平，网课全搞定
-</h1>
-          <p class="lc-subtitle">
-全平台秒杀 · 顶级AI大模型满分答题 · 7×24自动挂机
-</p>
-
-          <div class="lc-pills">
-            <span class="pill pill-accent">99.2% 通过率</span>
-            <span class="pill pill-accent">5000+ 学生信赖</span>
-            <span class="pill pill-accent">秒级响应</span>
+        <div v-if="!scanDone" class="landing">
+          <div class="login-head">
+            <h1>登录平台账号</h1>
+            <p>输入账号密码，系统自动扫描未完成课程并生成任务。</p>
           </div>
 
-          <div class="login-card" style="margin-top: 32px;">
-            <div class="lc-header">
-              <h2>平台登录</h2>
-              <p v-if="activeTab === 'school'">
-输入学号密码，系统将自动检测所有平台
-</p>
-              <p v-else>
-输入学习通账号密码，自动扫描课程和积分状态
-</p>
-            </div>
-            <div class="tab-switcher">
+          <div class="login-card">
+            <div class="tab-switcher minimal">
               <button :class="['tab-btn', { active: activeTab === 'school' }]" @click="activeTab = 'school'">
                 学校平台
               </button>
@@ -169,15 +142,15 @@ onMounted(async () => {
             </div>
 
             <template v-if="activeTab === 'school'">
-              <div class="field">
+              <div class="field minimal">
                 <label>学号</label>
                 <input v-model="username" placeholder="请输入学号" :disabled="scanning" />
               </div>
-              <div class="field">
+              <div class="field minimal">
                 <label>密码</label>
                 <input v-model="password" type="password" placeholder="请输入平台密码" :disabled="scanning" @keyup.enter="startScan" />
               </div>
-              <button class="btn btn-primary btn-lg btn-block" :disabled="scanning" @click="startScan">
+              <button class="btn btn-primary btn-block" :disabled="scanning" @click="startScan">
                 <span v-if="!scanning">登录</span>
                 <span v-else class="btn-loading">
                   <span class="spinner"></span>
@@ -187,15 +160,15 @@ onMounted(async () => {
             </template>
 
             <template v-if="activeTab === 'chaoxing'">
-              <div class="field">
+              <div class="field minimal">
                 <label>账号</label>
                 <input v-model="chaoxingUsername" placeholder="请输入手机号" :disabled="scanning" />
               </div>
-              <div class="field">
+              <div class="field minimal">
                 <label>密码</label>
                 <input v-model="chaoxingPassword" type="password" placeholder="请输入密码" :disabled="scanning" @keyup.enter="startChaoxingScan" />
               </div>
-              <button class="btn btn-primary btn-lg btn-block" :disabled="scanning" @click="startChaoxingScan">
+              <button class="btn btn-primary btn-block" :disabled="scanning" @click="startChaoxingScan">
                 <span v-if="!scanning">登录</span>
                 <span v-else class="btn-loading">
                   <span class="spinner"></span>
@@ -204,6 +177,8 @@ onMounted(async () => {
               </button>
             </template>
           </div>
+
+          <p class="login-foot">支持粟湾、劳动教育、中嘉鑫盛、学习通等平台。</p>
         </div>
 
         <div v-if="scanDone" class="results">
@@ -217,30 +192,26 @@ onMounted(async () => {
           </svg>
           <span>已成功提交 <strong>{{ submittedCourseIds.size }}</strong> 门课程，任务处理中</span>
         </div>
-        <div class="results-topbar">
-          <div v-if="studentName" class="rt-student">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-            <span>{{ studentName }}</span>
-          </div>
-          <!-- 学习通专用信息 -->
-          <div v-if="activeTab === 'chaoxing' && chaoxingInfo" class="rt-info">
-            <span v-if="chaoxingInfo.school" class="rt-pill ok">{{ chaoxingInfo.school }}</span>
-            <span v-if="chaoxingInfo.workPending > 0" class="rt-pill warn">{{ chaoxingInfo.workPending }} 个待完成作业</span>
-            <span class="rt-pill pending">{{ chaoxingInfo.pendingCount }} 门待处理</span>
-          </div>
-          <!-- 学校平台信息 -->
-          <div v-else class="rt-info">
-            <span class="rt-pill ok">{{ visiblePlatforms.filter(p => p.status === 'ok').length }} 个平台登录成功</span>
-            <span class="rt-pill total">{{ visiblePlatforms.reduce((s,p) => s + p.courses.length, 0) }} 门课程</span>
-            <span class="rt-pill pending">{{ visiblePlatforms.reduce((s,p) => s + p.courses.filter(c => !isCourseDoneOrSubmitted(c)).length, 0) }} 门待处理</span>
+        <div class="results-head">
+          <div class="rh-left">
+            <h2 class="rh-title">选择需要代刷的课程</h2>
+            <div class="rh-meta">
+              <span v-if="studentName" class="rh-student">{{ studentName }}</span>
+              <template v-if="activeTab === 'chaoxing' && chaoxingInfo">
+                <span v-if="chaoxingInfo.school" class="rh-meta-item">{{ chaoxingInfo.school }}</span>
+                <span v-if="chaoxingInfo.workPending > 0" class="rh-meta-item">{{ chaoxingInfo.workPending }} 个待完成作业</span>
+                <span class="rh-meta-item">{{ chaoxingInfo.pendingCount }} 门待处理</span>
+              </template>
+              <template v-else>
+                <span class="rh-meta-item">{{ visiblePlatforms.filter(p => p.status === 'ok').length }} 个平台已登录</span>
+                <span class="rh-meta-item">{{ visiblePlatforms.reduce((s,p) => s + p.courses.length, 0) }} 门课程</span>
+                <span class="rh-meta-item">{{ visiblePlatforms.reduce((s,p) => s + p.courses.filter(c => !isCourseDoneOrSubmitted(c)).length, 0) }} 门待处理</span>
+              </template>
+            </div>
           </div>
           <div class="rt-actions">
-            <button class="btn btn-ghost" @click="rescan">
-重新扫描
-</button>
-            <button class="btn btn-outline btn-back-home" @click="resetScan">
-返回主页
-</button>
+            <button class="btn btn-ghost" @click="rescan">重新扫描</button>
+            <button class="btn btn-outline btn-back-home" @click="resetScan">返回主页</button>
           </div>
         </div>
 
@@ -255,21 +226,13 @@ onMounted(async () => {
             </div>
           </div>
           <div class="plan-card single active">
-            <div class="plan-card-top">
-<span class="plan-tag tag-green">推荐</span>
-</div>
-            <div class="plan-icon" style="color:#4f6ef7">
+            <div class="plan-card-top"><span class="plan-tag tag-green">推荐</span></div>
+            <div class="plan-icon" style="color:#17181b">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="23 7 16 12 7 7 11 3 23 3 23 7"/><polygon points="12 7 5 12 1 9 1 13 5 16 12 13"/><polygon points="12 13 5 16 1 13 1 17 5 20 12 17"/><polygon points="22 10 17 13 17 17 22 20 23 16"/><polygon points="23 4 19 6 19 10 23 8"/></svg>
             </div>
-            <div class="plan-name">
-视频刷课
-</div>
-            <div class="plan-desc">
-仅刷视频课程
-</div>
-            <div class="plan-short-desc">
-所选课程考试已完成，仅需刷视频
-</div>
+            <div class="plan-name">视频刷课</div>
+            <div class="plan-desc">仅刷视频课程</div>
+            <div class="plan-short-desc">所选课程考试已完成，仅需刷视频</div>
           </div>
         </div>
 
@@ -283,21 +246,13 @@ onMounted(async () => {
             </div>
           </div>
           <div class="plan-card single active">
-            <div class="plan-card-top">
-<span class="plan-tag tag-green">推荐</span>
-</div>
-            <div class="plan-icon" style="color:#22c55e">
+            <div class="plan-card-top"><span class="plan-tag tag-green">推荐</span></div>
+            <div class="plan-icon" style="color:#17181b">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
             </div>
-            <div class="plan-name">
-考试答题
-</div>
-            <div class="plan-desc">
-AI智能答题考试
-</div>
-            <div class="plan-short-desc">
-所选课程视频已完成，仅需答题
-</div>
+            <div class="plan-name">考试答题</div>
+            <div class="plan-desc">AI智能答题考试</div>
+            <div class="plan-short-desc">所选课程视频已完成，仅需答题</div>
           </div>
         </div>
 
@@ -311,26 +266,23 @@ AI智能答题考试
             </div>
           </div>
           <div class="plan-card single active">
-            <div class="plan-card-top">
-<span class="plan-tag tag-blue">标准计费</span>
-</div>
-            <div class="plan-icon" style="color:#4f6ef7">
+            <div class="plan-card-top"><span class="plan-tag tag-blue">标准计费</span></div>
+            <div class="plan-icon" style="color:#17181b">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
             </div>
-            <div class="plan-name">
-视频 + 考试
-</div>
-            <div class="plan-desc">
-视频刷课 + 考试答题
-</div>
-            <div class="plan-short-desc">
-视频和考试打包计费
-</div>
+            <div class="plan-name">视频 + 考试</div>
+            <div class="plan-desc">视频刷课 + 考试答题</div>
+            <div class="plan-short-desc">视频和考试打包计费</div>
           </div>
         </div>
         </template>
 
-        <div v-for="p in visiblePlatforms" :key="p.website_id" class="platform-block">
+        <div
+          v-for="(p, pi) in visiblePlatforms"
+          :key="p.website_id"
+          class="platform-block"
+          :style="{ animationDelay: Math.min(pi, 8) * 60 + 'ms' }"
+        >
           <div class="pb-header">
             <label class="pb-check">
               <input
@@ -445,51 +397,34 @@ AI智能答题考试
       <div class="modal-box pay-modal">
         <template v-if="payTimedOut">
           <h3>订单已提交</h3>
-          <p style="font-size:14px;color:var(--c-text-secondary);margin:16px 0 24px">
-支付查询已超时，但订单已创建成功。请到订单页查看支付状态。
-</p>
-          <button class="btn btn-primary btn-block" @click="goToOrders(); closePay()">
-查看订单
-</button>
+          <p class="pm-timeout-note">支付查询已超时，但订单已创建成功。请到订单页查看支付状态。</p>
+          <button class="btn btn-primary btn-block" @click="goToOrders(); closePay()">查看订单</button>
         </template>
         <template v-else>
         <h3>确认支付</h3>
-        <div class="modal-amount">
-¥{{ payTotal.toFixed(2) }}
-</div>
-        <p class="pay-amount-warn">
-请务必支付相同金额，多一分少一分都无法检测到
-</p>
-        <div v-if="payError" class="pay-error">
-{{ payError }}
-</div>
+        <div class="modal-amount">¥{{ payTotal.toFixed(2) }}</div>
+        <p class="pay-amount-warn">请务必支付相同金额，多一分少一分都无法检测到</p>
+        <div v-if="payError" class="pay-error">{{ payError }}</div>
 
         <div class="pay-method-tabs">
-          <button :class="['pm-tab', { active: selectedPayMethod === 'ypay_wxpay' }]" @click="switchPayMethod('ypay_wxpay')">
-微信
-</button>
-          <button :class="['pm-tab', { active: selectedPayMethod === 'ypay_alipay' }]" @click="switchPayMethod('ypay_alipay')">
-支付宝
-</button>
+          <button :class="['pm-tab', { active: selectedPayMethod === 'ypay_wxpay' }]" @click="switchPayMethod('ypay_wxpay')">微信</button>
+          <button :class="['pm-tab', { active: selectedPayMethod === 'ypay_alipay' }]" @click="switchPayMethod('ypay_alipay')">支付宝</button>
         </div>
 
         <!-- QR code section -->
         <div class="qr-section">
           <img v-if="payQrCode" :src="payQrCode" alt="支付二维码" class="pay-qr-img" />
-          <div v-else class="pay-qr-placeholder">
-生成二维码中...
-</div>
-          <p class="qr-label">
-保存二维码后使用{{ { ypay_alipay: '支付宝', ypay_wxpay: '微信' }[selectedPayMethod] || '扫码' }}扫一扫支付
-</p>
+          <div v-else class="pay-qr-placeholder">生成二维码中...</div>
+          <p class="qr-label">保存二维码后使用{{ { ypay_alipay: '支付宝', ypay_wxpay: '微信' }[selectedPayMethod] || '扫码' }}扫一扫支付</p>
         </div>
-        <button v-if="payQrCode" class="btn btn-primary btn-block pay-link-btn" style="margin-top:8px" :style="selectedPayMethod === 'ypay_wxpay' ? 'background:#07c160' : ''" @click="savePayQr">
-保存二维码
-</button>
+        <button
+          v-if="payQrCode"
+          class="btn btn-primary btn-block pay-save-btn"
+          :class="{ wechat: selectedPayMethod === 'ypay_wxpay' }"
+          @click="savePayQr"
+        >保存二维码</button>
 
-        <button class="btn btn-ghost btn-block" style="margin-top:10px" @click="closePay">
-取消支付
-</button>
+        <button class="btn btn-ghost btn-block pay-cancel-btn" @click="closePay">取消支付</button>
         </template>
       </div>
     </div>
@@ -504,20 +439,14 @@ AI智能答题考试
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
             <h3>系统公告</h3>
           </div>
-          <div class="announcement-body">
-{{ announcementContent }}
-</div>
-          <button class="btn btn-primary btn-block announcement-confirm" @click="dismissAnnouncement">
-我知道了
-</button>
+          <div class="announcement-body">{{ announcementContent }}</div>
+          <button class="btn btn-primary btn-block announcement-confirm" @click="dismissAnnouncement">我知道了</button>
         </div>
       </div>
     </Teleport>
 
     <footer class="page-footer" :class="{ 'hide-on-mobile-results': scanDone }">
-      <div class="footer-brand">
-        <span>FUCK<strong>文理网课</strong> · 专业解决你的需求</span>
-      </div>
+      <div class="footer-brand">FUCK 文理网课</div>
     </footer>
   </div>
 
@@ -528,9 +457,7 @@ AI智能答题考试
         <div class="relogin-header">
           <h3>重新输入密码</h3>
           <span class="relogin-sub">{{ reloginDialog.name }}</span>
-          <button class="relogin-close" @click="closeReloginDialog">
-&times;
-</button>
+          <button class="relogin-close" @click="closeReloginDialog">&times;</button>
         </div>
         <div class="relogin-body">
           <label class="relogin-label">请输入该平台的正确密码</label>
@@ -544,9 +471,7 @@ AI智能答题考试
           />
         </div>
         <div class="relogin-footer">
-          <button class="btn btn-ghost" @click="closeReloginDialog">
-取消
-</button>
+          <button class="btn btn-ghost" @click="closeReloginDialog">取消</button>
           <button class="btn btn-primary" :disabled="reloginLoading" @click="submitRelogin">
             <span v-if="reloginLoading" class="spinner" style="width:14px;height:14px"></span>
             {{ reloginLoading ? '登录中...' : '确认登录' }}
@@ -558,6 +483,9 @@ AI智能答题考试
 </template>
 
 <style scoped>
+/* ============================================================
+   Aurora Glass · 深色高级质感 / 极光渐变 / 玻璃拟态
+   ============================================================ */
 .page {
   min-height: 100vh;
   display: flex;
@@ -571,202 +499,9 @@ AI智能答题考试
   padding: 0 24px;
 }
 
-.landing-center {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: 80px 24px 0;
-  position: relative;
-}
-
-.lc-title {
-  font-size: 32px;
-  font-weight: 800;
-  letter-spacing: -1px;
-  margin-bottom: 6px;
-  position: relative;
-  z-index: 1;
-  background: linear-gradient(135deg, var(--c-primary) 0%, #8b5cf6 50%, #ec4899 100%);
-  background-size: 200% 200%;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  animation: gradientShift 4s ease-in-out infinite;
-}
-@keyframes gradientShift {
-  0%, 100% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-}
-
-.lc-subtitle {
-  font-size: 14px;
-  color: var(--c-text-muted);
-  margin-bottom: 12px;
-  position: relative;
-  z-index: 1;
-  animation: fadeInUp 0.8s ease 0.15s backwards;
-}
-
-.lc-pills {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px;
-  margin-bottom: 28px;
-  position: relative;
-  z-index: 1;
-  animation: fadeInUp 0.7s ease 0.25s backwards;
-}
-
-.pill {
-  display: inline-block;
-  padding: 5px 14px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--c-text-muted);
-  background: var(--c-bg);
-  border: 1px solid var(--c-border);
-  border-radius: 20px;
-  white-space: nowrap;
-  transition: border-color .2s, color .2s;
-}
-
-.pill:hover {
-  border-color: var(--c-primary);
-  color: var(--c-primary);
-}
-
-.pill-accent {
-  color: var(--c-primary);
-  background: var(--c-primary-bg);
-  border-color: transparent;
-  font-weight: 600;
-}
-
-
-
-.login-card {
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
-  padding: 32px 40px;
-  width: 100%;
-  max-width: 500px;
-  box-shadow: var(--shadow);
-  position: relative;
-  z-index: 1;
-  animation: fadeInUp 0.6s ease 0.4s backwards;
-}
-.lc-header {
-  text-align: center;
-  margin-bottom: 28px;
-}
-
-.tab-switcher {
-  display: flex;
-  gap: 0;
-  margin-bottom: 24px;
-  background: var(--c-bg);
-  border-radius: var(--radius);
-  padding: 3px;
-}
-.tab-btn {
-  flex: 1;
-  padding: 10px 0;
-  border: none;
-  background: transparent;
-  border-radius: 7px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--c-text-secondary);
-  cursor: pointer;
-  transition: all .2s;
-}
-.tab-btn.active {
-  background: var(--c-surface);
-  color: var(--c-text);
-  box-shadow: 0 1px 3px rgba(0,0,0,.08);
-}
-.tab-btn:hover:not(.active) { color: var(--c-text); }
-
-.lc-header h2 { font-size: 20px; font-weight: 700; margin-bottom: 6px; color: var(--c-text); }
-.lc-header p { font-size: 13px; color: var(--c-text-muted); }
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 18px;
-  text-align: left;
-}
-.field label {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--c-text-secondary);
-}
-.field input {
-  height: 48px;
-  padding: 0 14px;
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-sm);
-  background: var(--c-bg);
-  color: var(--c-text);
-  font-size: 14px;
-  outline: none;
-  transition: border-color .15s, box-shadow .15s;
-}
-.field input:focus {
-  border-color: var(--c-primary);
-  box-shadow: 0 0 0 3px rgba(79,110,247,.12);
-  background: var(--c-surface);
-}
-.field input::placeholder { color: var(--c-text-muted); }
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 9px 20px;
-  border: none;
-  border-radius: var(--radius-sm);
-  font-weight: 600;
-  font-size: 13.5px;
-  cursor: pointer;
-  transition: all .15s;
-  white-space: nowrap;
-}
-.btn-primary {
-  background: var(--c-primary);
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(79,110,247,.25);
-}
-.btn-primary:hover { background: var(--c-primary-hover); box-shadow: 0 4px 14px rgba(79,110,247,.3); transform: translateY(-1px); }
-.btn-primary:disabled { opacity: .55; cursor: not-allowed; transform: none; }
-.btn-ghost {
-  background: transparent;
-  color: var(--c-text-secondary);
-  padding: 6px 12px;
-}
-.btn-ghost:hover { color: var(--c-primary); background: var(--c-primary-bg); }
-.btn-lg { padding: 12px 28px; font-size: 15px; }
-.btn-block { width: 100%; }
-.btn-loading { display: flex; align-items: center; gap: 8px; }
-
-.spinner, .spinner-lg {
-  border: 2.5px solid var(--c-border);
-  border-top-color: var(--c-primary);
-  border-radius: 50%;
-  animation: spin .65s linear infinite;
-}
-.spinner { width: 16px; height: 16px; }
-.spinner-lg { width: 36px; height: 36px; margin: 0 auto 12px; }
-.btn-primary .spinner { border-color: rgba(255,255,255,.3); border-top-color: #fff; }
-
+/* ---------- 全屏状态卡（完成 / 进行中 / 失败） ---------- */
 .all-done-wrapper {
-  min-height: calc(100vh - var(--topbar-h) - 64px);
+  min-height: calc(100vh - 56px - 64px);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -774,57 +509,48 @@ AI智能答题考试
 }
 .done-card {
   background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-xl);
+  border: 1px solid var(--c-border-light);
+  border-radius: 20px;
   padding: 48px 40px;
   text-align: center;
   max-width: 460px;
   width: 100%;
-  box-shadow: var(--shadow);
+  box-shadow: 0 2px 8px rgba(20,20,24,.07), 0 24px 64px rgba(20,20,24,.12);
 }
 .fade-in-enter-active {
-  animation: fadeInUp 0.5s ease;
+  animation: fadeInUp .5s cubic-bezier(.32,.72,.35,1);
 }
 .fade-out-leave-active {
-  animation: fadeOutDown 0.4s ease forwards;
+  animation: fadeOutDown .4s cubic-bezier(.32,.72,.35,1) forwards;
 }
 .done-icon {
   margin-bottom: 20px;
-  animation: scaleIn 0.6s ease-out 0.1s backwards;
+  animation: scaleIn .6s cubic-bezier(.32,.72,.35,1) .1s backwards;
 }
 @keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 @keyframes fadeOutDown {
-  from {
-    opacity: 1;
-    transform: translateY(0);
-  }
-  to {
-    opacity: 0;
-    transform: translateY(20px);
-  }
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(20px); }
 }
 @keyframes scaleIn {
-  from {
-    opacity: 0;
-    transform: scale(0.7);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
+  from { opacity: 0; transform: scale(.7); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(14px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 .done-card h1 {
   font-size: 26px;
-  font-weight: 700;
+  font-weight: 800;
+  letter-spacing: -.01em;
   color: var(--c-text);
   margin-bottom: 8px;
 }
@@ -837,225 +563,179 @@ AI智能答题考试
   font-size: 15px;
   font-weight: 600;
   color: var(--c-primary);
-  margin-bottom: 24px;
 }
+.error-card .countdown.error-countdown { color: var(--c-danger); }
+.inprogress-card h1 { color: var(--c-primary); }
 
-.error-card .countdown.error-countdown {
-  color: var(--c-danger);
-}
-
-.error-icon {
-  margin-bottom: 20px;
-  animation: scaleIn 0.6s ease-out 0.1s backwards;
-}
-
-.btn-danger {
-  background: var(--c-danger);
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(239,68,68,.25);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 9px 20px;
-  border: none;
-  border-radius: var(--radius-sm);
-  font-weight: 600;
-  font-size: 13.5px;
-  cursor: pointer;
-  transition: all .15s;
-}
-.btn-danger:hover { background: #dc2626; box-shadow: 0 4px 14px rgba(239,68,68,.3); transform: translateY(-1px); }
-.btn-danger:disabled { opacity: .55; cursor: not-allowed; transform: none; }
-
-.failed-list {
-  text-align: left;
-  margin: 12px auto 20px;
-  max-width: 320px;
-}
-.failed-item {
-  display: flex;
-  justify-content: space-between;
-  padding: 6px 0;
-  border-bottom: 1px solid rgba(239,68,68,.15);
-  font-size: 13px;
-}
-.fl-name { font-weight: 600; color: var(--c-text); }
-.fl-error { color: var(--c-danger); font-size: 12px; }
-
-.partial-warning {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding: 12px 18px;
-  background: var(--c-warning-bg);
-  border: 1px solid rgba(245,158,11,.3);
-  border-radius: var(--radius);
-  margin-bottom: 16px;
-  font-size: 13px;
-  color: var(--c-warning);
-  font-weight: 500;
-}
-.pw-tag {
-  padding: 2px 10px;
-  background: rgba(245,158,11,.15);
-  border-radius: 12px;
-  font-size: 11.5px;
-  color: #b45309;
-  font-weight: 600;
-}
-.pw-tag-row {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.btn-relogin {
-  padding: 2px 10px;
-  font-size: 11.5px;
-  font-weight: 600;
-  border-radius: 12px;
-  border: 1px solid rgba(234, 179, 8, .6);
-  background: rgba(234, 179, 8, .15);
-  color: #a16207;
-  cursor: pointer;
-  transition: all .15s;
-  white-space: nowrap;
-}
-.btn-relogin:hover {
-  background: rgba(234, 179, 8, .3);
-  border-color: #eab308;
-}
-
-/* 重新输入密码弹窗 */
-.relogin-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  background: rgba(0,0,0,.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  animation: fadeIn .15s ease;
-}
-.relogin-box {
-  background: #fff;
-  border-radius: 14px;
-  width: 380px;
-  max-width: 92vw;
-  box-shadow: 0 20px 60px rgba(0,0,0,.2);
-  overflow: hidden;
-  animation: slideUp .2s ease;
-}
-.relogin-header {
-  padding: 20px 24px 0;
-  position: relative;
-}
-.relogin-header h3 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 700;
-  color: #1e293b;
-}
-.relogin-sub {
-  display: block;
-  font-size: 12px;
-  color: #94a3b8;
-  margin-top: 4px;
-}
-.relogin-close {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  background: none;
-  border: none;
-  font-size: 22px;
-  color: #94a3b8;
-  cursor: pointer;
-  line-height: 1;
-  padding: 0;
-}
-.relogin-close:hover { color: #475569; }
-.relogin-body {
-  padding: 16px 24px;
-}
-.relogin-label {
-  display: block;
-  font-size: 13px;
-  color: #64748b;
-  margin-bottom: 8px;
-}
-.relogin-input {
+/* ---------- 落地页 ---------- */
+.landing {
   width: 100%;
-  padding: 10px 14px;
-  border: 1px solid #e2e8f0;
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 56px 20px 72px;
+}
+.login-head {
+  margin-bottom: 28px;
+}
+.login-head h1 {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--c-text);
+  margin-bottom: 6px;
+}
+.login-head p {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--c-text-secondary);
+}
+.login-foot {
+  margin-top: 18px;
+  font-size: 12px;
+  color: var(--c-text-muted);
+  text-align: center;
+}
+
+/* ---------- 登录卡片 ---------- */
+.login-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 8px;
+  padding: 24px;
+}
+
+.tab-switcher.minimal {
+  display: flex;
+  gap: 0;
+  margin-bottom: 22px;
+  border-bottom: 1px solid var(--c-border-light);
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+.tab-switcher.minimal .tab-btn {
+  flex: 1;
+  padding: 10px 0 12px;
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--c-text-secondary);
+  cursor: pointer;
+  position: relative;
+  transition: color .2s ease;
+}
+.tab-switcher.minimal .tab-btn:hover:not(.active) { color: var(--c-text); }
+.tab-switcher.minimal .tab-btn.active {
+  color: var(--c-text);
+  background: transparent;
+  box-shadow: none;
+}
+.tab-switcher.minimal .tab-btn.active::after {
+  content: '';
+  position: absolute; left: 0; right: 0; bottom: -1px;
+  height: 1.5px;
+  background: var(--c-text);
+}
+
+.field.minimal {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 16px;
+}
+.field.minimal label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--c-text-secondary);
+}
+.field.minimal input {
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-surface);
+  color: var(--c-text);
   font-size: 14px;
   outline: none;
-  transition: border-color .15s;
-  box-sizing: border-box;
+  transition: border-color .15s ease, background-color .15s ease;
 }
-.relogin-input:focus {
-  border-color: #4f6ef7;
-  box-shadow: 0 0 0 3px rgba(79,110,247,.12);
+.field.minimal input:hover { border-color: #bdbdc2; }
+.field.minimal input:focus {
+  border-color: var(--c-text);
+  background: var(--c-surface);
 }
-.relogin-footer {
-  padding: 12px 24px 20px;
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-}
+.field.minimal input::placeholder { color: var(--c-text-muted); }
+.field.minimal input:disabled { background: var(--c-surface-2); color: var(--c-text-muted); cursor: not-allowed; }
 
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-@keyframes slideUp {
-  from { opacity: 0; transform: translateY(16px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.submitted-banner {
-  display: flex;
+/* ---------- 按钮 ---------- */
+.btn {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 18px;
-  background: var(--c-primary-bg);
-  border: 1px solid rgba(79,110,247,.3);
-  border-radius: var(--radius);
-  margin-bottom: 16px;
-  font-size: 13px;
-  color: var(--c-primary);
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border: none;
+  border-radius: 6px;
   font-weight: 500;
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: background-color .15s ease, opacity .15s ease;
+  white-space: nowrap;
 }
-.submitted-banner strong {
-  font-weight: 700;
+.btn-primary {
+  background: var(--c-text);
+  color: #fff;
 }
+.btn-primary:hover:not(:disabled) { background: #000; }
+.btn-primary:active:not(:disabled) { background: #2e2f34; }
+.btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+.btn-ghost {
+  background: transparent;
+  color: var(--c-text-secondary);
+  padding: 8px 14px;
+}
+.btn-ghost:hover { color: var(--c-text); background: var(--c-surface-2); }
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--c-border);
+  color: var(--c-text-secondary);
+}
+.btn-outline:hover {
+  border-color: var(--c-text);
+  color: var(--c-text);
+  background: transparent;
+}
+.btn-lg { padding: 11px 24px; font-size: 14px; border-radius: 6px; }
+.btn-block { width: 100%; }
+.btn-loading { display: flex; align-items: center; gap: 8px; }
 
-.inprogress-card h1 {
-  color: var(--c-primary);
+.spinner, .spinner-lg {
+  border: 2px solid var(--c-border);
+  border-top-color: var(--c-primary);
+  border-radius: 50%;
+  animation: spin .65s linear infinite;
 }
-.inprogress-icon {
-  margin-bottom: 20px;
-  animation: scaleIn 0.6s ease-out 0.1s backwards;
-}
+.spinner { width: 15px; height: 15px; }
+.spinner-lg { width: 36px; height: 36px; margin: 0 auto 12px; }
+.btn-primary .spinner { border-color: rgba(255,255,255,.25); border-top-color: #fff; }
 
+/* ---------- 结果区 ---------- */
 .results {
   padding: 24px 0 40px;
   position: relative;
-  animation: fadeInUp 0.4s ease;
+  animation: fadeInUp .4s cubic-bezier(.32,.72,.35,1);
 }
 .rescan-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(255,255,255,.82);
-  backdrop-filter: blur(4px);
+  background: rgba(255,255,255,.88);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   z-index: 10;
-  border-radius: var(--radius);
+  border-radius: 14px;
   gap: 12px;
 }
 .rescan-overlay p {
@@ -1064,182 +744,154 @@ AI智能答题考试
   font-weight: 500;
 }
 
-.results-topbar {
+.submitted-banner {
   display: flex;
   align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  background: var(--c-primary-bg);
+  border: 1px solid rgba(20,20,24,.25);
+  border-radius: 12px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--c-primary);
+  font-weight: 500;
+  animation: fadeInUp .4s cubic-bezier(.32,.72,.35,1) backwards;
+}
+.submitted-banner strong { font-weight: 700; }
+
+.results-head {
+  display: flex;
+  align-items: flex-end;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 20px;
-  padding: 14px 18px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius);
+  gap: 16px;
+  margin-bottom: 24px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--c-border-light);
 }
-.rt-student {
+.rh-title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -.015em;
+  color: var(--c-text);
+}
+.rh-meta {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--c-primary);
-  padding: 4px 14px;
-  background: var(--c-primary-bg);
-  border-radius: 20px;
-  white-space: nowrap;
-}
-.rt-student svg { color: var(--c-primary); flex-shrink: 0; }
-.rt-info { display: flex; gap: 8px; flex-wrap: wrap; flex: 1; }
-.rt-actions { display: flex; gap: 10px; align-items: center; flex-shrink: 0; }
-.btn-outline {
-  background: transparent;
-  border: 1px solid var(--c-border);
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 8px;
+  font-size: 13px;
   color: var(--c-text-secondary);
 }
-.btn-outline:hover { border-color: var(--c-primary); color: var(--c-primary); background: var(--c-primary-bg); }
-.btn-back-home { font-size: 12.5px; padding: 6px 14px; }
-.rt-pill {
+.rh-meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+}
+.rh-meta-item + .rh-meta-item::before {
+  content: '·';
+  color: var(--c-text-muted);
+  margin-right: 14px;
+}
+.rh-student {
+  display: inline-flex;
+  align-items: center;
   padding: 3px 12px;
-  border-radius: 20px;
+  background: var(--c-primary);
+  color: #fff;
+  border-radius: 980px;
   font-size: 12px;
   font-weight: 600;
 }
-.rt-pill.ok { background: var(--c-success-bg); color: var(--c-success); }
-.rt-pill.total { background: var(--c-info-bg); color: var(--c-info); }
-.rt-pill.pending { background: var(--c-warning-bg); color: var(--c-warning); }
+.rt-actions { display: flex; gap: 10px; align-items: center; flex-shrink: 0; }
+.btn-back-home { font-size: 12.5px; padding: 6px 14px; }
+.rt-pill {
+  padding: 3px 12px;
+  border-radius: 980px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.rt-pill.ok { background: var(--c-surface-3); color: var(--c-text); }
+.rt-pill.total { background: var(--c-surface-3); color: var(--c-text); }
+.rt-pill.pending { background: var(--c-surface-3); color: var(--c-text-secondary); }
 
+/* ---------- 场景横幅 & 套餐卡 ---------- */
 .plan-select { margin-bottom: 24px; }
-.plan-select h3 {
-  font-size: 15px;
-  font-weight: 600;
-  margin-bottom: 12px;
-  color: var(--c-text);
-}
-.plan-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
-}
-.plan-card {
-  background: var(--c-surface);
-  border: 1.5px solid var(--c-border);
-  border-radius: var(--radius);
-  padding: 22px 16px;
-  text-align: center;
-  cursor: pointer;
-  transition: all .2s;
-  position: relative;
-}
-.plan-card:hover { border-color: var(--c-primary); box-shadow: var(--shadow); }
-.plan-card.active {
-  border-color: var(--c-primary);
-  background: var(--c-primary-bg);
-  box-shadow: 0 0 0 1px var(--c-primary);
-}
-.plan-badge {
-  position: absolute;
-  top: -10px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--c-primary);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 12px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.plan-badge.muted { background: #6b7280; }
-.plan-badge.premium { background: #8b5cf6; }
-.plan-icon {
-  margin-bottom: 10px;
-  display: flex;
-  justify-content: center;
-}
-.plan-highlight {
-  margin-top: 8px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--c-primary);
-  background: var(--c-primary-bg);
-  padding: 2px 8px;
-  border-radius: 8px;
-  display: inline-block;
-}
-.plan-name { font-size: 15px; font-weight: 700; color: var(--c-text); margin-bottom: 2px; }
-.plan-desc { font-size: 12.5px; color: var(--c-text-secondary); font-weight: 600; margin-bottom: 12px; }
-.plan-price-row {
-  display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 10px;
-}
-.ppr-item {
-  display: flex; flex-direction: column; align-items: center; min-width: 56px;
-}
-.ppr-label { font-size: 10px; color: var(--c-text-muted); font-weight: 500; text-transform: uppercase; }
-.ppr-price { font-size: 20px; font-weight: 800; color: var(--c-primary); line-height: 1.2; }
-.ppr-price.dimmed { color: var(--c-text-muted); opacity: 0.4; }
-.ppr-price.na { color: var(--c-text-muted); font-size: 14px; font-weight: 600; }
-.ppr-sub { font-size: 9.5px; color: var(--c-text-muted); margin-top: 1px; }
-.ppr-sub.na { color: var(--c-text-muted); opacity: 0.5; }
-.ppr-divider { width: 1px; height: 28px; background: #e2e8f0; flex-shrink: 0; }
-.plan-short-desc { font-size: 11px; color: var(--c-text-muted); margin-bottom: 4px; line-height: 1.4; }
-.plan-extra {
-  margin-top: 6px; padding: 6px 12px; border-radius: 8px;
-  background: #f3e8ff; color: #7c3aed; font-size: 11px; font-weight: 600;
-  display: flex; align-items: center; gap: 5px; justify-content: center;
-}
-
-/* Plan tags */
-.plan-card-top { height: 22px; display: flex; align-items: center; justify-content: center; margin-bottom: 4px; }
-.plan-tag {
-  padding: 3px 10px; border-radius: 10px; font-size: 10.5px; font-weight: 700;
-}
-.tag-danger { background: #fef2f2; color: #dc2626; }
-.tag-green { background: #f0fdf4; color: #16a34a; }
-.tag-purple { background: #f3e8ff; color: #7c3aed; }
-.tag-blue { background: #eef1fe; color: #4f6ef7; }
-
-/* Scenario banners */
 .scenario-banner {
-  display: flex; align-items: flex-start; gap: 12px;
-  padding: 14px 18px; border-radius: 12px; margin-bottom: 18px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 18px;
+  border-radius: 14px;
+  margin-bottom: 18px;
 }
 .scenario-banner svg { flex-shrink: 0; margin-top: 1px; }
 .sb-body { display: flex; flex-direction: column; gap: 3px; }
 .sb-body strong { font-size: 13px; font-weight: 700; }
 .sb-body span { font-size: 12.5px; line-height: 1.5; }
-.sb-body strong strong { color: inherit; }
-.exam-banner { background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; }
-.video-banner { background: #f0fdf4; color: #166534; border: 1px solid #86efac; }
-.both-banner { background: #eef1fe; color: #3730a3; border: 1px solid #a5b4fc; }
+.video-banner { background: var(--c-surface-2); color: var(--c-text); border: 1px solid var(--c-border-light); }
+.exam-banner { background: var(--c-surface-2); color: var(--c-text); border: 1px solid var(--c-border-light); }
+.both-banner { background: var(--c-surface-2); color: var(--c-text); border: 1px solid var(--c-border-light); }
 
-/* Unsuitable & recommended & best-value cards */
-.plan-card.unsuitable {
-  opacity: 0.4; cursor: not-allowed;
-  border-color: #e2e8f0; background: #f1f5f9;
+.plan-card {
+  background: var(--c-surface);
+  border: 1.5px solid var(--c-border-light);
+  border-radius: 14px;
+  padding: 22px 16px;
+  text-align: center;
+  transition: all .25s cubic-bezier(.32,.72,.35,1);
+  position: relative;
+  box-shadow: 0 1px 2px rgba(20,20,24,.06);
+  animation: fadeInUp .45s cubic-bezier(.32,.72,.35,1) backwards;
 }
-.plan-card.unsuitable:hover { border-color: #e2e8f0; transform: none; }
-.plan-card.recommended {
-  border-color: #22c55e; background: #f0fdf4;
+.plan-card.single {
+  max-width: 340px;
+  margin: 0 auto;
+  cursor: default;
 }
-.plan-card.best-value {
-  border-color: #8b5cf6; background: #faf5ff;
+.plan-card.single.active {
+  border-color: var(--c-primary);
+  box-shadow: 0 0 0 3px rgba(20,20,24,.1), 0 4px 16px rgba(20,20,24,.08);
 }
-.plan-card.best-value::before {
-  content: ''; position: absolute; top: -1px; left: -1px; right: -1px; bottom: -1px;
-  border-radius: 14px; background: linear-gradient(135deg, #8b5cf6, #4f6ef7);
-  z-index: -1; opacity: 0.12;
+.plan-card-top {
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
 }
-.plan-price { font-size: 26px; font-weight: 800; color: var(--c-primary); }
-.plan-card.single { max-width: 340px; margin: 0 auto; cursor: default; }
+.plan-tag {
+  padding: 3px 10px;
+  border-radius: 980px;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.tag-green { background: var(--c-primary); color: #fff; }
+.tag-blue { background: var(--c-primary); color: #fff; }
+.plan-icon {
+  margin-bottom: 10px;
+  display: flex;
+  justify-content: center;
+}
+.plan-name { font-size: 15px; font-weight: 700; color: var(--c-text); margin-bottom: 2px; }
+.plan-desc { font-size: 12.5px; color: var(--c-text-secondary); font-weight: 600; margin-bottom: 10px; }
+.plan-short-desc { font-size: 11px; color: var(--c-text-muted); line-height: 1.4; }
 
+/* ---------- 平台块 & 课程行 ---------- */
 .platform-block {
   background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius);
+  border: 1px solid var(--c-border-light);
+  border-radius: 14px;
   padding: 18px 20px;
   margin-bottom: 14px;
+  box-shadow: 0 1px 2px rgba(20,20,24,.06);
+  transition: box-shadow .25s cubic-bezier(.32,.72,.35,1);
+  animation: fadeInUp .45s cubic-bezier(.32,.72,.35,1) backwards;
+}
+.platform-block:hover {
+  box-shadow: 0 4px 16px rgba(20,20,24,.08);
 }
 .pb-header {
   display: flex;
@@ -1247,16 +899,15 @@ AI智能答题考试
   gap: 10px;
   margin-bottom: 12px;
 }
-.pb-check input { cursor: pointer; }
+.pb-check input { cursor: pointer; accent-color: var(--c-primary); width: 16px; height: 16px; }
 .pb-badge {
   padding: 3px 10px;
-  border-radius: 20px;
+  border-radius: 980px;
   font-size: 11.5px;
   font-weight: 600;
 }
 .pb-badge.ok { background: var(--c-success-bg); color: var(--c-success); }
 .pb-badge.fail { background: var(--c-danger-bg); color: var(--c-danger); }
-.pb-name { font-weight: 500; font-size: 13px; color: var(--c-text); }
 .pb-count { font-size: 12px; color: var(--c-text-muted); margin-left: auto; }
 
 .course-list { display: flex; flex-direction: column; }
@@ -1265,13 +916,16 @@ AI智能答题考试
   align-items: center;
   gap: 10px;
   padding: 10px 0;
-  border-top: 1px solid #f3f4f6;
+  border-top: 1px solid var(--c-surface-3);
+  transition: opacity .2s;
 }
 .course-row.done { opacity: .5; }
-.cr-check input { cursor: pointer; }
+.cr-check input { cursor: pointer; accent-color: var(--c-primary); width: 16px; height: 16px; }
+.cr-check input:disabled { cursor: not-allowed; }
 .cr-name {
   flex: 1;
   font-size: 13.5px;
+  color: var(--c-text);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1281,190 +935,322 @@ AI智能答题考试
 .cr-bar {
   width: 70px;
   height: 5px;
-  background: #f1f5f9;
+  background: var(--c-surface-3);
   border-radius: 3px;
   overflow: hidden;
 }
-.cr-bar-fill { height: 100%; border-radius: 3px; background: var(--c-primary); transition: width .3s; }
-.cr-bar-fill.done { background: var(--c-success); }
-.cr-bar-fill.low { background: var(--c-warning); }
+.cr-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--c-primary);
+  transition: width .3s cubic-bezier(.32,.72,.35,1);
+}
+.cr-bar-fill.done { background: var(--c-text); }
+.cr-bar-fill.low { background: #b6b6bc; }
 .cr-pct { font-size: 11px; color: var(--c-text-muted); min-width: 34px; text-align: right; }
 .cr-pill {
-  padding: 1.5px 8px;
-  border-radius: 12px;
+  padding: 2px 8px;
+  border-radius: 980px;
   font-size: 11px;
   font-weight: 600;
 }
-.cr-pill.warn { background: var(--c-warning-bg); color: var(--c-warning); }
-.cr-pill.ok { background: var(--c-success-bg); color: var(--c-success); }
-.cr-pill.exam { background: var(--c-info-bg); color: var(--c-info); font-size: 10px; }
-.cr-pill.deleted { background: #f3f4f6; color: #9ca3af; font-size: 10px; text-decoration: line-through; }
+.cr-pill.warn { background: var(--c-surface-3); color: var(--c-text-secondary); }
+.cr-pill.ok { background: var(--c-surface-3); color: var(--c-text); }
+.cr-pill.exam { background: var(--c-surface-3); color: var(--c-text); font-size: 10px; }
+.cr-pill.deleted { background: var(--c-surface-3); color: var(--c-text-muted); font-size: 10px; text-decoration: line-through; }
 
+/* ---------- 底部汇总栏 ---------- */
 .summary-bar {
   position: sticky;
-  bottom: 0;
+  bottom: 12px;
   background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius);
+  border: 1px solid var(--c-border-light);
+  border: 1px solid var(--c-border-light);
+  border-radius: 16px;
   padding: 16px 24px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  box-shadow: var(--shadow-md);
+  box-shadow: 0 8px 24px rgba(20,20,24,.1), 0 24px 64px rgba(20,20,24,.12), inset 0 1px 0 rgba(16,16,20,.03);
   margin-bottom: 24px;
+  animation: fadeInUp .5s cubic-bezier(.32,.72,.35,1) backwards;
 }
-.sb-left { display: flex; gap: 20px; }
+.sb-left { display: flex; gap: 20px; flex-wrap: wrap; }
 .sb-item { font-size: 13px; color: var(--c-text-secondary); }
-.sb-item strong { color: var(--c-primary); }
+.sb-item strong { color: var(--c-text); }
 .sb-right { display: flex; align-items: center; gap: 18px; }
-.sb-detail {
-  display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
-}
+.sb-detail { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .sb-detail-item { font-size: 11.5px; color: var(--c-text-muted); white-space: nowrap; }
-.sb-price { font-size: 24px; font-weight: 800; color: var(--c-danger); }
-
-.done-bar {
-  justify-content: center;
-  gap: 16px;
-  color: var(--c-success);
-  font-weight: 500;
-}
-.done-icon {
-  width: 26px; height: 26px;
-  border-radius: 50%;
-  background: var(--c-success);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  font-weight: 700;
+.sb-price {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text);
 }
 
+/* ---------- 支付弹窗 ---------- */
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15,23,42,.4);
-  backdrop-filter: blur(4px);
+  background: rgba(22,22,26,.42);
   display: none;
   align-items: center;
   justify-content: center;
   z-index: 500;
 }
-.modal-overlay.show { display: flex; }
+.modal-overlay.show {
+  display: flex;
+  animation: fadeIn .2s ease;
+}
 .modal-box {
   background: var(--c-surface);
-  border-radius: var(--radius-xl);
+  border: 1px solid var(--c-border-light);
+  border-radius: 20px;
   padding: 32px;
   width: 400px;
+  max-width: calc(100vw - 48px);
   text-align: center;
-  box-shadow: var(--shadow-lg);
-  animation: fadeIn .3s ease;
+  box-shadow: 0 8px 20px rgba(20,20,24,.09), 0 32px 80px rgba(20,20,24,.14);
+  animation: slideUp .25s cubic-bezier(.32,.72,.35,1);
 }
-.modal-box h3 { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
-.modal-amount { font-size: 40px; font-weight: 800; color: var(--c-primary); margin: 16px 0 4px; }
-.pay-amount-warn { text-align: center; font-size: 12px; color: #ef4444; margin: 0 0 16px; font-weight: 500; }
-
+.modal-box h3 {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  color: var(--c-text);
+  margin-bottom: 4px;
+}
+.pm-timeout-note {
+  font-size: 14px;
+  color: var(--c-text-secondary);
+  margin: 16px 0 24px;
+}
+.modal-amount {
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+  background: var(--c-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin: 16px 0 4px;
+}
+.pay-amount-warn {
+  text-align: center;
+  font-size: 12px;
+  color: var(--c-danger);
+  margin: 0 0 16px;
+  font-weight: 500;
+}
 .pay-error {
-  background: var(--c-danger-bg); color: var(--c-danger);
-  border-radius: var(--radius-sm); padding: 10px 14px;
-  font-size: 12.5px; margin-bottom: 16px; text-align: left;
+  background: var(--c-danger-bg);
+  color: var(--c-danger);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 12.5px;
+  margin-bottom: 16px;
+  text-align: left;
 }
-
 .pay-method-tabs {
-  display: flex; gap: 0; margin-bottom: 20px;
-  background: var(--c-bg); border-radius: var(--radius); padding: 3px;
+  display: flex;
+  gap: 0;
+  margin-bottom: 20px;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border-light);
+  border-radius: 12px;
+  padding: 3px;
 }
 .pm-tab {
-  flex: 1; padding: 8px 0; border: none; background: transparent;
-  border-radius: 7px; font-size: 13px; font-weight: 600;
-  color: var(--c-text-secondary); cursor: pointer; transition: all .2s;
+  flex: 1;
+  padding: 8px 0;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text-secondary);
+  cursor: pointer;
+  transition: all .2s cubic-bezier(.32,.72,.35,1);
 }
-.pm-tab.active { background: #fff; color: var(--c-text); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.pm-tab.active {
+  background: var(--c-surface);
+  color: var(--c-text);
+  box-shadow: 0 1px 3px rgba(16, 16, 20, .12);
+}
 .pm-tab:hover:not(.active) { color: var(--c-text); }
 
 .qr-section { margin: 16px 0; }
 .pay-qr-img {
-  width: 200px; height: 200px; border-radius: var(--radius);
-  border: 2px solid var(--c-border); background: #fff; padding: 8px;
+  width: 200px;
+  height: 200px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  background: #fff;
+  padding: 8px;
+  box-shadow: 0 0 0 6px rgba(16, 16, 20, .04), 0 12px 32px rgba(20,20,24,.09);
 }
 .pay-qr-placeholder {
-  width: 200px; height: 200px; margin: 0 auto;
-  display: flex; align-items: center; justify-content: center;
-  background: var(--c-bg); border-radius: var(--radius); border: 2px dashed var(--c-border);
-  font-size: 13px; color: var(--c-text-muted);
+  width: 200px;
+  height: 200px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-surface-3);
+  border-radius: 12px;
+  border: 2px dashed var(--c-border);
+  font-size: 13px;
+  color: var(--c-text-muted);
 }
 .qr-label { font-size: 12px; color: var(--c-text-muted); margin-top: 10px; }
 
-.pay-link-btn {
-  text-decoration: none; justify-content: center; display: flex;
-  align-items: center; gap: 6px;
+.pay-save-btn { margin-top: 8px; }
+.pay-save-btn.wechat {
+  background: #07c160;
+  box-shadow: 0 2px 8px rgba(7,193,96,.25);
 }
+.pay-save-btn.wechat:hover:not(:disabled) {
+  background: #06ad56;
+  box-shadow: 0 4px 14px rgba(7,193,96,.3);
+}
+.pay-cancel-btn { margin-top: 10px; }
 
-
+/* ---------- 页脚 ---------- */
 .page-footer {
   text-align: center;
-  padding: 0 24px 12px;
-  margin-top: 20px;
+  padding: 0 20px 24px;
+  margin-top: auto;
 }
 .footer-brand {
-  padding: 10px 0 0;
   font-size: 12px;
   color: var(--c-text-muted);
-  letter-spacing: 0.5px;
 }
-.footer-brand strong {
+
+/* ---------- 重新输入密码弹窗 ---------- */
+.relogin-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(22,22,26,.42);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn .2s ease;
+}
+.relogin-box {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-light);
+  border-radius: 18px;
+  width: 380px;
+  max-width: 92vw;
+  box-shadow: 0 8px 20px rgba(20,20,24,.09), 0 32px 80px rgba(20,20,24,.14);
+  overflow: hidden;
+  animation: slideUp .25s cubic-bezier(.32,.72,.35,1);
+}
+.relogin-header {
+  padding: 20px 24px 0;
+  position: relative;
+}
+.relogin-header h3 {
+  margin: 0;
+  font-size: 16px;
   font-weight: 700;
+  letter-spacing: -.01em;
+  color: var(--c-text);
+}
+.relogin-sub {
+  display: block;
+  font-size: 12px;
+  color: var(--c-text-muted);
+  margin-top: 4px;
+}
+.relogin-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: none;
+  border: none;
+  font-size: 22px;
+  color: var(--c-text-muted);
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+  transition: color .2s;
+}
+.relogin-close:hover { color: var(--c-text); }
+.relogin-body { padding: 16px 24px; }
+.relogin-label {
+  display: block;
+  font-size: 13px;
+  color: var(--c-text-secondary);
+  margin-bottom: 8px;
+}
+.relogin-input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  font-size: 14px;
+  color: var(--c-text);
+  background: var(--c-surface-2);
+  outline: none;
+  transition: border-color .2s cubic-bezier(.32,.72,.35,1), box-shadow .2s cubic-bezier(.32,.72,.35,1);
+  box-sizing: border-box;
+}
+.relogin-input:focus {
+  border-color: var(--c-primary);
+  box-shadow: 0 0 0 4px rgba(20,20,24,.12);
+}
+.relogin-footer {
+  padding: 12px 24px 20px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
-@media (max-width: 768px) {
-  .plan-grid { grid-template-columns: 1fr; }
-  .summary-bar { flex-direction: column; gap: 12px; }
-  .sb-left, .sb-right { width: 100%; justify-content: center; }
-}
-
-/* 系统公告弹窗 */
+/* ---------- 系统公告弹窗 ---------- */
 .announcement-overlay {
   position: fixed;
   inset: 0;
   z-index: 9998;
-  background: rgba(0,0,0,.45);
+  background: rgba(22,22,26,.42);
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: fadeIn .15s ease;
+  animation: fadeIn .2s ease;
 }
 .announcement-box {
-  background: #fff;
-  border-radius: 16px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-light);
+  border-radius: 18px;
   width: 420px;
   max-width: 90vw;
-  box-shadow: 0 20px 60px rgba(0,0,0,.2);
+  box-shadow: 0 8px 20px rgba(20,20,24,.09), 0 32px 80px rgba(20,20,24,.14);
   overflow: hidden;
-  animation: slideUp .2s ease;
+  animation: slideUp .25s cubic-bezier(.32,.72,.35,1);
 }
 .announcement-header {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 24px 24px 0;
-  color: var(--c-primary, #4f6ef7);
+  color: var(--c-primary);
 }
 .announcement-header h3 {
   margin: 0;
   font-size: 18px;
   font-weight: 700;
-  color: var(--c-text, #1e293b);
+  letter-spacing: -.01em;
+  color: var(--c-text);
 }
-.announcement-header svg {
-  flex-shrink: 0;
-  color: var(--c-primary, #4f6ef7);
-}
+.announcement-header svg { flex-shrink: 0; }
 .announcement-body {
   padding: 16px 24px 24px;
   white-space: pre-line;
   font-size: 14px;
-  color: var(--c-text-secondary, #475569);
+  color: var(--c-text-secondary);
   line-height: 1.7;
   max-height: 50vh;
   overflow-y: auto;
@@ -1475,10 +1261,23 @@ AI智能答题考试
   width: calc(100% - 48px);
 }
 
+/* ---------- 响应式 ---------- */
 @media (max-width: 768px) {
+  .summary-bar { flex-direction: column; gap: 12px; }
+  .sb-left, .sb-right { width: 100%; justify-content: center; }
+  .login-card { padding: 22px; }
   .announcement-box { width: 92vw; }
   .announcement-header { padding: 18px 18px 0; }
   .announcement-body { padding: 12px 18px 18px; }
   .announcement-confirm { margin: 0 18px 18px; width: calc(100% - 36px); }
+  .hide-on-mobile-results { display: none; }
+}
+@media (max-width: 480px) {
+  .content-wrapper { padding: 0 16px; }
+  .landing { padding-top: 40px; }
+  .login-head h1 { font-size: 20px; }
+  .done-card { padding: 36px 24px; }
+  .cr-bar { display: none; }
+  .modal-box { padding: 26px 20px; }
 }
 </style>

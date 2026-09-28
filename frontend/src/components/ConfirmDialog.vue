@@ -105,39 +105,52 @@ const { confirmVisible, confirmOptions, confirm, cancel } = useConfirmSingleton(
 
 <style scoped>
 .confirm-overlay {
-  position: fixed; inset: 0; background: rgba(15,23,42,.45);
+  position: fixed; inset: 0; background: rgba(22, 22, 26, .42);
   display: flex; align-items: center; justify-content: center;
-  z-index: 1000; backdrop-filter: blur(3px);
-  animation: fadeIn .2s ease;
+  z-index: 1000;
+  animation: fadeIn .2s cubic-bezier(.32,.72,.35,1);
 }
 .confirm-dialog {
-  background: #fff; border-radius: 14px; padding: 32px 28px;
+  background: var(--c-surface); border: 1px solid var(--c-border-light); border-radius: 18px; padding: 32px 28px;
   width: 380px; max-width: 90vw; text-align: center;
-  box-shadow: 0 25px 60px rgba(0,0,0,.2);
-  animation: scaleIn .2s ease;
+  box-shadow: 0 8px 24px rgba(20,20,24,.09), 0 32px 80px rgba(20,20,24,.14);
+  animation: scaleIn .3s cubic-bezier(.32,.72,.35,1);
 }
 .confirm-icon {
   width: 56px; height: 56px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   margin: 0 auto 16px;
 }
-.confirm-icon.danger { background: #fef2f2; color: #ef4444; }
-.confirm-icon.warning { background: #fffbeb; color: #f59e0b; }
-.confirm-icon.info { background: #eef1fe; color: #4f6ef7; }
-.confirm-dialog h3 { font-size: 17px; font-weight: 700; margin-bottom: 8px; color: #1e293b; }
-.confirm-dialog p { font-size: 13.5px; color: #64748b; line-height: 1.5; margin-bottom: 24px; }
+.confirm-icon.danger { background: var(--c-danger-bg); color: var(--c-danger); }
+.confirm-icon.warning { background: var(--c-warning-bg); color: var(--c-warning); }
+.confirm-icon.info { background: var(--c-primary-bg); color: var(--c-primary); }
+.confirm-dialog h3 {
+  font-size: 17px; font-weight: 700; letter-spacing: -0.01em;
+  margin-bottom: 8px; color: var(--c-text);
+}
+.confirm-dialog p {
+  font-size: 13.5px; color: var(--c-text-secondary);
+  line-height: 1.55; margin-bottom: 24px;
+}
 .confirm-actions { display: flex; justify-content: center; gap: 10px; }
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   padding: 9px 20px; border: none; border-radius: 10px; font-weight: 600;
-  font-size: 13.5px; cursor: pointer; transition: all .15s;
+  font-size: 13.5px; cursor: pointer;
+  transition: background-color .2s cubic-bezier(.32,.72,.35,1),
+              color .2s cubic-bezier(.32,.72,.35,1),
+              transform .2s cubic-bezier(.32,.72,.35,1);
 }
-.btn-primary { background: #4f6ef7; color: #fff; }
-.btn-primary:hover { background: #3b5de7; }
-.btn-danger { background: #ef4444; color: #fff; }
-.btn-danger:hover { background: #dc2626; }
-.btn-ghost { background: transparent; color: #64748b; }
-.btn-ghost:hover { background: #f1f5f9; }
+.btn:active { transform: scale(.97); }
+.btn-primary { background: var(--c-primary); color: #fff; }
+.btn-primary:hover { background: var(--c-primary-hover); }
+.btn-danger { background: var(--c-danger); color: #fff; }
+.btn-danger:hover { background: var(--c-danger-hover); }
+.btn-ghost { background: transparent; color: var(--c-text-secondary); }
+.btn-ghost:hover { background: var(--c-bg); color: var(--c-text); }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes scaleIn { from { opacity: 0; transform: scale(.9); } to { opacity: 1; transform: scale(1); } }
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(.92) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
 </style>

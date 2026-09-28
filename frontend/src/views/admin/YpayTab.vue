@@ -1165,3 +1165,768 @@ const { accountForm, aliAccounts, channelCodeHelp, channelCodeLabels, channelTes
     </div>
   </div>
 </template>
+<style scoped>
+.ypay-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.ypay-tab > * {
+  animation: ypay-in .35s cubic-bezier(.32, .72, .35, 1) both;
+}
+
+.ypay-tab > *:nth-child(2) { animation-delay: .06s; }
+
+@keyframes ypay-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.btn {
+  transition: all .2s cubic-bezier(.32, .72, .35, 1);
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(.97);
+}
+
+/* 苹果分段控件 */
+.ypay-subtabs {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 2px;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  padding: 3px;
+}
+
+.ypay-subtab {
+  border: none;
+  background: transparent;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--c-text-secondary);
+  padding: 7px 18px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: all .2s cubic-bezier(.32, .72, .35, 1);
+}
+
+.ypay-subtab:hover:not(.active) {
+  color: var(--c-text);
+}
+
+.ypay-subtab.active {
+  background: var(--c-surface);
+  color: var(--c-text);
+  font-weight: 600;
+  box-shadow: var(--shadow-xs);
+}
+
+.ypay-subtab:active {
+  transform: scale(.97);
+}
+
+/* 卡片 */
+.settings-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 16px;
+  padding: 26px 28px;
+  box-shadow: var(--shadow-xs);
+}
+
+.settings-card h3 {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--c-text);
+  margin-bottom: 6px;
+}
+
+.settings-hint {
+  font-size: 12.5px;
+  color: var(--c-text-muted);
+  margin-bottom: 22px;
+}
+
+/* 基本配置布局 */
+.ypay-settings-layout {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.ypay-settings-layout > .settings-card:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.ypay-qr-cards {
+  display: flex;
+  gap: 20px;
+}
+
+.ypay-qr-card {
+  width: 240px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ypay-key-code {
+  font-family: var(--font-mono, 'SF Mono', Menlo, monospace);
+  font-size: 12.5px;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  padding: 6px 12px;
+  border-radius: 8px;
+  color: var(--c-text-secondary);
+  word-break: break-all;
+}
+
+.gen-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ypay-qr-img-wrap {
+  position: relative;
+  width: 180px;
+  height: 180px;
+  margin: 0 auto 14px;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.ypay-qr-img {
+  width: 160px;
+  height: 160px;
+  object-fit: contain;
+  transition: opacity .25s ease;
+}
+
+.qr-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qr-spinner {
+  width: 26px;
+  height: 26px;
+  border: 3px solid var(--c-border);
+  border-top-color: var(--c-primary);
+  border-radius: 50%;
+  animation: ypay-spin .7s linear infinite;
+}
+
+@keyframes ypay-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 监控状态 */
+.monitor-summary {
+  background: var(--c-bg);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+
+.monitor-summary-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--c-text-secondary);
+}
+
+.ypay-stat-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 999px;
+}
+
+.ypay-stat-badge.online {
+  background: var(--c-success-bg);
+  color: var(--c-success);
+}
+
+.ypay-stat-badge.offline {
+  background: var(--c-danger-bg);
+  color: var(--c-danger);
+}
+
+.ypay-stat-badge.key-mismatch {
+  background: rgba(255, 149, 0, .12);
+  color: var(--c-warning, #ff9500);
+}
+
+.ypay-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.ypay-dot.dot-live {
+  background: var(--c-success);
+  box-shadow: 0 0 0 3px rgba(52, 199, 89, .18);
+}
+
+.ypay-dot.dot-dead {
+  background: var(--c-danger);
+}
+
+.monitor-summary-item b {
+  font-variant-numeric: tabular-nums;
+}
+
+.text-warn { color: var(--c-warning, #ff9500); }
+.text-ok { color: var(--c-success); }
+
+.ypay-key-mismatch-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--c-warning, #ff9500);
+  background: rgba(255, 149, 0, .1);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+
+.ypay-key-mismatch-alert span {
+  flex: 1;
+}
+
+/* 订单筛选 */
+.ypay-order-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.ypay-order-filters {
+  display: flex;
+  gap: 2px;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  padding: 3px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.ypay-filter-btn {
+  border: none;
+  background: transparent;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--c-text-secondary);
+  padding: 5px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .2s cubic-bezier(.32, .72, .35, 1);
+}
+
+.ypay-filter-btn:hover:not(.active) {
+  color: var(--c-text);
+}
+
+.ypay-filter-btn.active {
+  background: var(--c-surface);
+  color: var(--c-text);
+  font-weight: 600;
+  box-shadow: var(--shadow-xs);
+}
+
+.ypay-state {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 11px;
+  border-radius: 999px;
+}
+
+.ypay-state.paid {
+  background: var(--c-success-bg);
+  color: var(--c-success);
+}
+
+.ypay-state.unpaid {
+  background: rgba(255, 149, 0, .12);
+  color: var(--c-warning, #ff9500);
+}
+
+.ypay-state.closed {
+  background: var(--c-bg);
+  color: var(--c-text-muted);
+}
+
+/* 收款通道 */
+.channel-section {
+  margin-top: 22px;
+}
+
+.channel-section:first-of-type {
+  margin-top: 0;
+}
+
+.channel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.channel-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--c-text);
+}
+
+.channel-count {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--c-text-muted);
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+
+.channel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.channel-card {
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  transition: transform .25s cubic-bezier(.32, .72, .35, 1), box-shadow .25s cubic-bezier(.32, .72, .35, 1), border-color .2s ease, opacity .2s ease;
+}
+
+.channel-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+  border-color: transparent;
+}
+
+.channel-card.disabled {
+  opacity: .55;
+}
+
+.channel-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.channel-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.channel-code-tag {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-primary);
+  background: var(--c-primary-soft, rgba(0, 113, 227, .1));
+  padding: 2px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.channel-card-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.btn-icon {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background .2s ease, transform .2s cubic-bezier(.32, .72, .35, 1);
+}
+
+.btn-icon:hover {
+  background: var(--c-surface);
+}
+
+.btn-icon:active {
+  transform: scale(.92);
+}
+
+.channel-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--c-text-secondary);
+}
+
+.channel-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.channel-status-dot.online {
+  background: var(--c-success);
+  box-shadow: 0 0 0 3px rgba(52, 199, 89, .18);
+}
+
+.channel-status-dot.offline {
+  background: var(--c-text-muted);
+}
+
+.channel-memo {
+  color: var(--c-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-empty {
+  text-align: center;
+  font-size: 13px;
+  color: var(--c-text-muted);
+  padding: 24px 0;
+  background: var(--c-bg);
+  border-radius: 12px;
+}
+
+/* 弹窗内部私有元素 */
+.channel-help-box {
+  background: var(--c-primary-soft, rgba(0, 113, 227, .06));
+  border: 1px solid var(--c-primary-soft, rgba(0, 113, 227, .15));
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--c-text-secondary);
+}
+
+.channel-help-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--c-primary);
+  margin-bottom: 8px;
+}
+
+.channel-help-item {
+  margin-bottom: 4px;
+}
+
+.channel-help-item strong {
+  color: var(--c-text);
+}
+
+.qr-upload-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.qr-upload-row textarea {
+  flex: 1;
+  min-width: 0;
+}
+
+.btn-upload-qr {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  color: var(--c-text-secondary);
+  border-radius: 10px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all .2s cubic-bezier(.32, .72, .35, 1);
+}
+
+.btn-upload-qr:hover:not(:disabled) {
+  color: var(--c-primary);
+  border-color: var(--c-primary);
+}
+
+.btn-upload-qr:active:not(:disabled) {
+  transform: scale(.97);
+}
+
+/* 测试项 */
+.channel-test-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 36px 0;
+  font-size: 13.5px;
+  color: var(--c-text-secondary);
+}
+
+.channel-test-checks,
+.paytest-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.ypay-test-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--c-bg);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+}
+
+.ypay-test-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-success-bg);
+  color: var(--c-success);
+  flex-shrink: 0;
+}
+
+.ypay-test-icon.fail-icon {
+  background: var(--c-danger-bg);
+  color: var(--c-danger);
+}
+
+.ypay-test-name {
+  font-weight: 600;
+  color: var(--c-text);
+  flex-shrink: 0;
+}
+
+.ypay-test-msg {
+  color: var(--c-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.channel-test-qr {
+  text-align: center;
+  padding: 8px 0 4px;
+}
+
+.channel-test-qr-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text);
+  margin-bottom: 10px;
+}
+
+.channel-test-qr-img {
+  width: 180px;
+  height: 180px;
+  object-fit: contain;
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  padding: 8px;
+  background: #fff;
+}
+
+.channel-test-qr-hint {
+  font-size: 12px;
+  color: var(--c-text-muted);
+  margin-top: 10px;
+}
+
+.channel-test-ok {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-success);
+  padding: 18px 0;
+}
+
+/* 支付测试 */
+.paytest-pay-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.paytest-qr-box {
+  text-align: center;
+  background: var(--c-bg);
+  border-radius: 14px;
+  padding: 18px;
+}
+
+.paytest-qr-img {
+  width: 190px;
+  height: 190px;
+  object-fit: contain;
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  padding: 8px;
+  background: #fff;
+}
+
+.paytest-amount {
+  font-size: 14px;
+  color: var(--c-text);
+  margin-top: 12px;
+}
+
+.paytest-amount strong {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--c-danger);
+  font-variant-numeric: tabular-nums;
+}
+
+.paytest-amount-warn {
+  font-size: 12px;
+  color: var(--c-text-muted);
+  margin-top: 4px;
+}
+
+.paytest-status {
+  width: 100%;
+}
+
+.paytest-waiting,
+.paytest-success,
+.paytest-expired {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 13.5px;
+  padding: 12px;
+  border-radius: 10px;
+}
+
+.paytest-waiting {
+  background: var(--c-bg);
+  color: var(--c-text-secondary);
+}
+
+.paytest-success {
+  background: var(--c-success-bg);
+  color: var(--c-success);
+  font-weight: 600;
+}
+
+.paytest-expired {
+  background: var(--c-danger-bg);
+  color: var(--c-danger);
+  font-weight: 600;
+}
+
+@media (max-width: 960px) {
+  .ypay-settings-layout {
+    flex-direction: column;
+  }
+
+  .ypay-settings-layout > .settings-card:first-child {
+    width: 100%;
+  }
+
+  .ypay-qr-cards {
+    width: 100%;
+  }
+
+  .ypay-qr-card {
+    flex: 1;
+    width: auto;
+  }
+}
+
+@media (max-width: 768px) {
+  .settings-card {
+    padding: 18px;
+  }
+
+  .ypay-subtabs {
+    align-self: stretch;
+  }
+
+  .ypay-subtab {
+    flex: 1;
+    text-align: center;
+    padding: 7px 8px;
+  }
+
+  .ypay-qr-cards {
+    flex-direction: column;
+  }
+
+  .ypay-qr-card {
+    width: 100%;
+  }
+
+  .channel-card-top {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .channel-card-actions {
+    align-self: flex-end;
+  }
+}
+</style>

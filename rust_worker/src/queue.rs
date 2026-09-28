@@ -151,13 +151,12 @@ async fn update_job(db: &Db, job_id: &str, fields: &[(&str, String)]) -> Result<
 /// 执行单个学校任务：登录 → 扫描+刷课 → 状态更新（status.json 协议）
 async fn execute_school_job(state: &AppState, job: &QueueJob) {
     let base_url = crate::scan::platform_base_url(job.website_id);
-    let ocr_url = std::env::var("OCR_SERVICE_URL").unwrap_or_default();
     let tmpdir = std::env::temp_dir().join(format!("task_{}", job.job_id));
     let _ = tokio::fs::create_dir_all(&tmpdir).await;
     let status_file = tmpdir.join("status.json").to_string_lossy().to_string();
 
-    // 登录
-    let session = match login_school(&base_url, &job.username, &job.password, &ocr_url).await {
+    // 登录（验证码由本地 OCR 引擎识别）
+    let session = match login_school(&base_url, &job.username, &job.password).await {
         Ok(s) => s,
         Err(e) => {
             let _ = update_job(&state.db, &job.job_id,
@@ -179,8 +178,6 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
         course_ids,
         status_file: status_file.clone(),
         push_ws: false,
-        ocr_url: format!("{}/api/internal/ocr", std::env::var("SITE_URL").unwrap_or_else(|_| "http://127.0.0.1:8000".into())),
-        relogin_url: format!("{}/api/internal/relogin", std::env::var("SITE_URL").unwrap_or_else(|_| "http://127.0.0.1:8000".into())),
     };
 
     let result = crate::scan::run_scan_and_study(&task, "", "").await;

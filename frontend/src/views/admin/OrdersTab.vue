@@ -8,7 +8,7 @@ const { taskTypeNames } = useAdminStore().state().sysConfig
 </script>
 
 <template>
-  <div>
+  <div class="orders-tab">
     <div class="section-actions">
       <div class="filter-group">
         <button
@@ -57,8 +57,7 @@ const { taskTypeNames } = useAdminStore().state().sysConfig
       </button>
       <button
         v-if="currentRole === 'admin'"
-        class="btn btn-ghost btn-sm"
-        style="color:#ef4444;"
+        class="btn btn-ghost btn-sm danger-text"
         @click="clearOrderHistory"
       >
         清除历史
@@ -122,8 +121,7 @@ const { taskTypeNames } = useAdminStore().state().sysConfig
                 </button>
                 <button
                   v-if="o.status === 'cancelled' && currentRole === 'admin'"
-                  class="btn btn-xs"
-                  style="background:#f59e0b;color:#fff;"
+                  class="btn btn-xs btn-warn"
                   @click="enqueueOrder(o.order_id)"
                 >
                   重新入队
@@ -156,3 +154,153 @@ const { taskTypeNames } = useAdminStore().state().sysConfig
     </div>
   </div>
 </template>
+
+<style scoped>
+.orders-tab {
+  display: flex;
+  flex-direction: column;
+  animation: od-in .35s cubic-bezier(.32, .72, .35, 1) both;
+}
+@keyframes od-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ==================== 筛选区 ==================== */
+.section-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.filter-group { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip {
+  padding: 6px 14px;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: var(--c-surface);
+  color: var(--c-text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all .2s cubic-bezier(.32, .72, .35, 1);
+}
+.chip:hover { border-color: var(--c-primary); color: var(--c-primary); }
+.chip:active { transform: scale(.97); }
+.chip.active {
+  background: var(--c-primary);
+  color: #fff;
+  border-color: var(--c-primary);
+  box-shadow: var(--shadow-xs);
+}
+.total-label { font-size: 12.5px; color: var(--c-text-muted); margin-left: auto; }
+.danger-text { color: var(--c-danger); }
+
+/* ==================== 表格 ==================== */
+.table-wrap {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: var(--shadow-xs);
+}
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table th {
+  text-align: left;
+  padding: 11px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-text-muted);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  border-bottom: 1px solid var(--c-border);
+  white-space: nowrap;
+}
+.data-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--c-border);
+  color: var(--c-text);
+  vertical-align: middle;
+}
+.data-table tbody tr { transition: background .2s ease; }
+.data-table tbody tr:hover { background: var(--c-bg); }
+.data-table tbody tr:last-child td { border-bottom: none; }
+
+.user-cell { display: flex; flex-direction: column; gap: 1px; }
+.uname { font-weight: 600; color: var(--c-text); }
+.uid { font-size: 11px; color: var(--c-text-muted); }
+.money-cell { font-weight: 600; font-variant-numeric: tabular-nums; }
+.date-cell { font-size: 12px; color: var(--c-text-muted); white-space: nowrap; }
+.code-tag {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  background: var(--c-bg);
+  padding: 2px 7px;
+  border-radius: 6px;
+  color: var(--c-text-secondary);
+}
+
+/* ==================== 状态标签 ==================== */
+.status-tag {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+.status-tag.ok { background: var(--c-success-bg); color: var(--c-success); }
+.status-tag.warn { background: var(--c-warning-bg); color: var(--c-warning); }
+.status-tag.bad { background: var(--c-danger-bg); color: var(--c-danger); }
+.status-tag.primary { background: var(--c-primary-bg); color: var(--c-primary); }
+.status-tag.muted { background: var(--c-bg); color: var(--c-text-muted); }
+
+/* ==================== 操作区 ==================== */
+.action-group { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ==================== 按钮 ==================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform .2s cubic-bezier(.32, .72, .35, 1), background .2s ease, box-shadow .2s ease, opacity .2s ease;
+}
+.btn:hover:not(:disabled) { transform: translateY(-1px); }
+.btn:active:not(:disabled) { transform: scale(.97); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn-primary { background: var(--c-primary); color: #fff; }
+.btn-primary:hover:not(:disabled) { background: var(--c-primary-hover); }
+.btn-success { background: var(--c-success); color: #fff; }
+.btn-warn { background: var(--c-warning); color: #fff; }
+.btn-danger { background: var(--c-danger); color: #fff; }
+.btn-ghost { background: transparent; color: var(--c-text-secondary); }
+.btn-ghost:hover:not(:disabled) { color: var(--c-primary); background: var(--c-primary-bg); transform: none; }
+.btn-sm { padding: 6px 12px; font-size: 12px; }
+.btn-xs { padding: 4px 10px; font-size: 11.5px; border-radius: 8px; }
+
+/* ==================== 空状态 ==================== */
+.empty { text-align: center; padding: 60px 20px; color: var(--c-text-muted); }
+.empty p { margin-bottom: 16px; }
+
+/* ==================== 响应式 ==================== */
+@media (max-width: 768px) {
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .data-table { min-width: 860px; }
+  .data-table th, .data-table td { padding: 9px 12px; font-size: 12px; }
+  .total-label { margin-left: 0; }
+}
+@media (max-width: 480px) {
+  .chip { padding: 5px 11px; font-size: 11.5px; }
+  .section-actions { gap: 8px; }
+}
+</style>

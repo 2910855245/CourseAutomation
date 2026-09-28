@@ -8,17 +8,26 @@
 
 mod api;
 mod auth;
+mod cx_quiz;
 mod cx_scan;
 mod cx_study;
 mod db;
 mod exam;
+mod llm;
 mod login;
+mod ocr;
+mod ocr_ort;
 mod order;
 mod pay;
+mod pay_routes;
 mod progress;
 mod queue;
 mod scan;
+mod schema;
+mod school_exam;
 mod study;
+mod ypay_db;
+mod ypay_qr;
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -105,8 +114,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/submit_exam", post(submit_exam))
         .route("/api/progress/live/push", post(progress::push_progress))
         .route("/api/progress/ws/live", get(progress::ws_live))
+        .route("/ocr", post(ocr_recognize))
         .route("/cancel/{order_id}", post(cancel))
         .merge(api::router(state.clone()))
+        .merge(school_exam::router())
+        .merge(pay_routes::router())
         .nest_service("/static", ServeDir::new("static").append_index_html_on_directories(true))
         .fallback(spa_fallback)
         .layer(middleware::from_fn(cache_headers))
@@ -298,6 +310,23 @@ struct ExamTask {
 
 fn default_model() -> String {
     "deepseek-v4-flash".to_string()
+}
+
+/// OCR 识别（对齐 ocr_sidecar.py /ocr：{"image_base64"} → {"code"}）
+async fn ocr_recognize(Json(body): Json<serde_json::Value>) -> Json<serde_json::Value> {
+    use base64::Engine;
+    let b64 = body["image_base64"].as_str().unwrap_or("");
+    let img = match base64::engine::general_purpose::STANDARD.decode(b64) {
+        Ok(v) => v,
+        Err(e) => return Json(json!({"code": "", "error": format!("base64 解码失败: {e}")})),
+    };
+    match ocr::engine() {
+        Ok(engine) => match engine.recognize(&img) {
+            Ok(code) => Json(json!({"code": code})),
+            Err(e) => Json(json!({"code": "", "error": format!("{e:#}")})),
+        },
+        Err(e) => Json(json!({"code": "", "error": format!("{e:#}")})),
+    }
 }
 
 async fn submit_exam(

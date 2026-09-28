@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use crate::db::Db;
 
-fn hash_md5(s: &str) -> String {
+pub(crate) fn hash_md5(s: &str) -> String {
     format!("{:x}", compute(s.as_bytes()))
 }
 
@@ -141,53 +141,169 @@ impl Round2 for f64 {
     }
 }
 
-/// 支付匹配（对齐 ypay_service.match_payment：浮动价精确匹配 → 标记已付 → 释放价格锁）
-/// 返回 trade_no（无匹配 → None）。
-/// 注：回调通知（_send_callback 线程）暂未移植，迁移期由 Python 侧承担。
-pub async fn match_payment(db: &Db, price: f64, pay_type: i64) -> Option<String> {
-    let base = (price * 100.0).round() / 100.0;
-    let pool = db.clone_pool();
-    let row = tokio::task::spawn_blocking(move || -> Option<(String, f64)> {
-        let conn = pool.get().ok()?;
-        let now = crate::queue::now_str();
-        conn.query_row(
-            "SELECT trade_no, truemoney FROM ypay_order
-             WHERE truemoney=?1 AND type=?2 AND status=0 AND out_time > ?3
-             ORDER BY create_time ASC LIMIT 1",
-            rusqlite::params![base, pay_type, now],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        ).ok()
-    })
-    .await
-    .ok()
-    .flatten();
-
-    let (trade_no, truemoney) = row?;
-    if (truemoney - base).abs() >= 0.01 {
-        tracing::warn!(pushed = base, order = truemoney, trade_no, "ypay_amount_mismatch");
+/// ISO 时间字符串解析回秒（对齐 datetime.fromisoformat 处理的 "YYYY-MM-DDTHH:MM:SS" 形状）
+/// 解析失败返回 None。仅支持 now_str()/chrono_lite 产出的格式。
+pub fn parse_iso_secs(s: &str) -> Option<i64> {
+    let s = s.trim();
+    if s.len() < 19 {
         return None;
     }
-    // 标记已付（对齐 ypay_mark_paid）
-    let pool = db.clone_pool();
-    let trade_no2 = trade_no.clone();
-    let ok = tokio::task::spawn_blocking(move || -> bool {
-        match pool.get() {
-            Ok(conn) => conn.execute(
-                "UPDATE ypay_order SET status=1, end_time=?1 WHERE trade_no=?2",
-                rusqlite::params![crate::queue::now_str(), trade_no2],
-            ).is_ok(),
-            Err(_) => false,
+    let num = |a: usize, b: usize| -> Option<i64> { s.get(a..b)?.parse().ok() };
+    let y = num(0, 4)?;
+    let mo = num(5, 7)?;
+    let d = num(8, 10)?;
+    let h = num(11, 13)?;
+    let mi = num(14, 16)?;
+    let se = num(17, 19)?;
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) {
+        return None;
+    }
+    // days from civil（Howard Hinnant 算法），与 chrono_lite 互逆
+    let yy = if mo <= 2 { y - 1 } else { y };
+    let era = if yy >= 0 { yy } else { yy - 399 } / 400;
+    let yoe = yy - era * 400;
+    let mp = (mo + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    Some(days * 86400 + h * 3600 + mi * 60 + se)
+}
+
+/// 当前时间 + secs 秒 → ISO 字符串（对齐 datetime.now() + timedelta(seconds=...) 的 isoformat）
+pub fn iso_after_secs(secs: u64) -> String {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let days = (now + secs) / 86400;
+    let mut y = 1970u64;
+    let mut rem = days;
+    loop {
+        let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+        let ydays = if leap { 366 } else { 365 };
+        if rem < ydays { break; }
+        rem -= ydays;
+        y += 1;
+    }
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let mdays = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut m = 0usize;
+    while rem >= mdays[m] {
+        rem -= mdays[m];
+        m += 1;
+    }
+    let sod = (now + secs) % 86400;
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+        y, m + 1, rem + 1, sod / 3600, (sod % 3600) / 60, sod % 60
+    )
+}
+
+/// 对齐 Python str(float)：10.0 → "10.0"，10.5 → "10.5"
+/// Rust format!("{}", f64) 会把 10.0 打成 "10"，会破坏回调签名串的逐字节一致性。
+pub fn py_float_str(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 {
+        format!("{v:.1}")
+    } else {
+        format!("{v}")
+    }
+}
+
+/// 异步回调通知（对齐 _send_callback：form POST，2 次尝试，间隔 2s，timeout 5s）
+pub async fn send_callback(order: Value, notify_url: String, key: String) {
+    let pay_id = order.get("trade_no").and_then(Value::as_str).unwrap_or("").to_string();
+    let param = order.get("out_trade_no").and_then(Value::as_str).unwrap_or("").to_string();
+    let ptype = order.get("pay_type").map(|v| match v {
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => s.clone(),
+        _ => "1".to_string(),
+    }).unwrap_or_else(|| "1".to_string());
+    let price_str = py_float_str(order.get("money").and_then(Value::as_f64).unwrap_or(0.0));
+    let really_price_str = py_float_str(order.get("truemoney").and_then(Value::as_f64).unwrap_or(0.0));
+    let sign = hash_md5(&format!("{pay_id}{param}{ptype}{price_str}{really_price_str}{key}"));
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_default();
+    for attempt in 0..2 {
+        let form = [
+            ("payId", pay_id.as_str()),
+            ("param", param.as_str()),
+            ("type", ptype.as_str()),
+            ("price", price_str.as_str()),
+            ("reallyPrice", really_price_str.as_str()),
+            ("sign", sign.as_str()),
+        ];
+        match client.post(&notify_url).form(&form).send().await {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                let text = resp.text().await.unwrap_or_default();
+                if status == 200 {
+                    let t = text.trim().to_lowercase();
+                    if ["success", "ok", "1", "true"].contains(&t.as_str()) {
+                        tracing::info!(trade_no = pay_id, attempt = attempt + 1, "ypay_callback_success");
+                        return;
+                    }
+                    tracing::warn!(trade_no = pay_id, attempt = attempt + 1, body = &t[..t.len().min(100)], "ypay_callback_bad_response");
+                } else {
+                    tracing::warn!(trade_no = pay_id, attempt = attempt + 1, status, "ypay_callback_http_error");
+                }
+                if attempt < 1 {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(trade_no = pay_id, attempt = attempt + 1, error = %e, "ypay_callback_retry");
+                if attempt < 1 {
+                    tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt as u32 + 1))).await;
+                }
+            }
         }
+    }
+    tracing::error!(trade_no = pay_id, notify_url, "ypay_callback_failed");
+}
+
+/// 支付匹配（对齐 ypay_service.match_payment：
+/// 关过期 → 金额+类型匹配 → 标记已付 → 释放价格锁 → spawn 回调线程）
+/// 返回匹配的支付单 dict（无匹配 → None）。
+pub async fn match_payment(db: &Db, price: f64, pay_type: i64) -> Option<Value> {
+    let dbc = db.clone();
+    let order = tokio::task::spawn_blocking(move || -> Option<Value> {
+        dbc.ypay_close_expired_orders_sync();
+        // 对齐 round(float(Decimal(str(price))), 2)
+        let base = (price * 100.0).round() / 100.0;
+        let order = dbc.ypay_find_pending_by_price_sync(base, pay_type)?;
+        let truemoney = order.get("truemoney").and_then(Value::as_f64).unwrap_or(0.0);
+        if (truemoney - base).abs() >= 0.01 {
+            let tn = order.get("trade_no").and_then(Value::as_str).unwrap_or("");
+            tracing::warn!(pushed = base, order = truemoney, trade_no = tn, "ypay_amount_mismatch");
+            return None;
+        }
+        let trade_no = order.get("trade_no").and_then(Value::as_str).unwrap_or("").to_string();
+        if !dbc.ypay_mark_paid_sync(&trade_no) {
+            return None;
+        }
+        dbc.ypay_release_price_sync(truemoney);
+        Some(order)
     })
     .await
     .ok()
-    .unwrap_or(false);
-    if ok {
-        tracing::info!(trade_no, price = base, "ypay_payment_matched");
-        Some(trade_no)
-    } else {
-        None
+    .flatten()?;
+
+    let notify_url = order.get("notify_url").and_then(Value::as_str).unwrap_or("").to_string();
+    if !notify_url.is_empty() {
+        let dbc = db.clone();
+        let order2 = order.clone();
+        tokio::spawn(async move {
+            let key = tokio::task::spawn_blocking(move || dbc.ypay_setting_get_sync("key", ""))
+                .await
+                .unwrap_or_default();
+            send_callback(order2, notify_url, key).await;
+        });
     }
+    let tn = order.get("trade_no").and_then(Value::as_str).unwrap_or("");
+    tracing::info!(trade_no = tn, price, "ypay_payment_matched");
+    Some(order)
 }
 
 /// VMQ 推送完整判定（对齐 _vmq_push_sync：验签 → 匹配 → notify/success）
@@ -202,6 +318,154 @@ pub async fn vmq_push_response(db: &Db, ptype: &str, price: &str, t: &str, sign:
         Some(_) => "success".to_string(),
         None => "notify".to_string(),
     }
+}
+
+// ── 创建支付单（对齐 ypay_service.create_order）─────────────────────────
+
+struct PreparedOrder {
+    account: Value,
+    trade_no: String,
+    really_price: f64,
+    type_str: String,
+    site_url: String,
+    timeout_seconds: u64,
+}
+
+/// 对齐 site_url 取值链：ypay_setting site_url → env SITE_URL → 默认
+fn site_url_of(db: &Db) -> String {
+    let v = db.ypay_setting_get_sync("site_url", "");
+    let v = if v.is_empty() { std::env::var("SITE_URL").unwrap_or_default() } else { v };
+    let v = if v.is_empty() { "http://localhost:8000".to_string() } else { v };
+    v.trim_end_matches('/').to_string()
+}
+
+/// 对齐 ypay_service._get_site_url（异步包装，spawn_blocking 读 DB）
+pub async fn get_site_url(db: &Db) -> String {
+    let dbc = db.clone();
+    tokio::task::spawn_blocking(move || site_url_of(&dbc))
+        .await
+        .unwrap_or_else(|_| "http://localhost:8000".to_string())
+}
+
+/// 对齐 ypay_service.build_pay_url
+pub async fn build_pay_url(db: &Db, trade_no: &str) -> String {
+    format!("{}/#/payment/{}", get_site_url(db).await, trade_no)
+}
+
+/// 创建支付单（对齐 ypay_service.create_order）。
+/// 涉及网络（lkl 等动态二维码），故 DB 段与网络段分离；失败路径释放价格锁。
+pub async fn create_order(
+    db: &Db,
+    client: &reqwest::Client,
+    pay_type: i64,
+    price: f64,
+    out_trade_no: &str,
+    name: &str,
+    notify_url: &str,
+    return_url: &str,
+    ip: &str,
+    floating: bool,
+) -> Option<Value> {
+    let money = (price * 100.0).round() / 100.0;
+    let trade_no = generate_trade_no();
+
+    // 段 1：关过期 + 选渠道 + 浮动价 + 锁价
+    let dbc = db.clone();
+    let out_trade_no_s = out_trade_no.to_string();
+    let Some(prep) = tokio::task::spawn_blocking(move || -> Option<PreparedOrder> {
+        let account = dbc.ypay_pick_channel_sync(pay_type)?;
+        let ch_code = account.get("code").and_then(Value::as_str).unwrap_or("");
+        let ch_name = account.get("name").and_then(Value::as_str).unwrap_or("");
+        let has_qr = !account.get("qr_url").and_then(Value::as_str).unwrap_or("").is_empty();
+        tracing::info!(pay_type, code = ch_code, name = ch_name, has_qr_url = has_qr, "ypay_channel_picked");
+        let account_id = account.get("id").and_then(Value::as_i64).unwrap_or(0);
+        let really_price = if floating {
+            let existing = dbc.ypay_get_active_prices_sync(account_id);
+            compute_floating_price(money, &existing)
+        } else {
+            money
+        };
+        let locked = dbc.ypay_lock_price_sync(really_price, &trade_no)?;
+        // Python 用锁后返回价（+0.01 重试可能改变价格）
+        let really_price = locked;
+        // 对齐 type_str 修正：账单/插件渠道覆盖 account.type
+        let code = account.get("code").and_then(Value::as_str).unwrap_or("").to_string();
+        let mut type_str = {
+            let t = account.get("type").and_then(Value::as_str).unwrap_or("");
+            if t.is_empty() {
+                crate::ypay_db::pay_type_str(pay_type).to_string()
+            } else {
+                t.to_string()
+            }
+        };
+        if ["lkl_alipay", "dougong_alipay", "lebrush_alipay"].contains(&code.as_str()) {
+            type_str = "alipay".to_string();
+        } else if ["lkl_wxpay", "dougong_wxpay", "lebrush_wxpay"].contains(&code.as_str()) {
+            type_str = "wxpay".to_string();
+        }
+        let site_url = site_url_of(&dbc);
+        let timeout_seconds = dbc.ypay_setting_get_sync("pay_timeout", "300").parse::<u64>().unwrap_or(300);
+        let _ = out_trade_no_s;
+        Some(PreparedOrder { account, trade_no, really_price, type_str, site_url, timeout_seconds })
+    })
+    .await
+    .ok()
+    .flatten() else {
+        tracing::warn!(pay_type, "ypay_no_channel 或锁价失败");
+        return None;
+    };
+
+    // 段 2：生成二维码（可能走网络）
+    let (qrcode, h5_qrurl) = crate::ypay_qr::generate_qrcode(
+        client, &prep.account, prep.really_price, &prep.trade_no, out_trade_no, &prep.site_url,
+    )
+    .await;
+    if qrcode.is_empty() {
+        let code = prep.account.get("code").and_then(Value::as_str).unwrap_or("").to_string();
+        let dbc = db.clone();
+        let rp = prep.really_price;
+        tokio::task::spawn_blocking(move || dbc.ypay_release_price_sync(rp)).await.ok();
+        tracing::warn!(code, trade_no = prep.trade_no, "ypay_qrcode_failed");
+        return None;
+    }
+
+    // 段 3：写支付单
+    let dbc = db.clone();
+    let name_s = name.to_string();
+    let notify_s = notify_url.to_string();
+    let return_s = return_url.to_string();
+    let ip_s = ip.to_string();
+    let out_time = iso_after_secs(prep.timeout_seconds);
+    let out_trade_no_s = out_trade_no.to_string();
+    let code = prep.account.get("code").and_then(Value::as_str).unwrap_or("").to_string();
+    let channel_name = prep.account.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+    let account_id = prep.account.get("id").and_then(Value::as_i64).unwrap_or(0);
+    let trade_no = prep.trade_no.clone();
+    let order = tokio::task::spawn_blocking(move || {
+        let created = dbc.ypay_create_order_sync(
+            &trade_no, &out_trade_no_s, pay_type, &prep.type_str, &name_s, money,
+            prep.really_price, account_id, &qrcode, &h5_qrurl, &notify_s, &return_s, &ip_s, &out_time,
+        );
+        if created.is_none() {
+            dbc.ypay_release_price_sync(prep.really_price);
+        }
+        created
+    })
+    .await
+    .ok()
+    .flatten()?;
+
+    let qr_content_type = crate::ypay_qr::detect_qr_content_type(
+        order.get("qrcode").and_then(Value::as_str).unwrap_or(""),
+    );
+    let mut order = order;
+    if let Value::Object(ref mut m) = order {
+        m.insert("qr_content_type".into(), Value::String(qr_content_type.into()));
+        m.insert("channel_code".into(), Value::String(code));
+        m.insert("channel_name".into(), Value::String(channel_name));
+    }
+    tracing::info!(price = money, really_price = prep.really_price, pay_type, "ypay_order_created");
+    Some(order)
 }
 
 #[cfg(test)]

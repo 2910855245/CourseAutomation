@@ -4,56 +4,59 @@
       <template v-if="loading">
         <div class="pay-spinner"></div>
         <p class="pay-hint">
-加载订单信息...
-</p>
+          正在加载订单信息…
+        </p>
       </template>
 
       <template v-else-if="error">
         <div class="pay-icon-fail">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="1.8">
             <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
           </svg>
         </div>
+        <h2 class="pay-title">
+          无法加载订单
+        </h2>
         <p class="pay-error-text">
-{{ error }}
-</p>
+          {{ error }}
+        </p>
       </template>
 
       <template v-else-if="expired">
         <div class="pay-icon-fail">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--c-warning)" stroke-width="1.8">
             <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
           </svg>
         </div>
         <h2 class="pay-title">
-订单已过期
-</h2>
+          订单已过期
+        </h2>
         <p class="pay-hint">
-请返回重新下单
-</p>
+          请返回重新下单
+        </p>
       </template>
 
       <template v-else>
         <div v-if="mobileRedirecting" class="mobile-redirect-box">
           <div class="pay-spinner"></div>
           <p class="pay-hint">
-正在跳转到支付APP...
-</p>
-          <a v-if="h5Url" :href="h5Url" class="pay-btn-back">手动打开支付APP</a>
-          <button class="pay-btn-back" style="background:#6b7280;margin-top:8px" @click="mobileRedirecting = false">
-返回二维码
-</button>
+            正在跳转到支付 App…
+          </p>
+          <a v-if="h5Url" :href="h5Url" class="pay-btn-back">手动打开支付 App</a>
+          <button class="pay-btn-back pay-btn-muted" @click="mobileRedirecting = false">
+            返回二维码
+          </button>
         </div>
         <template v-else>
           <h2 class="pay-title">
-扫码支付
-</h2>
+            扫码支付
+          </h2>
           <div class="pay-amount">
-¥{{ reallyPrice.toFixed(2) }}
-</div>
+            ¥{{ reallyPrice.toFixed(2) }}
+          </div>
           <p class="pay-amount-warn">
-请务必支付相同金额，多一分少一分都无法检测到
-</p>
+            请支付相同金额，否则无法自动到账
+          </p>
 
           <!-- 二维码展示区 -->
           <div class="qr-box">
@@ -63,19 +66,19 @@
           </div>
 
           <p class="pay-hint">
-{{ payHint }}
-</p>
+            {{ payHint }}
+          </p>
           <p v-if="channelName" class="pay-channel">
-通道：{{ channelName }}
-</p>
+            支付通道：{{ channelName }}
+          </p>
 
-          <a v-if="h5Url && qrContentType !== 'wxpay'" :href="h5Url" class="pay-btn-back" style="display:block;text-align:center;margin:12px auto 0;max-width:200px">打开支付APP</a>
-          <button v-if="isMobile() && qrImage && qrContentType === 'wxpay'" class="pay-btn-back" style="display:block;margin:12px auto 0;max-width:200px;background:#07c160" @click="saveQr">
-保存二维码到相册
-</button>
+          <a v-if="h5Url && qrContentType !== 'wxpay'" :href="h5Url" class="pay-btn-back">打开支付 App</a>
+          <button v-if="isMobile() && qrImage && qrContentType === 'wxpay'" class="pay-btn-back pay-btn-wechat" @click="saveQr">
+            保存二维码到相册
+          </button>
 
           <div v-if="remaining > 0" class="pay-countdown">
-            剩余支付时间：{{ formatTime(remaining) }}
+            剩余支付时间 {{ formatTime(remaining) }}
           </div>
         </template>
       </template>
@@ -279,108 +282,173 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f5f5f7;
   padding: 20px;
+  position: relative;
 }
 .pay-card {
-  background: #fff;
-  border-radius: 16px;
-  padding: 40px 32px;
-  max-width: 380px;
+  position: relative;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-light);
+  border-radius: 20px;
+  padding: 44px 36px;
+  max-width: 400px;
   width: 100%;
   text-align: center;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(20,20,24,.07), 0 28px 72px rgba(20, 20, 24, .12);
+  animation: pay-rise .32s cubic-bezier(.32, .72, .35, 1) both;
 }
+@keyframes pay-rise {
+  from { opacity: 0; transform: translateY(16px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
 .pay-title {
-  font-size: 20px;
+  font-size: 21px;
   font-weight: 700;
-  color: #1a1a1a;
-  margin: 0 0 8px;
+  letter-spacing: -.015em;
+  color: var(--c-text);
+  margin: 0 0 6px;
 }
 .pay-amount {
-  font-size: 36px;
+  font-size: 40px;
   font-weight: 800;
-  color: #1a1a1a;
-  margin: 16px 0 4px;
+  letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text);
+  margin: 14px 0 4px;
 }
 .pay-amount-warn {
   font-size: 12px;
-  color: #ef4444;
-  margin: 0 0 20px;
-  font-weight: 500;
+  color: var(--c-warning);
+  margin: 0 0 22px;
+  font-weight: 600;
 }
+
 .qr-box {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin: 0 auto 20px;
+  min-height: 220px;
+  margin: 0 auto 18px;
 }
 .qr-img {
   width: 220px;
   height: 220px;
-  border-radius: 12px;
-  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  background: #fff;
+  padding: 8px;
   object-fit: contain;
+  box-shadow: 0 0 0 6px rgba(16, 16, 20, .04), 0 12px 32px rgba(20, 20, 24, .09);
 }
+
 .pay-hint {
   font-size: 14px;
-  color: #6b7280;
-  margin: 0 0 8px;
-  line-height: 1.5;
+  color: var(--c-text-secondary);
+  margin: 0 0 6px;
+  line-height: 1.55;
 }
 .pay-channel {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--c-text-muted);
   margin: 0 0 8px;
 }
 .pay-countdown {
-  font-size: 13px;
-  color: #f59e0b;
+  display: inline-block;
+  font-size: 12.5px;
+  color: var(--c-warning);
   font-weight: 600;
-  margin-top: 12px;
+  margin-top: 14px;
+  padding: 4px 14px;
+  background: var(--c-warning-bg);
+  border-radius: 999px;
 }
 .pay-error-text {
-  font-size: 15px;
-  color: #ef4444;
-  margin: 16px 0 0;
+  font-size: 14px;
+  color: var(--c-danger);
+  margin: 10px 0 0;
+  line-height: 1.5;
 }
 .pay-icon-fail {
+  display: flex;
+  justify-content: center;
   margin-bottom: 16px;
+  animation: pay-pop .35s cubic-bezier(.32, .72, .35, 1) both;
 }
+@keyframes pay-pop {
+  from { opacity: 0; transform: scale(.72); }
+  to { opacity: 1; transform: scale(1); }
+}
+
 .pay-spinner {
-  width: 36px;
-  height: 36px;
-  border: 3px solid #e5e7eb;
-  border-top-color: #6366f1;
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--c-border);
+  border-top-color: var(--c-primary);
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  animation: spin .7s linear infinite;
   margin: 0 auto 16px;
 }
-.pay-redirect {
-  font-size: 13px;
-  color: #6b7280;
-  margin-top: 12px;
-}
+
 .pay-btn-back {
-  margin-top: 16px;
-  padding: 10px 24px;
-  background: #4f6ef7;
+  display: block;
+  margin: 14px auto 0;
+  max-width: 220px;
+  width: 100%;
+  padding: 11px 24px;
+  background: var(--c-gradient);
   color: #fff;
   border: none;
-  border-radius: 10px;
+  border-radius: 12px;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
+  text-decoration: none;
+  text-align: center;
+  box-shadow: 0 2px 10px rgba(16, 16, 20, .16);
+  transition: transform .22s cubic-bezier(.32, .72, .35, 1), box-shadow .22s, background .22s;
 }
-.pay-btn-back:active { background: #3b5de7; }
+.pay-btn-back:hover {
+  filter: brightness(1.12);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(16, 16, 20, .2);
+}
+.pay-btn-back:active {
+  transform: scale(.97);
+  box-shadow: 0 1px 4px rgba(20, 20, 24, .2);
+}
+.pay-btn-wechat {
+  background: #07c160;
+  box-shadow: 0 2px 10px rgba(7, 193, 96, .22);
+}
+.pay-btn-wechat:hover {
+  background: #06ad56;
+  box-shadow: 0 5px 16px rgba(7, 193, 96, .28);
+}
+.pay-btn-muted {
+  background: var(--c-text-secondary);
+  box-shadow: none;
+  margin-top: 8px;
+}
+.pay-btn-muted:hover {
+  background: var(--c-surface-3);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .14);
+}
 
-@media (max-width: 420px) {
-  .pay-card { padding: 28px 20px; }
-  .pay-amount { font-size: 42px; }
-  .qr-img { width: 260px; height: 260px; }
+.mobile-redirect-box {
+  text-align: center;
+  padding: 8px 0;
+}
+.mobile-redirect-box .pay-hint {
+  margin-bottom: 4px;
+}
+
+@media (max-width: 480px) {
+  .pay-card { padding: 32px 20px; }
+  .pay-amount { font-size: 34px; }
+  .qr-img { width: 240px; height: 240px; }
+  .qr-box { min-height: 240px; }
 }
 @keyframes spin { to { transform: rotate(360deg) } }
-@keyframes circle-draw { to { stroke-dashoffset: 0 } }
-@keyframes check-draw { to { stroke-dashoffset: 0 } }
-@keyframes fade-in { to { opacity: 1 } }
 </style>

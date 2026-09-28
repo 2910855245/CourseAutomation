@@ -1,6 +1,6 @@
 # 在线课程自动化平台
 
-FastAPI + Vue3 全栈在线课程自动化 SaaS 平台，支持多平台视频学习、考试辅助、聚合支付。
+Rust + Vue3 全栈在线课程自动化 SaaS 平台，支持多平台视频学习、考试辅助、聚合支付。后端为单个 Rust 二进制（axum），前端构建产物由其直接托管。
 
 ## 运营模式
 
@@ -14,7 +14,7 @@ FastAPI + Vue3 全栈在线课程自动化 SaaS 平台，支持多平台视频�
 |--------|------|
 | `2910855245` | `woainima123` |
 
-登录入口：浏览器打开 `http://<服务器IP>:8000/#/admin`（登录需输一次图片验证码）。部署后建议在「安全中心」修改密码。
+登录入口：浏览器打开 `http://<服务器IP>:17017/#/admin`（登录需输一次图片验证码）。部署后建议在「安全中心」修改密码。
 
 ## Linux 部署（直接部署，无需宝塔/Docker）
 
@@ -22,9 +22,9 @@ FastAPI + Vue3 全栈在线课程自动化 SaaS 平台，支持多平台视频�
 # 1. 上传项目到服务器，例如 /opt/anti-course
 cd /opt/anti-course
 
-# 2. 安装依赖
-python3 -m venv venv
-venv/bin/pip install -r requirements.txt
+# 2. 构建后端（需要 Rust 1.97+）
+cd rust_worker && cargo build --release && cd ..
+# 二进制在 target/release/rust_worker（本仓库配置了外置 target，见 rust_worker/.cargo/config.toml）
 
 # 3. 配置
 cp .env.example .env
@@ -33,19 +33,18 @@ vi .env   # 至少改 SITE_URL 为你的域名/IP；生产环境建议改 JWT_SE
 # 4. 构建前端（首次或前端改动后需要）
 cd frontend && npm install && npm run build && cd ..
 
-# 5. 启动
-venv/bin/granian --interface asgi --host 0.0.0.0 --port 8000 run:app
-# 或交互式运维菜单: python manage.py
+# 5. 启动（API + 前端静态页 + OCR + 刷课全在这一个进程里）
+./rust_worker
 ```
 
 ### systemd 常驻（推荐）
 
 ```bash
-sudo cp deploy/anti-course.service /etc/systemd/system/
-sudo vi /etc/systemd/system/anti-course.service   # 按实际路径修改 WorkingDirectory/ExecStart
+sudo cp deploy/rust-study-daemon.service /etc/systemd/system/
+sudo vi /etc/systemd/system/rust-study-daemon.service   # 按实际路径修改 WorkingDirectory/ExecStart
 sudo systemctl daemon-reload
-sudo systemctl enable --now anti-course
-sudo systemctl status anti-course
+sudo systemctl enable --now rust-study-daemon
+sudo systemctl status rust-study-daemon
 ```
 
 ### Nginx 反代（可选）
@@ -56,7 +55,7 @@ server {
     server_name your.domain.com;
 
     location / {
-        proxy_pass http://127.0.0.1:8000;
+        proxy_pass http://127.0.0.1:17017;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -81,45 +80,35 @@ server {
 - 微信店员版 / 云端 / 经营码
 - Android 收款监控 APP（实时监听通知）
 
-## Rust 刷课守护进程（内存优化）
+## 架构说明
 
-刷视频阶段由 Rust 单进程多并发执行（tokio），每任务 ~1-2MB 内存（对比 Python 每任务 ~100MB 子进程）。Python worker 完成登录/爬取/考试后把任务交给守护进程，不可达时自动回退 Python 子进程。
+后端是单个 Rust 进程（axum，:17017）：REST API、前端 SPA 静态托管、OCR 验证码识别（ONNX Runtime）、刷课 tokio 多并发循环（每任务 ~1-2MB 内存）全部进程内完成，不再依赖任何 Python 组件。数据库表结构由 `rust_worker/src/schema.rs` 在启动时幂等创建/迁移（`CREATE TABLE IF NOT EXISTS` + 列级补丁）。
 
 ```bash
 # 构建（需要 Rust 1.97+）
 cd rust_worker && cargo build --release
-# 二进制在 D:/dev/rust-target/release/rust_worker.exe（本地）/ target/release/rust_worker（Linux）
-# Linux 部署：拷贝到服务器后 systemd 常驻
+# Linux 部署：拷贝二进制到服务器后 systemd 常驻
 sudo cp deploy/rust-study-daemon.service /etc/systemd/system/ && sudo systemctl enable --now rust-study-daemon
 ```
 
 ## 项目结构
 
 ```
-├── api/                    # 后端 API 层
-│   ├── main.py             # FastAPI 入口
-│   ├── config.py           # 全局配置
-│   ├── database.py         # SQLAlchemy 模型 + 数据操作
-│   ├── models.py           # Pydantic 请求/响应模型
-│   ├── auth.py             # JWT 认证 + 黑名单
-│   ├── routers/            # API 路由
-│   └── services/           # 业务逻辑
-├── infrastructure/         # 基础设施层
-│   ├── http_session.py     # HTTP 请求封装
-│   ├── course_crawler.py   # 课程数据爬取
-│   ├── chaoxing_session.py # rnet 反检测会话
-│   └── chaoxing/           # 学习通专用模块
-├── services/               # 业务服务层
-│   ├── scan_service.py     # 课程扫描
-│   └── ai_service.py       # AI 答题
+├── rust_worker/            # 后端（唯一服务进程）
+│   └── src/
+│       ├── main.rs         # axum 入口：路由注册、中间件、启动初始化
+│       ├── api.rs / auth.rs / order.rs / progress.rs  # 订单/认证/进度 API
+│       ├── scan.rs / login.rs / study.rs / queue.rs   # 扫描/登录/刷课/任务队列
+│       ├── exam.rs / school_exam.rs / llm.rs          # 考试答题（DeepSeek）
+│       ├── cx_scan.rs / cx_study.rs / cx_quiz.rs      # 学习通专用模块
+│       ├── pay.rs / pay_routes.rs / ypay_db.rs / ypay_qr.rs  # 支付（YPay/VMQ）
+│       ├── ocr.rs / ocr_ort.rs # 验证码识别（ONNX Runtime）
+│       ├── db.rs / schema.rs   # SQLite 访问层 + 启动建表/迁移
 ├── frontend/               # Vue3 前端
 │   └── src/views/          # 页面组件
-├── worker.py               # 课程爬取 Worker
-├── worker.py               # 课程爬取 + 考试 + 提交 Rust daemon
-├── chaoxing_worker.py      # 学习通 Worker
+├── static/                 # 前端构建产物（rust_worker 直接托管）
 ├── deploy/                 # systemd 单元
-├── run.py                  # 启动入口
-└── requirements.txt        # Python 依赖
+└── start_local.bat         # 本地一键启动
 ```
 
 ## 环境变量
@@ -128,19 +117,19 @@ sudo cp deploy/rust-study-daemon.service /etc/systemd/system/ && sudo systemctl 
 |------|------|--------|
 | `JWT_SECRET_KEY` | JWT 签名密钥 | 必填 |
 | `DB_PATH` | SQLite 数据库文件 | `data/orders.db` |
-| `REDIS_URL` | Redis 连接 | 自动降级内存模式 |
-| `SITE_URL` | 站点地址（支付回调） | `http://localhost:8000` |
+| `RUST_DAEMON_PORT` | 后端监听端口 | `17017` |
+| `SITE_URL` | 站点地址（支付回调） | `http://localhost:17017` |
 | `DEEPSEEK_API_KEY` | AI 考试答题 | 可选 |
 
 ## 技术栈
 
-**后端**: Python 3.10+ · FastAPI · SQLAlchemy · Pydantic · loguru · rnet · httpx · scrapling · ddddocr
+**后端**: Rust · axum · tokio · rusqlite · reqwest · ort (ONNX Runtime)
 
 **前端**: Vue 3 · TypeScript · Vite · Pinia · Vue Router
 
 **数据库**: SQLite（WAL + busy_timeout）
 
-**部署**: Granian (Rust ASGI) · systemd · Nginx
+**部署**: 单二进制 · systemd · Nginx
 
 ## License
 

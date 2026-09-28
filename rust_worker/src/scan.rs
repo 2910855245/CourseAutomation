@@ -17,6 +17,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::study::{run_study, TaskInput, Video};
 
+// ── 扫描并发控制（全模块共享） ────────────────────────────────────────────
+
+/// 单平台在飞 HTTP 请求上限：对服务器压力抹平，并发但不猛打
+pub const SCAN_CONCURRENCY: usize = 8;
+
+static SCAN_SEM: tokio::sync::OnceCell<Arc<tokio::sync::Semaphore>> =
+    tokio::sync::OnceCell::const_new();
+
+/// 全局扫描信号量（所有分页/记录请求都需先 acquire）
+pub async fn scan_sem() -> &'static Arc<tokio::sync::Semaphore> {
+    SCAN_SEM.get_or_init(|| async { Arc::new(tokio::sync::Semaphore::new(SCAN_CONCURRENCY)) }).await
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ScanTaskInput {
     pub order_id: String,
@@ -31,17 +44,16 @@ pub struct ScanTaskInput {
     pub status_file: String,
     #[serde(default)]
     pub push_ws: bool,
-    #[serde(default)]
-    pub ocr_url: String,
-    #[serde(default)]
-    pub relogin_url: String,
 }
 
 /// 课程条目（从 /user/index HTML 解析）
-struct CourseItem {
-    name: String,
-    course_id: String,
-    study_record_url: String,
+pub struct CourseItem {
+    pub name: String,
+    pub course_id: String,
+    pub study_record_url: String,
+    /// .name a 的 href（detail_link，对齐 get_courses）
+    #[allow(dead_code)]
+    pub detail_link: String,
 }
 
 fn now_ms() -> u128 {
@@ -105,11 +117,18 @@ fn extract_course_id(url: &str) -> String {
 }
 
 /// 解析课程列表（对齐 get_courses_with_diag 的 xpath 提取）
-async fn fetch_course_list(client: &Client, cookie: &str, base_url: &str) -> Result<Vec<CourseItem>> {
+pub async fn fetch_course_list(client: &Client, cookie: &str, base_url: &str) -> Result<Vec<CourseItem>> {
+    let html = fetch_course_list_html(client, cookie, base_url).await?;
+    Ok(parse_course_list(&html))
+}
+
+/// 抓取课程列表页原始 HTML（降负载：调用方可复用同一响应做二次解析，
+/// 避免对 /user/index 发第二次 17KB 请求）
+pub async fn fetch_course_list_html(client: &Client, cookie: &str, base_url: &str) -> Result<String> {
     let url = format!("{}/user/index", base_url.trim_end_matches('/'));
+    // 整页导航请求，不能带 X-Requested-With（否则平台走 AJAX 分支渲染 500「数据出现异常」）
     let resp = client.get(&url)
         .header("Cookie", cookie)
-        .header("X-Requested-With", "XMLHttpRequest")
         .send().await
         .context("获取课程列表失败")?;
     let html = resp.text().await.context("课程列表读取失败")?;
@@ -118,13 +137,13 @@ async fn fetch_course_list(client: &Client, cookie: &str, base_url: &str) -> Res
     if html.contains("SQLSTATE") || html.contains("数据出现异常") {
         anyhow::bail!("平台数据库异常");
     }
-    Ok(parse_course_list(&html))
+    Ok(html)
 }
 
 /// 解析课程列表 HTML（对齐 get_courses_with_diag 的 xpath 提取）：
 /// //div[contains(@class,"user-course")]//div[@class="item"]，
 /// 名称取 .name a 文本，course_id 从 .status a 的 courseId= 参数提取
-fn parse_course_list(html: &str) -> Vec<CourseItem> {
+pub fn parse_course_list(html: &str) -> Vec<CourseItem> {
     use scraper::{Html, Selector};
 
     let doc = Html::parse_document(html);
@@ -141,6 +160,10 @@ fn parse_course_list(html: &str) -> Vec<CourseItem> {
         if name.is_empty() {
             continue;
         }
+        let detail_link = item.select(&name_sel).next()
+            .and_then(|a| a.value().attr("href"))
+            .unwrap_or("")
+            .to_string();
         let study_record_url = item.select(&status_sel).next()
             .and_then(|a| a.value().attr("href"))
             .unwrap_or("")
@@ -149,41 +172,25 @@ fn parse_course_list(html: &str) -> Vec<CourseItem> {
         if course_id.is_empty() || !seen.insert(course_id.clone()) {
             continue;
         }
-        courses.push(CourseItem { name, course_id, study_record_url });
+        courses.push(CourseItem { name, course_id, study_record_url, detail_link });
     }
     courses
 }
 
 /// 拉取单门课程的视频（分页 study_record/video.json，对齐 get_course_nodes_from_api）
-async fn fetch_course_videos(client: &Client, cookie: &str, base_url: &str,
+/// 优化：第 1 页拿到 pageCount 后剩余页并发预取（推测分页），不再逐页串行
+pub async fn fetch_course_videos(client: &Client, cookie: &str, base_url: &str,
                              course_id: &str, course_name: &str) -> Result<Vec<Video>> {
     let base = format!("{}/user/study_record/video", base_url.trim_end_matches('/'));
-    let mut videos: Vec<Video> = Vec::new();
-    let mut page = 1u32;
-    loop {
-        let url = format!("{}?courseId={}&page={}", base, course_id, page);
-        let resp = client.get(&url)
-            .header("Cookie", cookie)
-            .header("X-Requested-With", "XMLHttpRequest")
-            .send().await
-            .with_context(|| format!("视频列表请求失败 course={course_id} page={page}"))?;
-        if resp.status().as_u16() != 200 {
-            break;
-        }
-        let data: Value = resp.json().await.context("视频列表解析失败")?;
-        if data["status"].as_bool() != Some(true) {
-            break;
-        }
-        let items = data["list"].as_array().cloned().unwrap_or_default();
-        if items.is_empty() {
-            break;
-        }
+
+    let parse_items = |items: &[Value]| -> Vec<Video> {
+        let mut out = Vec::new();
         for item in items {
             let node_id = item["id"].as_str().unwrap_or("").to_string();
             if node_id.is_empty() {
                 continue;
             }
-            videos.push(Video {
+            out.push(Video {
                 node_id,
                 duration: parse_duration_secs(item["duration"].as_str().unwrap_or("0")),
                 viewed_duration: parse_duration_secs(
@@ -192,11 +199,48 @@ async fn fetch_course_videos(client: &Client, cookie: &str, base_url: &str,
                 course_id: course_id.to_string(),
             });
         }
-        let page_count = data["pageInfo"]["pageCount"].as_u64().unwrap_or(1);
-        if (page as u64) >= page_count {
-            break;
+        out
+    };
+
+    // 单页拉取（带并发信号量 + 抖动，对齐 exam/work 的取页策略）
+    // 独立 async fn 而非闭包：可被多次调用做并发预取
+    async fn fetch_video_page(client: &Client, cookie: &str, base: &str,
+                              course_id: &str, page: u32) -> Option<Value> {
+        let jitter = rand::random::<u64>() % 100;
+        tokio::time::sleep(std::time::Duration::from_millis(jitter)).await;
+        let _permit = scan_sem().await.acquire().await.ok()?;
+        let url = format!("{}?courseId={}&page={}", base, course_id, page);
+        let resp = client.get(&url)
+            .header("Cookie", cookie)
+            .header("X-Requested-With", "XMLHttpRequest")
+            .send().await.ok()?;
+        if resp.status().as_u16() != 200 {
+            return None;
         }
-        page += 1;
+        resp.json::<Value>().await.ok()
+    }
+
+    // 第 1 页：探测 pageCount + 拿首批数据
+    let first = match fetch_video_page(client, cookie, &base, course_id, 1).await {
+        Some(d) if d["status"].as_bool() == Some(true) => d,
+        _ => return Ok(Vec::new()),
+    };
+    let mut videos = parse_items(first["list"].as_array().map(|a| a.as_slice()).unwrap_or(&[]));
+    let page_count = first["pageInfo"]["pageCount"].as_u64().unwrap_or(1) as u32;
+    if page_count <= 1 {
+        return Ok(videos);
+    }
+    // 推测预取：剩余页并发全发
+    let mut futs = Vec::new();
+    for page in 2..=page_count {
+        futs.push(fetch_video_page(client, cookie, &base, course_id, page));
+    }
+    for d in futures_util::future::join_all(futs).await.into_iter().flatten() {
+        if d["status"].as_bool() == Some(true) {
+            if let Some(list) = d["list"].as_array() {
+                videos.extend(parse_items(list));
+            }
+        }
     }
     Ok(videos)
 }
@@ -255,7 +299,7 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
                       &format!("获取到 {} 门课程", selected.len()), None, None,
                       &[]).await;
 
-    // 并发扫描各课程视频（每课程一个 tokio task）
+    // 并发扫描各课程视频（每课程一个 tokio task，加随机启动抖动错峰）
     let shared_client = Arc::new(client);
     let cookie = Arc::new(task.cookie_str.clone());
     let mut handles = Vec::new();
@@ -266,6 +310,9 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
         let cid = course.course_id.clone();
         let cname = course.name.clone();
         handles.push(tokio::spawn(async move {
+            // 启动抖动：把 N 门课程的首请求错开，避免瞬间并发突发打到平台
+            let ms = rand::Rng::gen_range(&mut rand::thread_rng(), 0..=800u64);
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
             let videos = fetch_course_videos(&c, &ck, &b, &cid, &cname).await;
             (cname, cid, videos)
         }));
@@ -317,8 +364,6 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
         status_file: task.status_file.clone(),
         concurrency: 0,
         push_ws: task.push_ws,
-        ocr_url: task.ocr_url.clone(),
-        relogin_url: task.relogin_url.clone(),
     };
     run_study(&study_task, push_url, push_token).await
 }

@@ -28,13 +28,18 @@ regex = "1.13.1"
 bcrypt = "0.15"
 jsonwebtoken = "9"
 sha2 = "0.11.0"
-tract-onnx = "0.23.4"
 futures-util = "0.3.34"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+ddddocr-core = "0.2.4"
+libloading = "0.8"
+ort = { version = "2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "alternative-backend", "api-17"] }
+ndarray = "0.17"
 
 [profile.release]
-# 终极性能：最大优化 + 全程序 LTO（二进制略大，换取运行时速度）
-lto = "fat"
-codegen-units = 1
+# 编译速度优先（I/O 密集项目，运行时对 opt 级别不敏感）
+# 之前 lto="fat" + codegen-units=1 是编译慢的主因：全程序单线程链接优化。
+lto = false
+codegen-units = 16
 strip = true
-opt-level = 3
+opt-level = 1
 panic = "unwind"

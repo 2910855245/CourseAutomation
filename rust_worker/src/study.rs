@@ -47,10 +47,6 @@ pub struct TaskInput {
     pub concurrency: usize,
     #[serde(default)]
     pub push_ws: bool,
-    #[serde(default)]
-    pub ocr_url: String,
-    #[serde(default)]
-    pub relogin_url: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -67,8 +63,6 @@ struct Shared {
     password: String,
     status_file: String,
     push_ws: bool,
-    ocr_url: String,
-    relogin_url: String,
     progress: Mutex<Progress>,
 }
 
@@ -162,32 +156,29 @@ async fn report_once(
     Ok(body)
 }
 
-/// need_code 验证码处理：图形码走 OCR sidecar，点选码走 sidecar 的 dunclick 流程
+/// need_code 验证码处理：need_code=1 图形码走本地 OCR 引擎；
+/// need_code=2 点选码不支持（原由 Python 后端 sidecar 处理，已随 Python 移除）
 async fn handle_captcha(shared: &Shared, node_id: &str, need_code: i64, verify_token: &str) -> Result<(String, String)> {
-    if shared.ocr_url.is_empty() {
-        return Err(anyhow::anyhow!("触发验证码 need_code={need_code} 且无 OCR sidecar"));
+    let _ = (node_id, verify_token); // 点选码所需参数，本地 OCR 用不到
+    if need_code == 2 {
+        return Err(anyhow::anyhow!(
+            "点选验证码(need_code=2)不支持，已随 Python 后端移除"
+        ));
     }
     // 获取验证码图片
     let r: u8 = rand::thread_rng().gen();
     let cap_url = format!("{}/service/code?r={}", shared.base_url, r);
     wait_spacing().await;
-    let img = shared.client.get(&cap_url).send().await?.bytes().await?;
-    use base64::Engine;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&img);
-    let payload = serde_json::json!({
-        "image_base64": b64,
-        "need_code": need_code,
-        "verify_token": verify_token,
-        "base_url": shared.base_url,
-        "node_id": node_id,
-    });
-    let resp: serde_json::Value = shared.client.post(&shared.ocr_url).json(&payload).send().await?.json().await?;
-    if resp["data"]["solved"].as_bool().unwrap_or(false) || resp["success"].as_bool().unwrap_or(false) {
-        let code = resp["data"]["code"].as_str().unwrap_or("").to_string();
-        Ok((code, String::new()))
-    } else {
-        Err(anyhow::anyhow!("OCR sidecar 处理失败: {}", resp["message"].as_str().unwrap_or("未知错误")))
-    }
+    let img = shared.client.get(&cap_url)
+        .header("Cookie", shared.cookie_str.lock().await.clone())
+        .send().await?.bytes().await?;
+    // 本地 OCR 识别（CPU 密集，放阻塞线程池）
+    let engine = crate::ocr::engine().context("本地 OCR 引擎不可用")?;
+    let bytes = img.to_vec();
+    let code = tokio::task::spawn_blocking(move || engine.recognize(&bytes))
+        .await.context("OCR 任务执行失败")?
+        .context("验证码识别失败")?;
+    Ok((code, String::new()))
 }
 
 /// 刷单个视频：墙钟推进 + 自适应上报 + 验证码重试 + 2.1 比率
@@ -296,34 +287,22 @@ async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
     }
 }
 
-/// 掉线重登：调用 Python sidecar（复用 login_single_platform + 验证码 OCR），更新共享 cookie
+/// 掉线重登：本地登录（验证码由内置 OCR 识别），更新共享 cookie
 async fn relogin(shared: &Shared) -> Result<bool> {
-    if shared.relogin_url.is_empty() {
+    if shared.username.is_empty() {
         return Ok(false);
     }
-    let payload = serde_json::json!({
-        "base_url": shared.base_url,
-        "username": shared.username,
-        "password": shared.password,
-    });
-    let resp: serde_json::Value = shared.client.post(&shared.relogin_url).json(&payload).send().await?.json().await?;
-    if resp["ok"].as_bool().unwrap_or(false) {
-        if let Some(cookies) = resp["cookies"].as_array() {
-            let mut new_str = String::new();
-            for c in cookies {
-                let name = c["name"].as_str().unwrap_or("");
-                let value = c["value"].as_str().unwrap_or("");
-                if !name.is_empty() {
-                    if !new_str.is_empty() { new_str.push(';'); }
-                    new_str.push_str(&format!("{name}={value}"));
-                }
-            }
+    match crate::login::login_school(&shared.base_url, &shared.username, &shared.password).await {
+        Ok(session) => {
             let mut guard = shared.cookie_str.lock().await;
-            *guard = new_str;
+            *guard = session.cookie_str;
+            Ok(true)
         }
-        return Ok(true);
+        Err(e) => {
+            eprintln!("[rust_worker] 重新登录失败: {e:#}");
+            Ok(false)
+        }
     }
-    Ok(false)
 }
 
 /// 心跳：随机 90-150s 一次 POST /user/online
@@ -414,8 +393,6 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
         password: task.password.clone(),
         status_file: task.status_file.clone(),
         push_ws: task.push_ws,
-        ocr_url: task.ocr_url.clone(),
-        relogin_url: task.relogin_url.clone(),
         progress: Mutex::new(Progress { total: task.videos.len() as u64, total_duration, ..Default::default() }),
     });
 
