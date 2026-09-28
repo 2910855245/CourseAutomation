@@ -8,6 +8,7 @@
 //! 且含大量平台特判逻辑）；本模块只产出刷课所需的视频列表。
 
 use anyhow::{Context, Result};
+use rand::RngExt;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -308,7 +309,7 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
         let cname = course.name.clone();
         handles.push(tokio::spawn(async move {
             // 启动抖动：把 N 门课程的首请求错开，避免瞬间并发突发打到平台
-            let ms = rand::Rng::gen_range(&mut rand::thread_rng(), 0..=800u64);
+            let ms = rand::rng().random_range(0..=800u64);
             tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
             let videos = fetch_course_videos(&c, &ck, &b, &cid, &cname).await;
             (cname, cid, videos)

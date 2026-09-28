@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use rand::Rng;
+use rand::RngExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -154,7 +154,7 @@ async fn handle_captcha(shared: &Shared, node_id: &str, need_code: i64, verify_t
         ));
     }
     // 获取验证码图片
-    let r: u8 = rand::thread_rng().gen();
+    let r: u8 = rand::rng().random();
     let cap_url = format!("{}/service/code?r={}", shared.base_url, r);
     wait_spacing().await;
     let img = shared.client.get(&cap_url)
@@ -296,7 +296,7 @@ async fn relogin(shared: &Shared) -> Result<bool> {
 /// 心跳：随机 90-150s 一次 POST /user/online
 async fn heartbeat_loop(shared: Arc<Shared>) {
     loop {
-        let secs = rand::thread_rng().gen_range(90..=150);
+        let secs = rand::rng().random_range(90..=150);
         tokio::time::sleep(Duration::from_secs(secs)).await;
         wait_spacing().await;
         let _ = shared.client

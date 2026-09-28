@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::RngExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -258,8 +258,8 @@ fn calc_interval(duration: u64) -> f64 {
         .find(|(t, _)| duration <= *t)
         .map(|(_, r)| r)
         .unwrap_or(&(30.0, 60.0));
-    let mut rng = rand::thread_rng();
-    rng.gen_range(*lo..*hi)
+    let mut rng = rand::rng();
+    rng.random_range(*lo..*hi)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -278,13 +278,13 @@ async fn play_video(report_client: &Client,
     let mut played: u64 = 0;
     let mut fail_streak = 0u32;
     // ThreadRng 不 Send（跨 await 会破坏 tokio::spawn），用 StdRng
-    let mut rng = StdRng::from_entropy();
+    let mut rng = rand::make_rng::<StdRng>();
 
     while played < duration {
         let interval = calc_interval(duration);
         let jitter_lo = ((interval * 0.7) as u64).max(1);
         let jitter_hi = ((interval * 1.3) as u64).max(jitter_lo + 1);
-        let next_time = (played + rng.gen_range(jitter_lo..jitter_hi)).min(duration - 1);
+        let next_time = (played + rng.random_range(jitter_lo..jitter_hi)).min(duration - 1);
         let is_drag: u64 = if next_time >= duration.saturating_sub(2) { 4 } else { 0 };
 
         match report_progress(report_client, cookie, ua, uid, cpi, dtoken, clazz_id, jobid,
@@ -308,7 +308,7 @@ async fn play_video(report_client: &Client,
         if is_drag == 4 {
             break;
         }
-        let wait = interval * rng.gen_range(0.5..0.8);
+        let wait = interval * rng.random_range(0.5..0.8);
         tokio::time::sleep(Duration::from_secs_f64(wait)).await;
     }
     Ok(true)

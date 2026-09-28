@@ -6,7 +6,7 @@
 
 use anyhow::{bail, Context, Result};
 use dashmap::DashMap;
-use rand::Rng;
+use rand::RngExt;
 use regex::Regex;
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -120,7 +120,7 @@ impl OnlineHeartbeat {
                     Err(e) => tracing::warn!(error = %e, "心跳失败"),
                 }
                 // 对齐 Python random.uniform(15, 25)
-                let secs = rand::thread_rng().gen_range(15..=25);
+                let secs = rand::rng().random_range(15..=25);
                 tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
             }
         });

@@ -122,7 +122,7 @@ pub fn generate_trade_no() -> String {
 pub fn compute_floating_price(base: f64, existing: &[f64]) -> f64 {
     use rand::seq::SliceRandom;
     let mut offsets = [0.01, 0.02, 0.03, 0.04, 0.05, -0.01, -0.02, -0.03];
-    offsets.shuffle(&mut rand::thread_rng());
+    offsets.shuffle(&mut rand::rng());
     for off in offsets {
         let candidate = (base + off).round_to_2();
         if candidate > 0.0 && !existing.contains(&candidate) {

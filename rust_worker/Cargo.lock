@@ -2694,7 +2694,7 @@ dependencies = [
  "ort",
  "r2d2",
  "r2d2_sqlite",
- "rand 0.8.7",
+ "rand 0.10.2",
  "regex",
  "reqwest",
  "rusqlite",

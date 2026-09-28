@@ -129,8 +129,7 @@ fn order_row_to_json(r: &rusqlite::Row) -> rusqlite::Result<Value> {
     }))
 }
 
-const ORDER_COLS: &str =
-    "order_id, out_trade_no, ezfpy_trade_no, payment_channel, payment_time,
+const ORDER_COLS: &str = "order_id, out_trade_no, ezfpy_trade_no, payment_channel, payment_time,
      paid_processed, user_id, customer_name, customer_contact, username, password,
      website_id, task_type, course_ids, video_count, exam_count, price, notes,
      status, paid, task_id, admin_note, created_at, updated_at, accepted_at,
@@ -206,10 +205,7 @@ impl Db {
     pub fn ypay_release_price_sync(&self, price: f64) {
         let pool = self.clone_pool();
         if let Ok(conn) = pool.get() {
-            let _ = conn.execute(
-                "DELETE FROM ypay_tmp_price WHERE price=?1",
-                params![price],
-            );
+            let _ = conn.execute("DELETE FROM ypay_tmp_price WHERE price=?1", params![price]);
         }
     }
 
@@ -221,7 +217,9 @@ impl Db {
         let Ok(mut stmt) = conn.prepare(
             "SELECT truemoney FROM ypay_order
              WHERE account_id=?1 AND status=0 AND out_time > ?2",
-        ) else { return vec![] };
+        ) else {
+            return vec![];
+        };
         stmt.query_map(params![account_id, now], |r| r.get(0))
             .map(|rows| rows.flatten().collect())
             .unwrap_or_default()
@@ -300,8 +298,20 @@ impl Db {
                   qrcode, h5_qrurl, status, notify_url, return_url, ip, create_time, out_time)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,0,?10,?11,?12,?13,?14)",
                 params![
-                    type_str, account_id, trade_no, out_trade_no, name, money, truemoney,
-                    qrcode, h5_qrurl, notify_url, return_url, ip, now, out_time
+                    type_str,
+                    account_id,
+                    trade_no,
+                    out_trade_no,
+                    name,
+                    money,
+                    truemoney,
+                    qrcode,
+                    h5_qrurl,
+                    notify_url,
+                    return_url,
+                    ip,
+                    now,
+                    out_time
                 ],
             )
             .map_err(|e| tracing::warn!(error = %e, "ypay_create_order 失败"))
@@ -333,7 +343,9 @@ impl Db {
     /// 标记支付单已付（对齐 ypay_mark_paid：status=1 + end_time + 删价格锁）
     pub fn ypay_mark_paid_sync(&self, trade_no: &str) -> bool {
         let pool = self.clone_pool();
-        let Ok(mut conn) = pool.get() else { return false };
+        let Ok(mut conn) = pool.get() else {
+            return false;
+        };
         let now = crate::queue::now_str();
         let result = (|| -> Result<()> {
             let tx = conn.transaction()?;
@@ -344,10 +356,7 @@ impl Db {
             if updated == 0 {
                 anyhow::bail!("支付单不存在");
             }
-            tx.execute(
-                "DELETE FROM ypay_tmp_price WHERE oid=?1",
-                params![trade_no],
-            )?;
+            tx.execute("DELETE FROM ypay_tmp_price WHERE oid=?1", params![trade_no])?;
             tx.commit()?;
             Ok(())
         })();
@@ -365,9 +374,8 @@ impl Db {
         (|| -> Result<usize> {
             let tx = conn.transaction()?;
             let trade_nos: Vec<String> = {
-                let mut stmt = tx.prepare(
-                    "SELECT trade_no FROM ypay_order WHERE status=0 AND out_time < ?1",
-                )?;
+                let mut stmt =
+                    tx.prepare("SELECT trade_no FROM ypay_order WHERE status=0 AND out_time < ?1")?;
                 let rows = stmt.query_map(params![now], |r| r.get(0))?;
                 let mut v = Vec::new();
                 for r in rows {
@@ -381,10 +389,7 @@ impl Db {
                     "UPDATE ypay_order SET status=-1, end_time=?1 WHERE trade_no=?2",
                     params![now, tn],
                 )?;
-                tx.execute(
-                    "DELETE FROM ypay_tmp_price WHERE oid=?1",
-                    params![tn],
-                )?;
+                tx.execute("DELETE FROM ypay_tmp_price WHERE oid=?1", params![tn])?;
             }
             tx.commit()?;
             Ok(count)
@@ -419,7 +424,9 @@ impl Db {
         let Ok(conn) = pool.get() else { return vec![] };
         let Ok(mut stmt) = conn.prepare(&format!(
             "SELECT {YPAY_ACCOUNT_COLS} FROM ypay_account ORDER BY create_time DESC"
-        )) else { return vec![] };
+        )) else {
+            return vec![];
+        };
         stmt.query_map([], ypay_account_row_to_json)
             .map(|rows| rows.flatten().collect())
             .unwrap_or_default()
@@ -447,7 +454,9 @@ impl Db {
         let Ok(conn) = pool.get() else { return vec![] };
         let Ok(mut stmt) = conn.prepare(&format!(
             "SELECT {ORDER_COLS} FROM orders WHERE out_trade_no=?1"
-        )) else { return vec![] };
+        )) else {
+            return vec![];
+        };
         stmt.query_map(params![out_trade_no], order_row_to_json)
             .map(|rows| rows.flatten().collect())
             .unwrap_or_default()
@@ -461,7 +470,9 @@ impl Db {
             "SELECT {ORDER_COLS} FROM orders
              WHERE out_trade_no LIKE 'BATCH-%' AND paid=0
                AND status IN ('pending','awaiting_payment')"
-        )) else { return vec![] };
+        )) else {
+            return vec![];
+        };
         stmt.query_map([], order_row_to_json)
             .map(|rows| rows.flatten().collect())
             .unwrap_or_default()
@@ -616,10 +627,8 @@ impl Db {
         let username = order["username"].as_str().unwrap_or("").to_string();
         let password = order["password"].as_str().unwrap_or("").to_string();
         let website_id = order["website_id"].as_i64().unwrap_or(1);
-        let course_ids = serde_json::to_string(
-            order.get("course_ids").unwrap_or(&json!([])),
-        )
-        .unwrap_or_else(|_| "[]".into());
+        let course_ids = serde_json::to_string(order.get("course_ids").unwrap_or(&json!([])))
+            .unwrap_or_else(|_| "[]".into());
 
         let pool = self.clone_pool();
         let mut conn = pool.get().context("获取连接失败")?;
@@ -677,8 +686,8 @@ impl Db {
 
 /// 大写 hex 随机串（对齐 uuid.uuid4().hex[:n].upper()）
 pub fn uuid_hex_upper(n: usize) -> String {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..(n + 1) / 2).map(|_| rng.gen::<u8>()).collect();
+    use rand::RngExt;
+    let mut rng = rand::rng();
+    let bytes: Vec<u8> = (0..(n + 1) / 2).map(|_| rng.random::<u8>()).collect();
     bytes.iter().map(|b| format!("{b:02X}")).collect::<String>()[..n].to_string()
 }
