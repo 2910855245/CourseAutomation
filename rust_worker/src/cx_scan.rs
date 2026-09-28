@@ -17,6 +17,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::cx_study::{run_cx_study, CxPoint, CxTaskInput};
+use crate::platform_client::{CONNECT_TIMEOUT, REQUEST_TIMEOUT};
 
 const VIDEO_REFERER: &str =
     "https://mooc1.chaoxing.com/ananas/modules/video/index.html?v=2025-0725-1842";
@@ -48,6 +49,8 @@ fn default_ua() -> &'static str {
 fn make_client(ua: &str) -> Client {
     Client::builder()
         .danger_accept_invalid_certs(true)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
         .user_agent(if ua.is_empty() { default_ua() } else { ua })
         .build()
         .expect("构建 HTTP client 失败")

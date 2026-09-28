@@ -24,6 +24,12 @@ pub const SHORT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKi
 static SPACING: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::const_new(None);
 const REQUEST_SPACING_SECS: f64 = 0.5;
 
+/// 出站超时。原先所有 client 都没设超时：平台无响应或 TCP 半开时
+/// `send().await` 会永久挂住，占死队列 worker 槽位（`active` 计数不归零）
+/// 与扫描并发许可，最终导致整条队列停摆且无任何日志。
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
+
 /// 平台级限速门（对同一目标站的请求串行排队）
 pub async fn wait_rate_limit() {
     let mut guard = SPACING.lock().await;
@@ -48,6 +54,8 @@ pub fn build_client(redirect_none: bool, jar: Option<Arc<Jar>>) -> Client {
 pub fn build_client_with_ua(ua: &str, redirect_none: bool, jar: Option<Arc<Jar>>) -> Client {
     let mut b = Client::builder()
         .danger_accept_invalid_certs(true)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
         .user_agent(ua);
     b = if redirect_none {
         b.redirect(reqwest::redirect::Policy::none())
@@ -58,6 +66,13 @@ pub fn build_client_with_ua(ua: &str, redirect_none: bool, jar: Option<Arc<Jar>>
         b = b.cookie_provider(j);
     }
     b.build().expect("构建平台 HTTP client 失败")
+}
+
+/// 按**字符**截断，用于日志/错误信息预览。
+/// 直接 `&s[..n]` 是字节切片，遇到多字节字符（外部响应里常含中文）
+/// 且切点落在字符中段时会 panic。
+pub fn preview(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect()
 }
 
 /// 从 cookie jar 提取 `Cookie` 请求头值（平台把会话 token 种在验证码响应里，

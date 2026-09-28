@@ -32,19 +32,17 @@ mod study;
 mod ypay_db;
 mod ypay_qr;
 
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, OnceLock};
 
 use anyhow::Context;
 use axum::body::Body;
-use axum::extract::{Path, Request, State};
+use axum::extract::Request;
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::Router;
 use dashmap::DashMap;
-use serde_json::json;
 use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeDir;
 use tracing_subscriber::EnvFilter;
@@ -62,10 +60,61 @@ pub struct AppState {
     pub ws_seq: Arc<std::sync::atomic::AtomicU64>,
 }
 
-type SubmitTask = study::TaskInput;
-
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+/// 进度推送令牌 —— **出站与入站必须同一个值**。
+///
+/// 历史缺陷：出站读 `RUST_DAEMON_PUSH_TOKEN`（systemd unit 里设的就是这个），
+/// 入站却校验 `WORKER_TOKEN`（.env.example 里设的是这个）。只设其中一个的结果是
+/// 二选一的坏结局：要么所有自推送被 401（进度彻底不更新、前端永远看不到进度），
+/// 要么完全不校验（任何人都能 POST 向全体订阅者广播伪造的订单/支付帧）。
+///
+/// 现在两个键名都接受（并忽略示例里的占位值）；都未配置时随机生成一个进程内令牌，
+/// 这样零配置部署下自推送照常可用，而外部无从得知令牌 → 无法伪造广播。
+pub(crate) fn worker_token() -> String {
+    static TOKEN: OnceLock<String> = OnceLock::new();
+    TOKEN
+        .get_or_init(|| {
+            for key in ["WORKER_TOKEN", "RUST_DAEMON_PUSH_TOKEN"] {
+                if let Ok(v) = std::env::var(key) {
+                    let v = v.trim().to_string();
+                    if !v.is_empty() && v != "change-me-worker-token" {
+                        return v;
+                    }
+                }
+            }
+            let mut bytes = [0u8; 32];
+            rand::fill(&mut bytes);
+            let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            tracing::warn!(
+                "未配置 WORKER_TOKEN，已生成进程内临时推送令牌（重启即失效）；\
+                 对外部署建议在 .env 显式配置"
+            );
+            hex
+        })
+        .clone()
+}
+
+/// 启动自检：JWT_SECRET_KEY 一个密钥同时撑起三件事 —— 管理员 JWT 签名、
+/// 游客查单 view_token、凭据加密密钥的兜底派生。用缺省值/过短值等于把
+/// 后台令牌签发能力公开（任何人可离线自签 admin 令牌或枚举他人订单 token），
+/// 所以宁可拒绝启动也不要带病上线。
+fn check_secret_key() {
+    let key = std::env::var("JWT_SECRET_KEY").unwrap_or_default();
+    let key = key.trim();
+    if key.len() < 16 || key == "local-dev-secret-key" {
+        eprintln!(
+            "\n致命错误：JWT_SECRET_KEY 缺失或过短（当前 {} 字符）。\n\
+             它同时用于管理员 JWT 签名、游客订单 view_token、以及凭据加密密钥派生，\n\
+             使用缺省值等同于公开后台登录令牌。请在 .env 中设置一个随机值后重启：\n\n\
+             \x20 JWT_SECRET_KEY=<64 位随机 hex>\n\
+             \x20 生成方式：openssl rand -hex 32\n",
+            key.len()
+        );
+        std::process::exit(1);
+    }
 }
 
 pub(crate) fn rss_mb() -> u64 {
@@ -91,8 +140,12 @@ async fn main() -> anyhow::Result<()> {
 
     let port: u16 = env_or("RUST_DAEMON_PORT", "17017").parse().unwrap_or(17017);
     let push_url = env_or("RUST_DAEMON_PUSH_URL", "http://127.0.0.1:17017/api/progress/live/push");
-    let push_token = env_or("RUST_DAEMON_PUSH_TOKEN", "");
+    // 与入站校验同源，详见 worker_token() 的注释
+    let push_token = worker_token();
     let db_path = env_or("DB_PATH", "data/orders.db");
+
+    // 启动自检：密钥不到位就不要起服务
+    check_secret_key();
 
     let database = db::Db::open(&db_path)
         .with_context(|| format!("打开数据库失败: {db_path}"))?;
@@ -111,17 +164,16 @@ async fn main() -> anyhow::Result<()> {
     // Rust 队列调度器（RUST_QUEUE_ENABLED=true 时接管学校任务）
     tokio::spawn(queue::dispatcher_loop(std::sync::Arc::new(state.clone())));
 
+    // 已删除 Python 时代遗留的 daemon 端点：/status /submit /submit_cx
+    // /submit_cx_full /submit_full /submit_exam /cancel/{order_id} /ocr。
+    // 依据：Rust 版内部调度全部是直调函数（queue.rs、api.rs 调
+    // study::run_study / scan::run_scan_and_study），全仓库无任何调用方；且其中
+    //   - /submit_exam、/submit_full 的 status_file 直接取自请求体并落盘，
+    //     可被任意人用来覆盖任意路径的文件；
+    //   - /ocr 在 async handler 里同步跑推理，会阻塞 runtime 线程。
     let app = Router::new()
-        .route("/status", get(status))
-        .route("/submit", post(submit))
-        .route("/submit_cx", post(submit_cx))
-        .route("/submit_cx_full", post(submit_cx_full))
-        .route("/submit_full", post(submit_full))
-        .route("/submit_exam", post(submit_exam))
         .route("/api/progress/live/push", post(progress::push_progress))
         .route("/api/progress/ws/live", get(progress::ws_live))
-        .route("/ocr", post(ocr_recognize))
-        .route("/cancel/{order_id}", post(cancel))
         .merge(api::router(state.clone()))
         .merge(school_exam::router())
         .merge(pay_routes::router())
@@ -148,7 +200,7 @@ async fn trace_request(req: Request, next: Next) -> Response {
     let start = std::time::Instant::now();
     let resp = next.run(req).await;
     let status = resp.status().as_u16();
-    if path.starts_with("/api/") || path == "/submit" || path == "/submit_cx" || path == "/submit_full" {
+    if path.starts_with("/api/") {
         tracing::debug!(method = %method, path = %path, status, elapsed_ms = start.elapsed().as_millis(), "request");
     }
     resp
@@ -191,217 +243,3 @@ async fn spa_fallback() -> Response {
     }
 }
 
-async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
-    let ids: Vec<String> = state.tasks.iter().map(|e| e.key().clone()).collect();
-    Json(json!({"tasks": ids}))
-}
-
-async fn cancel(
-    State(state): State<AppState>,
-    Path(order_id): Path<String>,
-) -> Json<serde_json::Value> {
-    if let Some((_, handle)) = state.tasks.remove(&order_id) {
-        handle.abort();
-        Json(json!({"ok": true}))
-    } else {
-        Json(json!({"ok": false, "message": "任务不存在"}))
-    }
-}
-
-async fn submit(
-    State(state): State<AppState>,
-    Json(task): Json<SubmitTask>,
-) -> Json<serde_json::Value> {
-    if task.order_id.is_empty() || task.videos.is_empty() {
-        return Json(json!({"ok": false, "message": "order_id/videos 不能为空"}));
-    }
-    if state.tasks.contains_key(&task.order_id) {
-        return Json(json!({"ok": false, "message": "任务已存在"}));
-    }
-
-    let push_url = state.push_url.clone();
-    let push_token = state.push_token.clone();
-    let tasks = state.tasks.clone();
-    let order_id = task.order_id.clone();
-
-    let oid_for_task = task.order_id.clone();
-    let oid_resp = task.order_id.clone();
-    let handle = tokio::spawn(async move {
-        let result = study::run_study(&task, &push_url, &push_token).await;
-        if let Err(e) = result {
-            tracing::warn!(order_id = %oid_for_task, error = %e, "school study task failed");
-        }
-        tasks.remove(&oid_for_task);
-    });
-
-    state.tasks.insert(oid_resp.clone(), handle);
-    Json(json!({"ok": true, "order_id": oid_resp}))
-}
-
-async fn submit_full(
-    State(state): State<AppState>,
-    Json(task): Json<scan::ScanTaskInput>,
-) -> Json<serde_json::Value> {
-    if task.order_id.is_empty() || task.cookie_str.is_empty() || task.base_url.is_empty() {
-        return Json(json!({"ok": false, "message": "order_id/cookie_str/base_url 不能为空"}));
-    }
-    if state.tasks.contains_key(&task.order_id) {
-        return Json(json!({"ok": false, "message": "任务已存在"}));
-    }
-
-    let push_url = state.push_url.clone();
-    let push_token = state.push_token.clone();
-    let tasks = state.tasks.clone();
-    let order_id = task.order_id.clone();
-    let oid_resp = task.order_id.clone();
-
-    let handle = tokio::spawn(async move {
-        let result = scan::run_scan_and_study(&task, &push_url, &push_token).await;
-        if let Err(e) = result {
-            tracing::warn!(order_id = %order_id, error = %e, "full task failed");
-        }
-        tasks.remove(&order_id);
-    });
-
-    state.tasks.insert(oid_resp.clone(), handle);
-    Json(json!({"ok": true, "order_id": oid_resp}))
-}
-
-async fn submit_cx_full(
-    State(state): State<AppState>,
-    Json(task): Json<cx_scan::ScanCxTaskInput>,
-) -> Json<serde_json::Value> {
-    if task.order_id.is_empty() || task.cookie_str.is_empty() || task.uid.is_empty() {
-        return Json(json!({"ok": false, "message": "order_id/cookie_str/uid 不能为空"}));
-    }
-    if state.tasks.contains_key(&task.order_id) {
-        return Json(json!({"ok": false, "message": "任务已存在"}));
-    }
-
-    let push_url = state.push_url.clone();
-    let push_token = state.push_token.clone();
-    let tasks = state.tasks.clone();
-    let order_id = task.order_id.clone();
-    let oid_resp = task.order_id.clone();
-
-    let handle = tokio::spawn(async move {
-        let result = cx_scan::run_cx_scan_and_study(&task, &push_url, &push_token).await;
-        if let Err(e) = result {
-            tracing::warn!(order_id = %order_id, error = %e, "cx full task failed");
-        }
-        tasks.remove(&order_id);
-    });
-
-    state.tasks.insert(oid_resp.clone(), handle);
-    Json(json!({"ok": true, "order_id": oid_resp}))
-}
-
-#[derive(serde::Deserialize)]
-struct ExamTask {
-    order_id: String,
-    base_url: String,
-    cookie_str: String,
-    work_id: String,
-    #[serde(default)]
-    course_id: String,
-    #[serde(default)]
-    node_id: String,
-    api_key: String,
-    #[serde(default = "default_model")]
-    model: String,
-    #[serde(default)]
-    item_type: String,
-    status_file: String,
-}
-
-fn default_model() -> String {
-    "deepseek-v4-flash".to_string()
-}
-
-/// OCR 识别（对齐 ocr_sidecar.py /ocr：{"image_base64"} → {"code"}）
-async fn ocr_recognize(Json(body): Json<serde_json::Value>) -> Json<serde_json::Value> {
-    use base64::Engine;
-    let b64 = body["image_base64"].as_str().unwrap_or("");
-    let img = match base64::engine::general_purpose::STANDARD.decode(b64) {
-        Ok(v) => v,
-        Err(e) => return Json(json!({"code": "", "error": format!("base64 解码失败: {e}")})),
-    };
-    match ocr::engine() {
-        Ok(engine) => match engine.recognize(&img) {
-            Ok(code) => Json(json!({"code": code})),
-            Err(e) => Json(json!({"code": "", "error": format!("{e:#}")})),
-        },
-        Err(e) => Json(json!({"code": "", "error": format!("{e:#}")})),
-    }
-}
-
-async fn submit_exam(
-    State(state): State<AppState>,
-    Json(task): Json<ExamTask>,
-) -> Json<serde_json::Value> {
-    if task.order_id.is_empty() || task.api_key.is_empty() || task.work_id.is_empty() {
-        return Json(json!({"ok": false, "message": "order_id/api_key/work_id 不能为空"}));
-    }
-    let resp_id = task.order_id.clone();
-    let resp_id2 = task.order_id.clone();
-    tokio::spawn(async move {
-        let result = exam::solve_exam(
-            &task.base_url, &task.cookie_str, &task.work_id,
-            &task.course_id, &task.node_id, &task.api_key, &task.model,
-            if task.item_type.is_empty() { "work" } else { &task.item_type },
-        ).await;
-        match result {
-            Ok(r) => {
-                tracing::info!(order_id = %resp_id, result = %r, "考试完成");
-                let done = r["success"].as_bool().unwrap_or(false);
-                let _ = tokio::fs::write(&task.status_file, json!({
-                    "phase": "exam", "done": true, "success": done,
-                    "message": format!("考试完成 提交{}/{}", r["submitted"], r["total"]),
-                }).to_string()).await;
-            }
-            Err(e) => {
-                tracing::warn!(order_id = %resp_id, error = %e, "考试失败");
-                let _ = tokio::fs::write(&task.status_file, json!({
-                    "phase": "exam", "done": true, "success": false,
-                    "message": format!("考试失败: {e}"),
-                }).to_string()).await;
-            }
-        }
-    });
-    Json(json!({"ok": true, "order_id": resp_id2}))
-}
-
-async fn submit_cx(
-    State(state): State<AppState>,
-    Json(task): Json<cx_study::CxTaskInput>,
-) -> Json<serde_json::Value> {
-    if task.order_id.is_empty() || task.points.is_empty() {
-        return Json(json!({"ok": false, "message": "order_id/points 不能为空"}));
-    }
-    if state.tasks.contains_key(&task.order_id) {
-        return Json(json!({"ok": false, "message": "任务已存在"}));
-    }
-
-    let push_url = state.push_url.clone();
-    let push_token = state.push_token.clone();
-    let tasks = state.tasks.clone();
-    let order_id = task.order_id.clone();
-    let oid_resp = task.order_id.clone();
-
-    let handle = tokio::spawn(async move {
-        let result = cx_study::run_cx_study(&task, &push_url, &push_token).await;
-        if let Err(e) = result {
-            tracing::warn!(order_id = %order_id, error = %e, "cx task failed");
-        }
-        tasks.remove(&order_id);
-    });
-
-    state.tasks.insert(oid_resp.clone(), handle);
-    Json(json!({"ok": true, "order_id": oid_resp}))
-}
-
-// 供状态写入使用的时间戳
-#[allow(dead_code)]
-pub(crate) fn now_ms() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
-}

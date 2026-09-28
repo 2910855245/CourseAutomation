@@ -41,12 +41,12 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/api/queue/resume/{queue}", post(queue_resume_one))
         .route("/api/queue/config", post(queue_config))
         .route("/api/queue/detect", get(queue_detect))
+        // 聚合经营数据（订单/营收/在跑任务），属后台信息，移到鉴权组
+        .route("/api/system/status", get(system_status))
         .route_layer(middleware::from_fn_with_state(state.clone(), crate::auth::auth_middleware));
 
     Router::new()
         .route("/api/info", get(api_info))
-        .route("/api/system/status", get(system_status))
-        .route("/api/jobs/submit", post(submit_job))
         .route("/api/orders/batch", post(batch_orders))
         // 游客可达：Bearer 或 view_token 二选一（handler 内校验）
         .route("/api/orders/{order_id}", get(order_get).delete(order_delete))
@@ -157,13 +157,9 @@ async fn system_status(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
-/// 提交学校任务到队列（对齐 Python queue.submit_job 核心字段）
-async fn submit_job(State(state): State<AppState>, Json(body): Json<Value>) -> Json<Value> {
-    match crate::queue::submit_job(&state.db, body).await {
-        Ok(v) => Json(v),
-        Err(e) => Json(json!({"ok": false, "message": e.to_string()})),
-    }
-}
+// 说明：Python 时代的 /api/jobs/submit 已删除 —— 没有任何调用方
+// （前端下单走 /api/orders/batch，后台入队走 /api/admin/orders/{id}/enqueue），
+// 而它是个无鉴权、可直接往队列表写任意行的入口。
 
 // ── 读路径（与 Python 逐字段对齐）──────────────────────────
 
@@ -658,7 +654,18 @@ async fn order_delete(
 }
 
 /// 订单操作日志（audit_logs.event_type → event，对齐前端字段名）
-async fn order_audit_log(State(state): State<AppState>, Path(order_id): Path<String>) -> Json<Value> {
+async fn order_audit_log(
+    State(state): State<AppState>,
+    Path(order_id): Path<String>,
+    headers: HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Json<Value> {
+    // 与查单同一套鉴权（管理员 Bearer 或该订单的 view_token）。
+    // 此前完全没有校验：只要猜到 ORD-xxxxxxxx 就能读到任意订单的操作日志。
+    let token = params.get("token").cloned().unwrap_or_default();
+    if !order_access_ok(&headers, &order_id, &token) {
+        return Json(json!({"success": false, "message": "无权访问该订单"}));
+    }
     let db = state.db.clone_pool();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Value>> {
         let conn = db.get()?;

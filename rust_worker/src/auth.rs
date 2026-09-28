@@ -21,7 +21,9 @@ pub struct Claims {
     pub exp: usize,
 }
 
-fn secret() -> Vec<u8> {
+/// 全局唯一密钥源：管理员 JWT 签名、游客 view_token 都从这里取。
+/// 缺失时 main::check_secret_key 会直接拒绝启动，所以这里不再需要兜底值。
+pub(crate) fn secret() -> Vec<u8> {
     std::env::var("JWT_SECRET_KEY")
         .unwrap_or_else(|_| "local-dev-secret-key".into())
         .into_bytes()

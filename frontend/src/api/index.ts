@@ -95,7 +95,7 @@ export const api = {
     get: (id: string, token?: string) => get<ApiResponse<OrderItem>>('/api/orders/' + id + (token ? '?token=' + encodeURIComponent(token) : '')),
     cancel: (id: string, token?: string) => del<ApiResponse<any>>('/api/orders/' + id + (token ? '?token=' + encodeURIComponent(token) : '')),
     clearHistory: () => post<ApiResponse<any>>('/api/orders/clear-history'),
-    auditLog: (id: string) => get<ApiResponse<{ event: string; detail: string; created_at: string }[]>>('/api/orders/audit-log/' + id),
+    auditLog: (id: string, token?: string) => get<ApiResponse<{ event: string; detail: string; created_at: string }[]>>('/api/orders/audit-log/' + id + (token ? '?token=' + encodeURIComponent(token) : '')),
     activeCourses: (username: string) => get<ApiResponse<string[]>>('/api/orders/active-courses?username=' + encodeURIComponent(username)),
   },
   payment: {

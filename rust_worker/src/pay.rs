@@ -244,7 +244,9 @@ pub async fn send_callback(order: Value, notify_url: String, key: String) {
                         tracing::info!(trade_no = pay_id, attempt = attempt + 1, "ypay_callback_success");
                         return;
                     }
-                    tracing::warn!(trade_no = pay_id, attempt = attempt + 1, body = &t[..t.len().min(100)], "ypay_callback_bad_response");
+                    tracing::warn!(trade_no = pay_id, attempt = attempt + 1,
+                                   body = %crate::platform_client::preview(&t, 100),
+                                   "ypay_callback_bad_response");
                 } else {
                     tracing::warn!(trade_no = pay_id, attempt = attempt + 1, status, "ypay_callback_http_error");
                 }

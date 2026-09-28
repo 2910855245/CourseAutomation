@@ -600,8 +600,12 @@ async fn test_deepseek(State(state): State<AppState>,
         return Json(json!({"code": -1, "data": result}));
     }
     result["key_source"] = json!(key_source);
-    result["api_key"] = json!(if api_key.len() > 10 {
-        format!("{}****{}", &api_key[..6], &api_key[api_key.len() - 4..])
+    // 按字符切（api_key 来自 DB/env，含多字节字符时字节切片会 panic）
+    let key_chars: Vec<char> = api_key.chars().collect();
+    result["api_key"] = json!(if key_chars.len() > 10 {
+        format!("{}****{}",
+                key_chars[..6].iter().collect::<String>(),
+                key_chars[key_chars.len() - 4..].iter().collect::<String>())
     } else {
         "****".to_string()
     });

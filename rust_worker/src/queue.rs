@@ -243,6 +243,34 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
     let _ = tokio::fs::remove_dir_all(&tmpdir).await;
 }
 
+/// 启动时回收上次运行遗留的 running 任务。
+///
+/// `claim_next_job` 只挑 `pending`/`retrying`，所以进程被 kill / 崩溃时留在
+/// `running` 的行**永远不会再被任何人认领** —— 对应订单会永久停在「执行中」，
+/// 既不会重试也不会失败，只能人工改库。启动瞬间本进程不可能有在跑的任务，
+/// 因此把 running 全部退回 pending 是安全的（幂等）。
+///
+/// 只处理学校队列表：学习通队列表当前没有任何调度器消费（Rust 侧未实现
+/// 学习通登录），改动它的状态不会带来任何行为收益。
+async fn reclaim_stale_running(state: &AppState) {
+    let pool = state.db.clone_pool();
+    let result = tokio::task::spawn_blocking(move || -> Result<usize> {
+        let conn = pool.get()?;
+        let n = conn.execute(
+            &format!("UPDATE {SCHOOL_TABLE} SET status='pending', started_at=NULL WHERE status='running'"),
+            [],
+        )?;
+        Ok(n)
+    })
+    .await;
+    match result {
+        Ok(Ok(0)) => {}
+        Ok(Ok(n)) => tracing::warn!(count = n, "已把上次运行遗留的 running 任务退回 pending，即将重新调度"),
+        Ok(Err(e)) => tracing::error!(error = %e, "回收遗留 running 任务失败"),
+        Err(e) => tracing::error!(error = %e, "回收遗留 running 任务失败（spawn_blocking 异常）"),
+    }
+}
+
 /// 调度器主循环（每队列一个 tokio task）
 ///
 /// 并发上限与暂停状态都从 system_config 动态读取（管理端可热更新）：
@@ -250,6 +278,7 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
 ///   - `queue_paused` / `queue_paused_school` / `queue_paused_chaoxing`：暂停开关
 pub async fn dispatcher_loop(state: Arc<AppState>) {
     tracing::info!("Rust 队列调度器启动（学校任务）");
+    reclaim_stale_running(&state).await;
     let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     // 配置缓存：(上次刷新时间, 并发上限, 是否暂停)，避免每轮都查库
     let mut cfg_cache: (std::time::Instant, usize, bool) =
@@ -343,38 +372,4 @@ pub async fn config_set(db: &Db, key: &str, value: &str) -> Result<()> {
     })
     .await??;
     Ok(())
-}
-
-/// 提交任务（对齐 Python queue.submit_job 的核心字段）
-pub async fn submit_job(db: &Db, job: serde_json::Value) -> Result<serde_json::Value> {
-    let job_id = format!("JOB-{:08x}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64 & 0xffffffff);
-    let created = now_str();
-    let pool_guard = db.raw_pool().clone();
-    let job_id2 = job_id.clone();
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        let conn = pool_guard.get()?;
-        conn.execute(
-            &format!(
-                "INSERT INTO {SCHOOL_TABLE}
-                 (job_id, username, password, website_id, job_type, course_ids, status, priority,
-                  progress, total_steps, completed_steps, current_step_name, error_message,
-                  retry_count, max_retries, task_id, order_id, result_data, verified,
-                  created_at, started_at, finished_at, deleted_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,'pending',0,0,0,0,'','',0,3,NULL,?7,'{{}}',0,?8,NULL,NULL,NULL)"
-            ),
-            rusqlite::params![
-                job_id2,
-                job["username"].as_str().unwrap_or(""),
-                job["password"].as_str().unwrap_or(""),
-                job["website_id"].as_i64().unwrap_or(1),
-                job["job_type"].as_str().unwrap_or("video"),
-                job["course_ids"].as_str().unwrap_or("[]"),
-                job["order_id"].as_str().unwrap_or(""),
-                created,
-            ],
-        )?;
-        Ok(())
-    })
-    .await??;
-    Ok(json!({"ok": true, "job_id": job_id}))
 }

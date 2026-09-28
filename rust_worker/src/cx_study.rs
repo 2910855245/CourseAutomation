@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::Mutex;
 
+use crate::platform_client::{CONNECT_TIMEOUT, REQUEST_TIMEOUT};
+
 const ENC_SECRET: &str = "d_yHJ!$pdA~5";
 const VIDEO_REFERER: &str =
     "https://mooc1.chaoxing.com/ananas/modules/video/index.html?v=2025-0725-1842";
@@ -70,6 +72,8 @@ fn calc_enc(clazz_id: &str, userid: &str, jobid: &str, object_id: &str,
 fn make_report_client() -> Client {
     Client::builder()
         .danger_accept_invalid_certs(true)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
         .http1_only()
         .build()
         .expect("构建上报 client 失败")
@@ -79,6 +83,8 @@ fn make_report_client() -> Client {
 fn make_session_client(ua: &str) -> Client {
     Client::builder()
         .danger_accept_invalid_certs(true)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
         .user_agent(if ua.is_empty() {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36".to_string()
         } else {

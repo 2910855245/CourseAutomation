@@ -344,7 +344,7 @@ const statusClass: Record<string, string> = { pending: 'warn', accepted: 'primar
 function showDetail(o: OrderItem) {
   detailOrder.value = o
   auditLogs.value = []
-  api.orders.auditLog(o.order_id).then((r: any) => {
+  api.orders.auditLog(o.order_id, guestOrderTokens[o.order_id]).then((r: any) => {
     auditLogs.value = r?.data || []
   }).catch(() => {})
 }

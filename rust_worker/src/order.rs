@@ -18,7 +18,11 @@ fn gen_order_id() -> String {
 
 /// 游客查单凭证（对齐 make_view_token：sha256(order_id:secret)[:24]）
 pub(crate) fn view_token(order_id: &str) -> String {
-    let secret = std::env::var("JWT_SECRET_KEY").unwrap_or_default();
+    // 与管理员 JWT 共用同一密钥源（auth::secret）。此前这里用 unwrap_or_default()，
+    // 密钥缺失时 secret 会是空串，与 auth 的兜底值不一致 —— 那样 view_token 变成
+    // 可离线枚举的 sha256(order_id + ":")，能读/取消任意订单。
+    // 注意：派生串必须保持与历史完全一致，否则已发出的游客查单链接全部失效。
+    let secret = String::from_utf8_lossy(&crate::auth::secret()).into_owned();
     let digest = Sha256::digest(format!("{order_id}:{secret}").as_bytes());
     let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
     hex[..24].to_string()

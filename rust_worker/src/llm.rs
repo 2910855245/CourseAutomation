@@ -79,7 +79,7 @@ impl LlmClient {
         let status = resp.status().as_u16();
         let text = resp.text().await.unwrap_or_default();
         if status != 200 {
-            bail!("DeepSeek HTTP {status}: {}", &text[..text.len().min(200)]);
+            bail!("DeepSeek HTTP {status}: {}", crate::platform_client::preview(&text, 200));
         }
         let v: Value = serde_json::from_str(&text).context("DeepSeek 响应解析失败")?;
         let content = v["choices"][0]["message"]["content"]

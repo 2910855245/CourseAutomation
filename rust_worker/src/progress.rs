@@ -15,7 +15,7 @@
 //! topic：`order:{order_id}` / `payment:{trade_no}` / `queue` / `dashboard`
 //! 控制帧：`auth` / `authenticated` / `sub` / `subscribed` / `error` / `heartbeat` / `pong`
 //!
-//! ## 鉴权（灰度开关 AUTH_WS_REQUIRED，默认关闭）
+//! ## 鉴权（开关 AUTH_WS_REQUIRED，**默认开启**）
 //!
 //! - 首帧 `{"type":"auth","token":"<admin JWT>"}` → `allowed=["*"]`
 //! - 首帧 `{"type":"sub","orders":[{"order_id":..,"view_token":..}]}` → 逐条与
@@ -23,7 +23,7 @@
 //!   帧不关连接（游客页可能同时持有效+失效订单）；5s 未表态则关闭（4401）。
 //! - **topic 过滤在服务端做**：不是性能考虑而是隐私 —— 载荷里含 `message` 文本，
 //!   若在客户端过滤，任何人开 DevTools 就能看到别人订单的进度与 order_id。
-//! - 开关关闭时等价于全量广播，保证新旧前端共存期不出现「收不到消息」。
+//! - 设 `AUTH_WS_REQUIRED=false` 可退回全量广播（仅用于排查问题）。
 
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
@@ -73,8 +73,11 @@ fn now_ms() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
 }
 
+/// 默认**开启**鉴权。此前默认关闭，等于把所有人的订单进度（含 order_id 与
+/// message 文本）挂在公网上，任何人开 DevTools 就能看到别人的订单。
+/// 需要临时关闭（例如排查前端问题）时设 `AUTH_WS_REQUIRED=false`。
 fn auth_required() -> bool {
-    std::env::var("AUTH_WS_REQUIRED").map(|v| v == "true").unwrap_or(false)
+    std::env::var("AUTH_WS_REQUIRED").map(|v| v.trim() != "false").unwrap_or(true)
 }
 
 /// 进度推送（对齐 push_progress_update：token 鉴权 → 广播）
@@ -83,19 +86,17 @@ pub async fn push_progress(
     headers: axum::http::HeaderMap,
     Json(data): Json<Value>,
 ) -> Response {
-    // 鉴权：配置 WORKER_TOKEN 后校验 X-Worker-Token
-    // （Rust 化后 worker 全部同进程/内网，取消 Python 的 localhost 豁免）
-    if let Ok(token) = std::env::var("WORKER_TOKEN") {
-        if !token.is_empty() {
-            let provided = headers
-                .get("x-worker-token")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            if provided != token {
-                return (axum::http::StatusCode::UNAUTHORIZED,
-                        Json(json!({"detail": "无效的 Worker 凭证"}))).into_response();
-            }
-        }
+    // 鉴权：X-Worker-Token 必须等于 main::worker_token()。
+    // 令牌与出站推送同源：未配置环境变量时是启动时随机生成的进程内令牌，
+    // 因此零配置部署下自推送照常，而外部无法伪造广播帧（此前令牌名对不上，
+    // 结果是「要么推送全被 401、要么完全不校验」二选一）。
+    let provided = headers
+        .get("x-worker-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if provided != crate::worker_token() {
+        return (axum::http::StatusCode::UNAUTHORIZED,
+                Json(json!({"detail": "无效的 Worker 凭证"}))).into_response();
     }
 
     // 已是信封 → 原样转发；裸载荷（study.rs / cx_study.rs 现有格式）→ 补封装。
