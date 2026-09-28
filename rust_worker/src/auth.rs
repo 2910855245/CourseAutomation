@@ -7,7 +7,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use bcrypt::verify;
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -38,8 +38,15 @@ pub fn create_token(username: &str, role: &str) -> Result<String, jsonwebtoken::
 }
 
 /// 校验 token 并返回 claims
+///
+/// 显式写出算法与必需声明，不用 `Validation::default()`：
+/// 这是鉴权链路，语义不能依赖上游库默认值的后续版本变化
+/// （HS256 与签名用的 EncodingKey 必须严格对应，避免算法混淆）。
 pub fn verify_token(token: &str) -> Option<Claims> {
-    decode::<Claims>(token, &DecodingKey::from_secret(&secret()), &Validation::default())
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.validate_exp = true;
+    validation.required_spec_claims = ["exp".to_string()].into_iter().collect();
+    decode::<Claims>(token, &DecodingKey::from_secret(&secret()), &validation)
         .ok()
         .map(|d| d.claims)
 }

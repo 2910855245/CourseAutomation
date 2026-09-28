@@ -26,7 +26,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenvy = "0.15"
 regex = "1.13.1"
 bcrypt = "0.15"
-jsonwebtoken = "9"
+# 11.x 起必须显式选择 crypto provider（default 只带 use_pem）：
+# 选纯 Rust 的 rust_crypto，避免引入 aws-lc-rs 的 C 工具链依赖
+jsonwebtoken = { version = "11", features = ["rust_crypto"] }
 sha2 = "0.11.0"
 # 凭据加密（AES-256-GCM）：orders 表不再落明文密码
 aes-gcm = "0.10"
