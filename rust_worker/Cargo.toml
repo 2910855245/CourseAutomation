@@ -5,7 +5,8 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "signal", "sync", "fs", "io-util"] }
-reqwest = { version = "0.12", default-features = false, features = ["native-tls", "cookies", "json"] }
+# 0.13 起 application/x-www-form-urlencoded 也要显式开 form feature
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "cookies", "json", "form"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rand = "0.10"
@@ -20,7 +21,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.35"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["fs", "compression-gzip", "compression-br", "set-header", "trace"] }
+tower-http = { version = "0.7", features = ["fs", "compression-gzip", "compression-br", "set-header", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenvy = "0.15"
