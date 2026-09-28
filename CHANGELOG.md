@@ -1,3 +1,23 @@
+# 2026-09-29 UI 重构 + WebSocket 实时化 + 技术栈升级
+
+## 变更内容
+
+- **品牌统一**：FUCK → Fuk；主色由墨黑 `#17181b` 改为品牌蓝 `#0071e3`（原先首页主 CTA 一直是黑色）
+- **设计系统**：引入 Naive UI（按需自动导入）作为组件层；`src/theme/index.ts` 为品牌色/字体/圆角的单一真源；暗色模式（`[data-theme="dark"]`，index.html 内联脚本首屏防闪，前台与后台顶栏均可切换）
+- **零改动桥接**：`store.toast()` 改为「实现可注入」，由 ToastBridge 注入 Naive message；confirm 由 ConfirmBridge 适配 Naive dialog —— 约 100 处 toast、4 处 showConfirm 调用点一行未改
+- **WebSocket 重写**：统一信封 `{v,topic,type,data,ts,seq}`；服务端 topic 过滤 + 首帧 `auth`/`sub` 鉴权（`AUTH_WS_REQUIRED` 灰度，默认关）；前端 realtime store 单例（指数退避重连、75s 无帧判半开）；修掉队列任务进度从不广播、Admin 监听死分支、Orders.vue 重复建两条连接三处缺陷
+- **前台**：Orders 收到 `order.update` 只重拉该条订单（去抖 300ms），WS 断开时才 60s 兜底轮询；Admin 进度帧 800ms 去抖合并刷新
+- **图表**：后台概览换 ECharts（收入折线 + 订单柱、状态分布横条），独立 vendor-echarts 懒加载块
+- **Rust 依赖**：rand 0.8→0.10、jsonwebtoken 9→11（显式 rust_crypto provider）、rusqlite 0.32→0.40 + r2d2_sqlite 0.25→0.35（同升）、reqwest 0.12→0.13（需开 form feature）、tower-http 0.6→0.7、scraper 0.20→0.27、md5/base64/bcrypt/aes-gcm/libloading 升级；dashmap 不升（仅有 RC）
+- **前端工具链**：vue 3.5 / vite 8 / TS 6 / vue-tsc 3 / pinia 4 / vue-router 5；vite 8 下 manualChunks 改函数式、`__dirname` 改 `import.meta.url`；构建 4.1s → 0.7s
+- **修既存 bug**：后台「财务报表」整页空白（访问已删除的 `dash.users`）、`/admin` 登录入口死锁、OrdersTab 表格在 769~859px 撑破整页、支付收款两张空 src 裂图、`pay::test_floating_price` 随机失败
+
+## 验收
+
+- Rust 单测 38 passed、前端单测 16 passed、`cargo build --release` 与 `npm run build`（vue-tsc）通过
+- 接口冒烟全 PASS：静态资源、公开 API、JWT 鉴权 API（含无 token 401）、DB 读路径、游客查单、WS 信封 topic 推导
+- 浏览器巡检：前台 3 路由 + 后台全部侧栏项，浅/暗各一轮，无 console 错误、无裂图、无横向溢出；全站 WS 连接数 = 1
+
 # 2026-08-13 轻量化：单人运营模式
 
 ## 变更内容

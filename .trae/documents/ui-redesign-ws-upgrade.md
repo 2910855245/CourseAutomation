@@ -1,5 +1,20 @@
 # 蓝白 UI 重构 + WebSocket 实时化 + 技术栈升级
 
+## 实施结果（2026-09-29 收尾）
+
+| 阶段 | 状态 | 说明 |
+|---|---|---|
+| Phase 0 工具链升级 | ✅ 完成 | vue 3.5.43 / vite 8.3.1 / TS 6.0.3 / vue-tsc 3.3.11 / pinia 4 / vue-router 5；改函数式 manualChunks + `import.meta.url`；构建 4.1s → 0.73s。TS 7.0.2 不可用（删除 `./lib/tsc` 导出，vue-tsc 依赖该路径）→ 落在 6.0.3 |
+| Phase 1 设计系统 | ✅ 完成 | 蓝白 `#0071e3` + 暗色模式 + Naive UI provider 链 + toast/confirm 零改动桥接 + `src/theme/index.ts` 单一真源。**偏离**：未引入 `unplugin-auto-import`（全仓库本就显式 import，自动导入只带来隐式全局）；`main.css` 瘦身**未做** —— 手写组件样式仍在被 Admin 的 10 个 tab 使用，须与 Phase 3 的逐个迁移同步删除，先删会造成整片页面失去外观 |
+| Phase 2 实时化 | ✅ 完成（不含支付轮询） | 信封 + 服务端 topic 过滤 + 首帧 `auth`/`sub` 鉴权 + `realtime.ts` 单例 + Orders 局部重拉。**偏离**：支付相关 3s 轮询保留 —— YPay 聚合支付没有服务端事件源，无事件可订阅 |
+| Phase 3 后台 Naive 化 | ⚠️ 部分 | 已完成：概览两处手搓图表换 ECharts、管理端顶栏主题切换、支付收款裂图、769~859px 表格撑破页面。未做：10 个 tab 的控件逐项换成 Naive 组件、RiskTab 手绘 SVG 仪表盘换 ECharts（现 SVG 环观感已符合设计语言，换 ECharts 属横向改动，收益低） |
+| Phase 4 Rust 依赖升级 | ✅ 完成 | 7 个提交逐个升级并验证；`dashmap` 按计划不升（仅有 7.0.0-rc） |
+| 计划外 | — | 修掉 5 个既存 bug（财务报表空白、`/admin` 登录死锁、表格撑破页面、裂图、`test_floating_price` 随机失败） |
+
+完整变更与验收见仓库根目录 `CHANGELOG.md` 的 2026-09-29 条目。
+
+---
+
 ## 背景与目标
 
 用户要求三件事：
