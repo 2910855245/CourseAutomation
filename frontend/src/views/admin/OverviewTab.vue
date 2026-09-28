@@ -79,33 +79,6 @@ const platColor = (i: unknown): string => platformColors[Number(i)] || '#6b7280'
           </div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-icon usr">
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            ><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" /><circle
-              cx="12"
-              cy="7"
-              r="4"
-            /></svg>
-          </div>
-          <div class="kpi-body">
-            <div class="kpi-val">
-              {{ dash.users.total }}
-            </div>
-            <div class="kpi-label">
-              总用户数
-            </div>
-          </div>
-          <div class="kpi-sub">
-            今日新增 {{ dash.users.new_today }}
-          </div>
-        </div>
-        <div class="kpi-card">
           <div class="kpi-icon rate">
             <svg
               width="20"
@@ -118,7 +91,7 @@ const platColor = (i: unknown): string => platformColors[Number(i)] || '#6b7280'
           </div>
           <div class="kpi-body">
             <div class="kpi-val">
-              {{ dash.orders.completion_rate }}%
+              {{ (dash.orders.completion_rate * 100).toFixed(1) }}%
             </div>
             <div class="kpi-label">
               完成率
@@ -426,7 +399,6 @@ const platColor = (i: unknown): string => platformColors[Number(i)] || '#6b7280'
 }
 .kpi-icon.rev { background: var(--c-danger-bg); color: var(--c-danger); }
 .kpi-icon.ord { background: var(--c-primary-bg); color: var(--c-primary); }
-.kpi-icon.usr { background: var(--c-success-bg); color: var(--c-success); }
 .kpi-icon.rate { background: var(--c-warning-bg); color: var(--c-warning); }
 .kpi-icon.agt { background: var(--c-info-bg); color: var(--c-info); }
 .kpi-body { display: flex; flex-direction: column; gap: 3px; }

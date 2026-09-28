@@ -21,7 +21,7 @@ const router = createRouter({
       path: '/admin',
       name: 'admin',
       component: () => import('@/views/Admin.vue'),
-      meta: { requiresAdmin: true, title: '后台管理' },
+      meta: { title: '后台管理' },
     },
     {
       path: '/payment/:id',
@@ -48,12 +48,8 @@ router.beforeEach(async (to, _from, next) => {
     const token = localStorage.getItem('user_token')
     if (!token) { next({ name: 'home' }); return }
   }
-  if (to.meta.requiresAdmin) {
-    const adminToken = localStorage.getItem('admin_token')
-    if (!adminToken) {
-      next({ name: 'home' }); return
-    }
-  }
+  // /admin 不再在此拦截：Admin.vue 自身按 adminToken 决定「登录表单 / 后台布局」，
+  // 若守卫在无 token 时重定向到首页，登录表单将永远无法到达（死锁）。
   next()
 })
 
