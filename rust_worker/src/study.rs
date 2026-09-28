@@ -70,6 +70,8 @@ struct Shared {
     password: String,
     status_file: String,
     push_ws: bool,
+    /// 随推送一起上报：服务端据此把消息投到 order:{id} topic
+    order_id: String,
     progress: Mutex<Progress>,
 }
 
@@ -350,9 +352,13 @@ async fn write_status(shared: &Shared, extra: &[(&str, &str)]) {
     }
 }
 
-async fn push_ws(shared: &Shared, data: serde_json::Value, push_url: &str, push_token: &str) {
+async fn push_ws(shared: &Shared, mut data: serde_json::Value, push_url: &str, push_token: &str) {
     if !shared.push_ws {
         return;
+    }
+    // 载荷必须带 order_id：服务端据此确定广播 topic，前端据此路由到具体订单
+    if let Some(obj) = data.as_object_mut() {
+        obj.insert("order_id".to_string(), serde_json::Value::from(shared.order_id.clone()));
     }
     let _ = shared.client
         .post(push_url)
@@ -379,6 +385,7 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
         password: task.password.clone(),
         status_file: task.status_file.clone(),
         push_ws: task.push_ws,
+        order_id: task.order_id.clone(),
         progress: Mutex::new(Progress { total: task.videos.len() as u64, total_duration, ..Default::default() }),
     });
 

@@ -477,6 +477,8 @@ pub async fn run_cx_study(task: &CxTaskInput, push_url: &str,
                 .header("X-Worker-Token", push_token)
                 .json(&json!({
                     "type": "progress",
+                    // 服务端据此确定广播 topic：order:{order_id}
+                    "order_id": task.order_id.clone(),
                     "phase": "study_must_learn",
                     "study_done": p.done,
                     "study_total": p.total,

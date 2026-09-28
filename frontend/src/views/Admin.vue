@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, toRef, watch } from 'vue'
 import { useAppStore } from '@/stores/app'
+import { useRealtimeStore } from '@/stores/realtime'
 import { usePlatformNames } from '@/composables/usePlatformNames'
 import { useAdminStore } from '@/stores/admin'
 import { useAuth } from '@/composables/useAuth'
@@ -21,6 +22,7 @@ import YpayTab from '@/views/admin/YpayTab.vue'
 import AnnouncementTab from '@/views/admin/AnnouncementTab.vue'
 
 const store = useAppStore()
+const realtime = useRealtimeStore()
 
 // ── Composables ──
 const { adminUser, adminPass, loginErr, currentRole, isLoggedIn, pwForm, changingPw, captchaToken, captchaAnswer, captchaImage, captchaLoading, doLogin, logout, changeAdminPassword, loadCaptcha } = useAuth()
@@ -72,6 +74,7 @@ onMounted(async () => {
 // Watch for login state changes (handles login after page load)
 watch(isLoggedIn, (loggedIn) => {
   if (loggedIn) {
+    realtime.setAdminToken(store.adminToken)
     dashboard.loadDashboard(currentRole.value)
   }
 })
@@ -83,31 +86,33 @@ watch(activeTab, (tab) => {
   else if (tab === 'queue_chaoxing') payments.setQueueFilter('chaoxing')
 })
 
-let ws: WebSocket | null = null
+// ── 实时刷新：复用全站唯一的 WS 连接（原先这里另开一条）──
+let unsubscribeRealtime: (() => void) | null = null
+let refreshTimer: number | null = null
 
-function connectAdminWS() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  try {
-    ws = new WebSocket(`${proto}//${location.host}/api/progress/ws/live`)
-    ws.onmessage = (e) => {
-      try {
-        const d = JSON.parse(e.data)
-        if (d.type === 'progress' || d.type === 'job_update' || d.type === 'order_update') {
-          if (activeTab.value === 'orders') orders.loadOrders()
-          if (activeTab.value === 'queue' || activeTab.value === 'queue_school' || activeTab.value === 'queue_chaoxing') payments.loadQueueData()
-        }
-      } catch {}
-    }
-    ws.onclose = () => { setTimeout(connectAdminWS, 5000) }
-  } catch {}
+/** 刷课期间每秒可能来好几条进度帧，合并成一次表格刷新 */
+function scheduleDataRefresh() {
+  if (refreshTimer !== null) return
+  refreshTimer = window.setTimeout(() => {
+    refreshTimer = null
+    if (activeTab.value === 'orders') orders.loadOrders()
+    if (activeTab.value === 'queue' || activeTab.value === 'queue_school' || activeTab.value === 'queue_chaoxing') payments.loadQueueData()
+  }, 800)
 }
 
 onMounted(() => {
-  connectAdminWS()
+  realtime.setAdminToken(store.adminToken)
+  unsubscribeRealtime = realtime.subscribe(['*'], (msg) => {
+    if (msg.type === 'job.update' || msg.type === 'order.update' || msg.type === 'progress') {
+      scheduleDataRefresh()
+    }
+  })
 })
 
 onUnmounted(() => {
-  if (ws) { ws.close(); ws = null }
+  unsubscribeRealtime?.()
+  unsubscribeRealtime = null
+  if (refreshTimer !== null) { clearTimeout(refreshTimer); refreshTimer = null }
   if (payments._payTestTimer) { clearInterval(payments._payTestTimer); payments._payTestTimer = null }
 })
 

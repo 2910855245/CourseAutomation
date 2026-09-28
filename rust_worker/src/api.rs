@@ -1039,7 +1039,7 @@ async fn admin_order_execute(State(state): State<AppState>, Path(order_id): Path
             cookie_str: session.cookie_str,
             course_ids,
             status_file: tmpdir.join("status.json").to_string_lossy().to_string(),
-            push_ws: false,
+            push_ws: true,
         };
         if let Err(e) = crate::scan::run_scan_and_study(&task, &push_url, &push_token).await {
             tracing::warn!(order_id = %oid_task, error = %e, "手动执行任务失败");

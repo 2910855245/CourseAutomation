@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAppStore } from '@/stores/app'
+import { useRealtimeStore } from '@/stores/realtime'
 import { api, type OrderItem } from '@/api'
 import { usePlatformNames } from '@/composables/usePlatformNames'
 import AppTopbar from '@/components/AppTopbar.vue'
@@ -13,24 +14,53 @@ const { showConfirm } = useConfirmSingleton()
 
 
 const orders = ref<OrderItem[]>([])
-let changedIds = new Set<string>()
-let ws: WebSocket | null = null
+const changedIds = ref(new Set<string>())
+const realtime = useRealtimeStore()
 
-function connectWS() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  try {
-    ws = new WebSocket(`${proto}//${location.host}/api/progress/ws/live`)
-    ws.onmessage = (e) => {
-      try {
-        const d = JSON.parse(e.data)
-        if (d.type === 'progress' || d.type === 'job_update' || d.type === 'order_update') {
-          load()
-        }
-      } catch {}
-    }
-    ws.onclose = () => { setTimeout(connectWS, 5000) }
-  } catch {}
+// 实时推进：收到 order.update 只重拉这一条订单（原先是一条消息整表重载）。
+// 同一条订单在短时间内可能连续来多帧，按 order_id 合并到一次请求。
+const refreshTimers = new Map<string, number>()
+let unsubscribeRealtime: (() => void) | null = null
+let fallbackTimer: number | null = null
+
+function scheduleRefresh(orderId: string) {
+  if (!orderId) { load(); return }
+  const pending = refreshTimers.get(orderId)
+  if (pending !== undefined) clearTimeout(pending)
+  refreshTimers.set(orderId, window.setTimeout(() => {
+    refreshTimers.delete(orderId)
+    refreshOne(orderId)
+  }, 300))
 }
+
+async function refreshOne(orderId: string) {
+  const idx = orders.value.findIndex(o => o.order_id === orderId)
+  if (idx < 0) return
+  try {
+    const res = await api.orders.get(orderId, guestOrderTokens[orderId])
+    const item = res?.data
+    if (!item) return
+    const old = orders.value[idx]
+    if (old && (old.status !== item.status || old.progress !== item.progress)) {
+      const next = new Set(changedIds.value)
+      next.add(orderId)
+      changedIds.value = next
+    }
+    orders.value[idx] = item
+  } catch {
+    // 单条刷新失败不打断页面：下一次事件或兜底轮询会补上
+  }
+}
+
+/** 游客把逐单 view_token 交给服务端做 topic 白名单（服务端过滤，非客户端） */
+function syncRealtimeScope() {
+  realtime.renewGuestScope(
+    orders.value
+      .map(o => ({ order_id: o.order_id, view_token: guestOrderTokens[o.order_id] || '' }))
+      .filter(o => o.view_token),
+  )
+}
+
 const statusFilter = ref('')
 const searchQuery = ref('')
 const currentPage = ref(1)
@@ -127,7 +157,7 @@ async function load() {
         newIds.add(item.order_id)
       }
     }
-    changedIds = newIds
+    changedIds.value = newIds
     orders.value = items
   } catch (e: any) {
     // If auth fails and we have guest IDs, retry as guest
@@ -141,7 +171,6 @@ async function load() {
 
 onMounted(async () => {
   try {
-    connectWS()
     loadPlatformNames()
     const hasToken = !!localStorage.getItem('user_token')
     const routeId = route.params.id as string || ''
@@ -170,9 +199,31 @@ onMounted(async () => {
     console.error('Orders init error:', e)
   }
 
-  connectWS()
+  // 复用全站唯一的 WS 连接（原先这里重复建了第二条）
+  realtime.setAdminToken(localStorage.getItem('admin_token') || '')
+  syncRealtimeScope()
+  unsubscribeRealtime = realtime.subscribe(['order:', 'dashboard'], (msg) => {
+    if (msg.type === 'order.update') {
+      scheduleRefresh(msg.data?.order_id || '')
+    } else if (msg.type === 'progress') {
+      scheduleRefresh(msg.data?.order_id || '')
+    }
+  })
+
+  // 兜底：WS 断开期间才慢轮询（连接正常时完全不发请求）
+  fallbackTimer = window.setInterval(() => {
+    if (!realtime.connected) load()
+  }, 60_000)
 })
-onUnmounted(() => { if (ws) { ws.close(); ws = null } })
+
+onUnmounted(() => {
+  unsubscribeRealtime?.()
+  unsubscribeRealtime = null
+  if (fallbackTimer !== null) { clearInterval(fallbackTimer); fallbackTimer = null }
+  for (const t of refreshTimers.values()) clearTimeout(t)
+  refreshTimers.clear()
+  // 连接是全站共享的，这里不关闭
+})
 
 async function cancel(id: string) {
   const ok = await showConfirm({ title: '取消订单', message: '确认取消该订单吗？取消后不可恢复。', type: 'warning' })

@@ -57,7 +57,9 @@ pub struct AppState {
     pub push_url: String,
     pub push_token: String,
     pub db: db::Db,
-    pub progress_tx: tokio::sync::broadcast::Sender<String>,
+    pub progress_tx: tokio::sync::broadcast::Sender<progress::Envelope>,
+    /// 广播序号（envelope.seq）：前端用它丢弃乱序/重放帧
+    pub ws_seq: Arc<std::sync::atomic::AtomicU64>,
 }
 
 type SubmitTask = study::TaskInput;
@@ -96,13 +98,14 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("打开数据库失败: {db_path}"))?;
     tracing::info!(db_path, "SQLite 就绪");
 
-    let (progress_tx, _) = tokio::sync::broadcast::channel::<String>(256);
+    let (progress_tx, _) = tokio::sync::broadcast::channel::<progress::Envelope>(256);
     let state = AppState {
         tasks: Arc::new(DashMap::new()),
         push_url,
         push_token,
         db: database,
         progress_tx,
+        ws_seq: Arc::new(std::sync::atomic::AtomicU64::new(1)),
     };
 
     // Rust 队列调度器（RUST_QUEUE_ENABLED=true 时接管学校任务）

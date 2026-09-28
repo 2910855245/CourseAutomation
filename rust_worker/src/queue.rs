@@ -15,6 +15,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::db::Db;
+use crate::progress;
 use crate::scan::ScanTaskInput;
 use crate::AppState;
 
@@ -71,8 +72,8 @@ fn chrono_lite(secs: u64) -> String {
 }
 
 /// 原子认领下一个待执行任务
-async fn claim_next_job(db: &Db) -> Result<Option<QueueJob>> {
-    let pool_guard = db.raw_pool().clone();
+async fn claim_next_job(state: &AppState) -> Result<Option<QueueJob>> {
+    let pool_guard = state.db.raw_pool().clone();
     let row = tokio::task::spawn_blocking(move || -> Result<Option<QueueJob>> {
         let mut conn = pool_guard.get()?;
         let tx = conn.transaction()?;
@@ -120,15 +121,28 @@ async fn claim_next_job(db: &Db) -> Result<Option<QueueJob>> {
         }
     })
     .await??;
+    if let Some(job) = &row {
+        progress::broadcast(state, "queue", "job.update", json!({
+            "job_id": job.job_id,
+            "order_id": job.order_id,
+            "status": "running",
+        }));
+    }
     Ok(row)
 }
 
-async fn update_job(db: &Db, job_id: &str, fields: &[(&str, String)]) -> Result<()> {
+/// 任务状态落库 —— 队列状态变更的唯一扼流点。
+///
+/// 写成功后统一广播 `job.update`（topic `queue`），若任务挂在订单上，
+/// 额外向 `order:{order_id}` 发一条 `order.update` 作为「该订单有变化」的信号。
+/// 注意：这里只发信号，不带订单表语义 —— 前端收到后应重新拉取该订单，
+/// 而不是把队列状态直接当作订单状态。
+async fn update_job(state: &AppState, job: &QueueJob, fields: &[(&str, String)]) -> Result<()> {
     if fields.is_empty() {
         return Ok(());
     }
-    let pool_guard = db.raw_pool().clone();
-    let job_id = job_id.to_string();
+    let pool_guard = state.db.raw_pool().clone();
+    let job_id = job.job_id.clone();
     let sets: Vec<String> = fields.iter().enumerate()
         .map(|(i, (k, _))| format!("{k}=?{}", i + 1))
         .collect();
@@ -144,6 +158,27 @@ async fn update_job(db: &Db, job_id: &str, fields: &[(&str, String)]) -> Result<
         Ok(())
     })
     .await??;
+
+    let get = |key: &str| -> Option<String> {
+        fields.iter().find(|(name, _)| *name == key).map(|(_, v)| v.clone())
+    };
+    if let Some(status) = get("status") {
+        progress::broadcast(state, "queue", "job.update", json!({
+            "job_id": &job.job_id,
+            "order_id": &job.order_id,
+            "status": &status,
+            "progress": get("progress"),
+            "step": get("current_step_name"),
+            "error": get("error_message"),
+        }));
+        if !job.order_id.is_empty() {
+            let topic = format!("order:{}", job.order_id);
+            progress::broadcast(state, &topic, "order.update", json!({
+                "order_id": &job.order_id,
+                "status": &status,
+            }));
+        }
+    }
     Ok(())
 }
 
@@ -158,7 +193,7 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
     let session = match crate::session::get_session(&base_url, &job.username, &job.password).await {
         Ok(s) => s,
         Err(e) => {
-            let _ = update_job(&state.db, &job.job_id,
+            let _ = update_job(state, job,
                                &[("status", "failed".into()), ("error_message", format!("登录失败: {e}"))]).await;
             return;
         }
@@ -176,13 +211,14 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
         cookie_str: session.cookie_str,
         course_ids,
         status_file: status_file.clone(),
-        push_ws: false,
+        // 队列任务同样要推进度：否则管理端只能靠手动刷新看任务跑到哪了
+        push_ws: true,
     };
 
-    let result = crate::scan::run_scan_and_study(&task, "", "").await;
+    let result = crate::scan::run_scan_and_study(&task, &state.push_url, &state.push_token).await;
     match result {
         Ok(()) => {
-            let _ = update_job(&state.db, &job.job_id,
+            let _ = update_job(state, job,
                                &[("status", "completed".into()), ("progress", "100".into()),
                                  ("current_step_name", "刷课完成".into()),
                                  ("finished_at", now_str())]).await;
@@ -191,12 +227,12 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
         Err(e) => {
             // 重试语义（对齐 Python：retry_count < max_retries → retrying，否则 failed）
             if job.retry_count < job.max_retries.max(0) {
-                let _ = update_job(&state.db, &job.job_id,
+                let _ = update_job(state, job,
                                    &[("status", "retrying".into()),
                                      ("error_message", e.to_string()),
                                      ("retry_count", (job.retry_count + 1).to_string())]).await;
             } else {
-                let _ = update_job(&state.db, &job.job_id,
+                let _ = update_job(state, job,
                                    &[("status", "failed".into()),
                                      ("error_message", e.to_string()),
                                      ("finished_at", now_str())]).await;
@@ -235,7 +271,7 @@ pub async fn dispatcher_loop(state: Arc<AppState>) {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             continue;
         }
-        match claim_next_job(&state.db).await {
+        match claim_next_job(&state).await {
             Ok(Some(job)) => {
                 let state2 = state.clone();
                 let active2 = active.clone();
