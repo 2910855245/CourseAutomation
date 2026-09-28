@@ -7,7 +7,7 @@ const props = withDefaults(defineProps<{
   showRoleBadge?: boolean
   showLogout?: boolean
 }>(), {
-  title: 'FUCK 文理网课',
+  title: 'Fuk 文理网课',
   showRoleBadge: true,
   showLogout: false,
 })

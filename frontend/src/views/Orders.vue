@@ -450,7 +450,7 @@ function closeDetail() { detailOrder.value = null }
     </div>
 
     <footer class="page-footer">
-      <span>FUCK 文理网课</span>
+      <span>Fuk 文理网课</span>
     </footer>
 
     <div v-if="detailOrder" class="modal-overlay" @click.self="closeDetail">

@@ -78,7 +78,7 @@ onMounted(async () => {
 
 <template>
   <div class="page">
-    <AppTopbar title="FUCK 文理网课" :show-role-badge="true" />
+    <AppTopbar title="Fuk 文理网课" :show-role-badge="true" />
 
     <div class="content-wrapper">
       <div v-if="allDone" class="all-done-wrapper">
@@ -446,7 +446,7 @@ onMounted(async () => {
     </Teleport>
 
     <footer class="page-footer" :class="{ 'hide-on-mobile-results': scanDone }">
-      <div class="footer-brand">FUCK 文理网课</div>
+      <div class="footer-brand">Fuk 文理网课</div>
     </footer>
   </div>
 

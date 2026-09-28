@@ -134,7 +134,7 @@ useAdminStore().init({
           <span class="bs-mark">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.5 12.5H11L9.5 22 19 10.5h-6.5L13 2z"/></svg>
           </span>
-          <span>FUCK 文理网课</span>
+          <span>Fuk 文理网课</span>
         </div>
         <div class="bs-copy">
           <h2>运营后台</h2>
@@ -350,7 +350,10 @@ useAdminStore().init({
   </div>
 </template>
 
-<style>
+<style scoped>
+/* 原先为非 scoped 全局样式，会泄漏到全站且只在访问 /admin 后才注入
+   （导致首页/订单页在进过后台前后外观不一致）。
+   被外部依赖的类已上提到 styles/main.css，此处收敛为组件作用域。 */
 .admin-root { min-height: 100vh; }
 
 /* Login Screen */
