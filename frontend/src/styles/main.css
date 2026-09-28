@@ -1,6 +1,8 @@
 /* ============================================================
    Apple Blue Design System
    纯白底 · 品牌蓝 #0071e3 · 发丝描边 · 克制光影
+   含暗色主题（[data-theme="dark"]，见文件中部）
+   品牌色的 TS 侧真源：src/theme/index.ts
    ============================================================ */
 
 :root {
@@ -93,6 +95,52 @@
   --text: var(--c-text);
 }
 
+/* ============================================================
+   暗色主题
+   由 index.html 的内联脚本在首屏前写入 <html data-theme>，
+   stores/app.ts 的 toggleTheme() 负责后续切换。
+   品牌色在此提亮（#3d94ea），与 src/theme/index.ts 的 darkBrand 对齐。
+   ============================================================ */
+[data-theme="dark"] {
+  --c-bg: #111114;
+  --c-bg-soft: #16161a;
+  --c-surface: #1a1a1f;
+  --c-surface-2: #212127;
+  --c-surface-3: #27272e;
+  --c-border: #31313a;
+  --c-border-light: rgba(255, 255, 255, .09);
+  --c-text: #f2f2f5;
+  --c-text-secondary: #a7a8b3;
+  --c-text-muted: #74757f;
+
+  --c-primary: #3d94ea;
+  --c-primary-hover: #58a5ef;
+  --c-primary-active: #2b7fd4;
+  --c-primary-bg: rgba(61, 148, 234, .16);
+  --c-primary-ring: rgba(61, 148, 234, .30);
+  --c-primary-soft: rgba(61, 148, 234, .10);
+  --c-gradient: linear-gradient(135deg, #2b7fd4 0%, #4aa0ee 100%);
+  --c-gradient-soft: #16202c;
+
+  --c-success: #4ade80;
+  --c-success-bg: rgba(74, 222, 128, .12);
+  --c-warning: #fbbf24;
+  --c-warning-bg: rgba(251, 191, 36, .12);
+  --c-danger: #f87171;
+  --c-danger-hover: #ef5350;
+  --c-danger-bg: rgba(248, 113, 113, .12);
+  --c-info: #60a5fa;
+  --c-info-bg: rgba(96, 165, 250, .12);
+
+  --shadow-xs: 0 1px 1px rgba(0, 0, 0, .40);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .40);
+  --shadow: 0 1px 3px rgba(0, 0, 0, .45), 0 6px 18px rgba(0, 0, 0, .35);
+  --shadow-md: 0 2px 4px rgba(0, 0, 0, .45), 0 10px 24px rgba(0, 0, 0, .40);
+  --shadow-lg: 0 4px 8px rgba(0, 0, 0, .50), 0 16px 40px rgba(0, 0, 0, .50);
+  --shadow-primary: 0 2px 10px rgba(61, 148, 234, .35);
+  --shadow-primary-lg: 0 6px 20px rgba(61, 148, 234, .38);
+}
+
 /* ==================== Reset & Base ==================== */
 *,
 *::before,
@@ -171,6 +219,16 @@ h4 {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #bdbdc2;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb,
+[data-theme="dark"]::-webkit-scrollbar-thumb {
+  background: #3a3a44;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover,
+[data-theme="dark"]::-webkit-scrollbar-thumb:hover {
+  background: #4a4a56;
 }
 
 ::-webkit-scrollbar-track {

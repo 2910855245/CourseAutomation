@@ -54,9 +54,20 @@ const roleBadge = computed(() => {
         <span v-if="showRoleBadge && roleBadge" class="topbar-role-badge">{{ roleBadge }}</span>
         <a v-if="showLogout" href="#" class="logout-link" @click.prevent="emit('logout')">退出</a>
       </nav>
-      <button class="hamburger" :class="{ open: mobileMenuOpen }" aria-label="菜单" @click="toggleMobileMenu">
-        <span></span><span></span><span></span>
-      </button>
+      <div class="topbar-actions">
+        <button
+          class="theme-toggle"
+          :title="store.isDark ? '切换到浅色' : '切换到暗色'"
+          :aria-label="store.isDark ? '切换到浅色' : '切换到暗色'"
+          @click="store.toggleTheme()"
+        >
+          <svg v-if="store.isDark" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></svg>
+          <svg v-else width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" /></svg>
+        </button>
+        <button class="hamburger" :class="{ open: mobileMenuOpen }" aria-label="菜单" @click="toggleMobileMenu">
+          <span></span><span></span><span></span>
+        </button>
+      </div>
     </div>
     <Transition name="slide-down">
       <div v-if="mobileMenuOpen" class="mobile-nav" @click="closeMobileMenu">
@@ -124,6 +135,19 @@ const roleBadge = computed(() => {
   color: var(--c-primary);
   border: 1px solid var(--c-border-light);
 }
+
+.topbar-actions { display: flex; align-items: center; gap: 2px; }
+
+.theme-toggle {
+  display: flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; padding: 0;
+  background: none; border: none; cursor: pointer;
+  border-radius: 10px;
+  color: var(--c-text-secondary);
+  transition: background-color .2s var(--ease), color .2s var(--ease), transform .2s var(--ease);
+}
+.theme-toggle:hover { background: var(--c-surface-3); color: var(--c-text); }
+.theme-toggle:active { transform: scale(.94); }
 
 .hamburger {
   display: none;

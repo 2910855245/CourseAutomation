@@ -7,9 +7,31 @@
   <meta name="theme-color" content="#f7f7f8" />
   <meta name="description" content="全平台网课自动化 · AI 答题 · 极速刷课" />
   <title>Fuk 文理网课</title>
+  <script>
+    // 首屏防闪：必须在样式表加载前确定主题，否则暗色下会先白闪一帧。
+    // 这里算好的结果同时是 stores/app.ts 的初始值来源，避免两处判定逻辑分叉。
+    (function () {
+      var mode
+      try {
+        mode = localStorage.getItem('theme')
+      } catch (e) { /* 隐私模式等场景下不可用 */ }
+      if (!mode) {
+        mode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+      }
+      document.documentElement.dataset.theme = mode
+      var meta = document.querySelector('meta[name="theme-color"]')
+      if (meta) meta.setAttribute('content', mode === 'dark' ? '#111114' : '#f7f7f8')
+    })()
+  </script>
   <style>
-    /* 首屏加载防闪：与主题背景保持一致 */
-    html { background: #f7f7f8; }
+    /* 与主题背景保持一致，避免加载瞬间闪白 */
+    html {
+      background: #f7f7f8;
+    }
+
+    html[data-theme="dark"] {
+      background: #111114;
+    }
   </style>
 </head>
 

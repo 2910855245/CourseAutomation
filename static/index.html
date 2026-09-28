@@ -7,10 +7,27 @@
   <meta name="theme-color" content="#f7f7f8" />
   <meta name="description" content="全平台网课自动化 · AI 答题 · 极速刷课" />
   <title>Fuk 文理网课</title>
-  <style>html{background:#f7f7f8}</style>
-  <script type="module" crossorigin src="/static/assets/index-COpPvtMs.js"></script>
-  <link rel="modulepreload" crossorigin href="/static/assets/vendor-vue-BE17tMKI.js">
-  <link rel="stylesheet" crossorigin href="/static/assets/index-DCsgGpFb.css">
+  <script>
+    // 首屏防闪：必须在样式表加载前确定主题，否则暗色下会先白闪一帧。
+    // 这里算好的结果同时是 stores/app.ts 的初始值来源，避免两处判定逻辑分叉。
+    (function () {
+      var mode
+      try {
+        mode = localStorage.getItem('theme')
+      } catch (e) { /* 隐私模式等场景下不可用 */ }
+      if (!mode) {
+        mode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+      }
+      document.documentElement.dataset.theme = mode
+      var meta = document.querySelector('meta[name="theme-color"]')
+      if (meta) meta.setAttribute('content', mode === 'dark' ? '#111114' : '#f7f7f8')
+    })()
+  </script>
+  <style>html{background:#f7f7f8}html[data-theme=dark]{background:#111114}</style>
+  <script type="module" crossorigin src="/static/assets/index-YQmIL7iX.js"></script>
+  <link rel="modulepreload" crossorigin href="/static/assets/vendor-naive-Bk6Jpnf5.js">
+  <link rel="modulepreload" crossorigin href="/static/assets/vendor-vue-TWKQkSL7.js">
+  <link rel="stylesheet" crossorigin href="/static/assets/index-DltwYeiN.css">
 </head>
 
 <body>
