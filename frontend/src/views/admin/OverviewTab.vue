@@ -5,6 +5,9 @@ const { getPlatformName } = useAdminStore().state().ui
 const { dash, dashError, fmtMoney, fmtShortDate, loadDashboard, loadingDash, maxBarOrders, maxBarRevenue, maxStatusCount, orderStatusClass, orderStatusLabel, totalPlatformOrders } = useAdminStore().state().dashboard
 const { orders } = useAdminStore().state().orders
 const { platformColors, taskTypeNames } = useAdminStore().state().sysConfig
+
+// v-for 的索引在 dash 为宽松类型时不被推断为 number，这里统一收敛为数字下标
+const platColor = (i: unknown): string => platformColors[Number(i)] || '#6b7280'
 </script>
 
 <template>
@@ -256,7 +259,7 @@ const { platformColors, taskTypeNames } = useAdminStore().state().sysConfig
               <div class="plat-left">
                 <span
                   class="plat-dot"
-                  :style="{ background: platformColors[i] || '#6b7280' }"
+                  :style="{ background: platColor(i) }"
                 />
                 <span class="plat-name">{{ getPlatformName(p.website_id) }}</span>
               </div>
@@ -264,7 +267,7 @@ const { platformColors, taskTypeNames } = useAdminStore().state().sysConfig
                 <div class="plat-bar-bg">
                   <div
                     class="plat-bar-fill"
-                    :style="{ width: (p.count / totalPlatformOrders * 100) + '%', background: platformColors[i] || '#6b7280' }"
+                    :style="{ width: (p.count / totalPlatformOrders * 100) + '%', background: platColor(i) }"
                   />
                 </div>
                 <span class="plat-cnt">{{ p.count }}单</span>

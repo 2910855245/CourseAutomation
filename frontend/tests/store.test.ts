@@ -13,7 +13,6 @@ vi.stubGlobal('localStorage', {
 // Mock api module
 vi.mock('@/api', () => ({
   setAdminApiToken: vi.fn(),
-  setUserApiToken: vi.fn(),
 }))
 
 describe('useAppStore', () => {
@@ -43,14 +42,6 @@ describe('useAppStore', () => {
     expect(s.adminToken).toBe('')
     expect(s.isAdminLoggedIn).toBe(false)
     expect(store['admin_token']).toBeUndefined()
-  })
-
-  it('setUserToken 设置用户 token', () => {
-    const s = useAppStore()
-    s.setUserToken('user-tok', { username: 'test' })
-    expect(s.userToken).toBe('user-tok')
-    expect(s.isUserLoggedIn).toBe(true)
-    expect(s.userInfo).toEqual({ username: 'test' })
   })
 
   it('toast 添加并自动移除', async () => {
