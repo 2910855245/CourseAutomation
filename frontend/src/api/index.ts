@@ -126,12 +126,9 @@ export const api = {
   },
   orders: {
     batch: (d: { username: string; password: string; orders: any[] }) => post<ApiResponse<any>>('/api/orders/batch', d),
-    list: (params?: { status?: string; page?: number; page_size?: number; limit?: number; search?: string; sort_by?: string; sort_dir?: string }) =>
-      get<ApiResponse<{ total: number; items: OrderItem[]; page: number; page_size: number; total_pages: number }>>('/api/orders/' + buildQuery(params)),
     get: (id: string, token?: string) => get<ApiResponse<OrderItem>>('/api/orders/' + id + (token ? '?token=' + encodeURIComponent(token) : '')),
     cancel: (id: string, token?: string) => del<ApiResponse<any>>('/api/orders/' + id + (token ? '?token=' + encodeURIComponent(token) : '')),
     clearHistory: () => post<ApiResponse<any>>('/api/orders/clear-history'),
-    auditLog: (id: string, token?: string) => get<ApiResponse<{ event: string; detail: string; created_at: string }[]>>('/api/orders/audit-log/' + id + (token ? '?token=' + encodeURIComponent(token) : '')),
     activeCourses: (username: string) => get<ApiResponse<string[]>>('/api/orders/active-courses?username=' + encodeURIComponent(username)),
   },
   payment: {

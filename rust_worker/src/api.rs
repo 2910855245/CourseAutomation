@@ -540,7 +540,14 @@ async fn order_get(
             },
         );
         match row {
-            Ok(v) => Ok(Some(v)),
+            // 单条查单同样注入队列进度：订单页是按订单号单查的（没有按用户列单的接口），
+            // 不注入的话客户永远看不到进度百分比，进度条恒为 0。
+            Ok(mut v) => {
+                let mut one = [v];
+                inject_progress(&conn, &mut one);
+                v = one.into_iter().next().unwrap_or(json!({}));
+                Ok(Some(v))
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
