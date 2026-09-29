@@ -24,6 +24,8 @@ mod pay;
 mod pay_routes;
 mod platform_client;
 mod progress;
+mod promo;
+mod promo_routes;
 mod queue;
 mod scan;
 mod schema;
@@ -186,8 +188,12 @@ async fn main() -> anyhow::Result<()> {
         .merge(api::router(state.clone()))
         .merge(school_exam::router())
         .merge(pay_routes::router())
+        .merge(promo_routes::router())
         .nest_service("/static", ServeDir::new("static").append_index_html_on_directories(true))
         .fallback(spa_fallback)
+        // 访客身份（邀请/刷课卡挂在 vid 上）：要在限流内侧，
+        // 这样被限流的请求不会顺手建档发 cookie
+        .layer(middleware::from_fn_with_state(state.clone(), promo_routes::visitor_middleware))
         .layer(middleware::from_fn(cache_headers))
         .layer(CompressionLayer::new())
         .layer(middleware::from_fn(trace_request))

@@ -112,6 +112,13 @@ fn enqueue_paid_orders_sync(db: &Db, order_ids: &[String]) -> usize {
     n
 }
 
+/// 单笔入队（免费/刷课卡订单复用同一条通道，避免两套入队逻辑漂移）
+pub async fn enqueue_paid_order(db: &Db, order_id: &str) {
+    let db = db.clone();
+    let oid = order_id.to_string();
+    let _ = tokio::task::spawn_blocking(move || enqueue_order_sync(&db, &oid)).await;
+}
+
 // ── 请求体 ──────────────────────────────────────────────────
 
 #[derive(Deserialize)]

@@ -60,10 +60,32 @@ Anti-Course Cheating Plugin/
 - 注册所有路由、CORS、速率限制中间件、SPA fallback
 - 启动时：`ensure_schema` 建表/迁移、自动创建管理员、初始化定价配置、启动任务队列、恢复运行中订单
 
+#### 营销推广（免费刷 / 邀请 / 刷课卡）
+- 身份：访客第一次访问时由服务端下发 `vid`（HttpOnly cookie，一年有效）。
+  邀请关系与卡片都挂在 vid 上，**不依赖浏览器 localStorage**；vid 丢失时凭领卡时
+  填写的联系方式在后台 `brush_cards.contact` 人工找回。
+- 免费：全局开关 `free_mode`，或持有效刷课卡（`card_valid_days` 天）。
+  命中后订单 0 元、标记 `payment_channel='free'`、**直接入队**（不走支付与对账），
+  免费单默认走保守档。
+- 邀请：分享链接形如 `/?ref=<邀请码>`；中间件在链接落地时即记录邀请（不依赖前端上报）。
+  `invite_require_order=1`（默认）时，好友下单才算一次有效邀请；每人只计一次、自己邀自己不计。
+- 领卡：每满 `invite_threshold` 位有效邀请可领 1 张，可重复领取（`invite_threshold` /
+  `card_valid_days` / `card_max_orders` 全部可在后台「营销推广」页改）。
+- 页面与接口：客户页 `/#/invite`（邀请页）、首页结算条与公告展示资格；
+  `GET /api/invite/me`、`POST /api/invite/claim`、`GET /api/me/benefit`、
+  `GET /api/admin/promo/stats`。
+- 数据表：`visitors`（访客 + 邀请码）、`invites`（邀请关系与转化）、`brush_cards`（卡）。
+
+#### 公告（支持图片与联系方式）
+`announcement_title` / `announcement_image` / `announcement_contact_type` /
+`announcement_contact_value` 与正文一起存 system_config。图片支持外链或后台本地
+压缩上传（长边 1080、转 jpeg，限 700KB，仅接受 http(s)/data:image）。
+
 #### `schema.rs` - 数据库引导
-- 12 张表 + 18 个索引，全部 `CREATE TABLE IF NOT EXISTS` 幂等
+- 15 张表 + 21 个索引，全部 `CREATE TABLE IF NOT EXISTS` 幂等
 - ypay_account 列级补丁、`ypay_settings` ← `vmq_settings` 数据迁移
 - `ai_usage`：每次 AI 调用的 tokens/费用/成功与否（后台看板的成本与成功率来源）
+- `visitors` / `invites` / `brush_cards`：营销推广（见上）
 - 每次启动经 `Db::open` 执行，可安全重复运行
 
 #### 数据看板（`/api/admin/dashboard`）
@@ -125,6 +147,16 @@ Admin.vue (管理员后台)
   ├── 系统通告
   └── 安全中心（DeepSeek Key、模型与能力开关、改密）
 ```
+
+| 任务类型 | 默认值 | 配置项 |
+|------|------|----------|
+| 三档节奏 | turbo/balanced/gentle（标识不变） | 下单时选，落库到 `orders.speed_mode` |
+| 暴力档 | 全量并行（8），无错峰 | turbo |
+| 适中档 | 中等并发（4）+ 适度错峰 | balanced（默认） |
+| 保守档 | **完全串行**：课程并发 1、扫描并发 1，课程间 30s 错峰 | gentle |
+
+任何档位的并发上限都不得超过 8（平台重叠检测安全线），有单测兜住。
+免费单（全局免费或刷课卡）默认走保守档。
 
 ### 4. 定价系统详解
 

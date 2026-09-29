@@ -18,6 +18,12 @@ const router = createRouter({
       meta: { title: '订单查询' },
     },
     {
+      path: '/invite',
+      name: 'invite',
+      component: () => import('@/views/Invite.vue'),
+      meta: { title: '邀请有礼' },
+    },
+    {
       path: '/admin',
       name: 'admin',
       component: () => import('@/views/Admin.vue'),

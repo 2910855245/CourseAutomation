@@ -118,18 +118,39 @@ export function useHomeState() {
   }
   loadPackagePricing()
 
-  // ── 刷课节奏档位（急速 / 均衡 / 温柔）──
-  // 与后端 speed.rs 的 SpeedMode 一一对应；默认均衡，选择结果本地记住
+  // ── 刷课节奏档位（暴力 / 适中 / 保守）──
+  // 与后端 speed.rs 的 SpeedMode 一一对应（turbo/balanced/gentle 是落库标识）；
+  // 默认适中；保守档是"一节课接一节课"的串行档，免费刷默认走它
   const SPEED_LS_KEY = 'course_speed_mode'
   type SpeedMode = 'turbo' | 'balanced' | 'gentle'
+  const hasSavedSpeed = (['turbo', 'balanced', 'gentle'] as const)
+    .includes(localStorage.getItem(SPEED_LS_KEY) as SpeedMode)
   const speedMode = ref<SpeedMode>(
-    (['turbo', 'balanced', 'gentle'] as const).includes(localStorage.getItem(SPEED_LS_KEY) as SpeedMode)
-      ? (localStorage.getItem(SPEED_LS_KEY) as SpeedMode)
-      : 'balanced'
+    hasSavedSpeed ? (localStorage.getItem(SPEED_LS_KEY) as SpeedMode) : 'balanced'
   )
   function setSpeedMode(mode: SpeedMode) {
     speedMode.value = mode
     try { localStorage.setItem(SPEED_LS_KEY, mode) } catch { }
+  }
+
+  // ── 免费待遇（全局免费开关 / 刷课卡）──
+  // 由后端按访客身份判定，前端只负责展示与跳过支付；判定结果以后端返回为准
+  const benefit = ref<{ free: boolean; reason: string; speed_mode?: string }>({ free: false, reason: '' })
+  const inviteInfo = ref<{ code: string; threshold: number; invited_valid: number; can_claim: number; enabled: boolean }>(
+    { code: '', threshold: 3, invited_valid: 0, can_claim: 0, enabled: true }
+  )
+  const myCard = ref<{ code: string; expires_at: string; days_left: number } | null>(null)
+
+  async function loadBenefit() {
+    try {
+      const r = await api.me.benefit()
+      const d = (r?.data || {}) as any
+      benefit.value = d.benefit || { free: false, reason: '' }
+      if (d.invite) inviteInfo.value = { ...inviteInfo.value, ...d.invite }
+      myCard.value = d.card || null
+      // 免费用户默认走保守档（没手动选过档位时才覆盖）
+      if (benefit.value.free && !hasSavedSpeed) speedMode.value = 'gentle'
+    } catch { /* 营销是附加功能，失败不打扰用户 */ }
   }
 
   const submittedCourseIds = ref(new Set<string>())
@@ -472,7 +493,7 @@ export function useHomeState() {
           }
         }
       }
-      const free = isPrivileged.value
+      const free = isPrivileged.value || benefit.value.free
       const orders = Object.entries(grouped).map(([w, g]) => {
         const wid = parseInt(w)
         let taskType: string
@@ -506,7 +527,11 @@ export function useHomeState() {
       sessionStorage.setItem('last_order_tokens', allPairs); localStorage.setItem('last_order_tokens', allPairs)
       const orderedCourseIds = Object.values(grouped).flatMap(g => g.ids)
       if (!allOrders.length) { store.toast('订单创建成功，但未返回订单信息', 'warning'); paying.value = false; return }
-      if (free) { handleOrderSuccess(orderedCourseIds); paying.value = false; return }
+      // 免费单以后端判定为准（它已经 0 元并直接进队列），前端不该再弹支付
+      if (free || batchRes?.data?.free === true) {
+        if (batchRes?.data?.free === true) { await loadBenefit() }
+        handleOrderSuccess(orderedCourseIds); paying.value = false; return
+      }
       pendingOrderedCourseIds.value = orderedCourseIds
       const methods = [{ key: 'ypay_wxpay', pay_type: 1 }, { key: 'ypay_alipay', pay_type: 2 }]
       const qrCodes: Record<string, string> = {}; const batchIds: Record<string, string> = {}; const batchOutTradeNos: Record<string, string> = {}; const reallyPrices: Record<string, number> = {}
@@ -649,6 +674,10 @@ export function useHomeState() {
   const ANNOUNCEMENT_LS_KEY = 'dismissed_announcement_id'
   const showAnnouncement = ref(false)
   const announcementContent = ref('')
+  const announcementTitle = ref('')
+  const announcementImage = ref('')
+  const announcementContactType = ref('')
+  const announcementContactValue = ref('')
   const announcementId = ref(0)
 
   async function checkAnnouncement() {
@@ -660,9 +689,21 @@ export function useHomeState() {
       if (serverId > dismissedId) {
         announcementId.value = serverId
         announcementContent.value = res.data.content
+        announcementTitle.value = (res.data as any).title || ''
+        announcementImage.value = (res.data as any).image || ''
+        announcementContactType.value = (res.data as any).contact_type || ''
+        announcementContactValue.value = (res.data as any).contact_value || ''
         showAnnouncement.value = true
       }
     } catch { }
+  }
+
+  /** 复制联系方式（公告里挂微信/QQ 时用） */
+  async function copyAnnouncementContact() {
+    const v = announcementContactValue.value
+    if (!v) return
+    try { await navigator.clipboard.writeText(v); store.toast('联系方式已复制', 'success') }
+    catch { store.toast('复制失败，请手动选择', 'warning') }
   }
 
   function dismissAnnouncement() {
@@ -681,6 +722,8 @@ export function useHomeState() {
     savedData, loadingPrices, backendPrices,
     // Speed mode
     speedMode, setSpeedMode,
+    // 营销：免费待遇 / 邀请 / 刷课卡
+    benefit, inviteInfo, myCard, loadBenefit,
     isCourseDone, isCourseDoneOrSubmitted, visiblePlatforms, togglePlatform, toggleCourse, isPlatformAllChecked,
     summary, scenario, currentPrices, studentName, chaoxingInfo, chaoxingServiceType,
     startScan, resetScan, rescan, openReloginDialog, closeReloginDialog, submitRelogin,
@@ -693,7 +736,9 @@ export function useHomeState() {
     // UI
     pct, pctClass,
     // Announcement
-    showAnnouncement, announcementContent, announcementId, checkAnnouncement, dismissAnnouncement,
+    showAnnouncement, announcementContent, announcementTitle, announcementImage,
+    announcementContactType, announcementContactValue, copyAnnouncementContact,
+    announcementId, checkAnnouncement, dismissAnnouncement,
     // LS_KEY for template
     LS_KEY,
   }

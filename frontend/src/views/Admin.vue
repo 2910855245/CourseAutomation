@@ -18,6 +18,7 @@ import QueueTab from '@/views/admin/QueueTab.vue'
 import SecurityTab from '@/views/admin/SecurityTab.vue'
 
 import PricingTab from '@/views/admin/PricingTab.vue'
+import PromoTab from '@/views/admin/PromoTab.vue'
 import YpayTab from '@/views/admin/YpayTab.vue'
 import AnnouncementTab from '@/views/admin/AnnouncementTab.vue'
 
@@ -40,7 +41,7 @@ const { load: loadPlatformNames, getName: getPlatformName, platformNames } = use
 // proxy（网络代理）与 risk（风险监控）两页已删除：它们依赖的后端接口
 // 一个都不存在（/api/admin/proxy*、/api/admin/domain-monitor/* 共 11 个），
 // 页面上的每个按钮点了都是 404 —— 留着只会误导操作者以为有这些能力。
-type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'pricing' | 'ypay' | 'announcement' | 'security'
+type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'pricing' | 'ypay' | 'promo' | 'announcement' | 'security'
 const activeTab = ref<SidebarKey>('overview')
 const expandedSidebarItems = ref<string[]>(['queue'])
 
@@ -314,6 +315,9 @@ useAdminStore().init({
 
           <!-- Pricing Tab -->
           <PricingTab v-if="activeTab === 'pricing'" />
+
+          <!-- Promo Tab（营销推广） -->
+          <PromoTab v-if="activeTab === 'promo'" />
 
           <YpayTab v-if="activeTab === 'ypay'" />
 </div>

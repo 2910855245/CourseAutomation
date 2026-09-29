@@ -118,6 +118,17 @@ export interface DashboardStats {
 
 
 export const api = {
+  // 营销推广：免费待遇 / 邀请 / 刷课卡（身份由服务端 cookie 承载，前端不传标识）
+  me: {
+    benefit: () => get<ApiResponse<any>>('/api/me/benefit'),
+  },
+  invite: {
+    me: () => get<ApiResponse<any>>('/api/invite/me'),
+    claim: (contact: string) => post<ApiResponse<any>>('/api/invite/claim', { contact }),
+  },
+  adminPromo: {
+    stats: () => get<ApiResponse<any>>('/api/admin/promo/stats'),
+  },
   courses: {
     platforms: () => get<ApiResponse<{ id: number; name: string; base_url: string }[]>>('/api/courses/platforms'),
     scan: (d: { username: string; password: string; include_records: boolean }) => post<ApiResponse<{ platforms: PlatformResult[] }>>('/api/courses/scan', d),
@@ -229,8 +240,12 @@ export const api = {
   // 说明：captcha 段已删除 —— 后端从无 /api/captcha/generate，
   // 且 admin_login 明确不校验验证码；登录表单里的验证码字段属假交互。
   announcement: {
-    get: () => get<ApiResponse<{ id: number; content: string; active: boolean }>>('/api/announcement'),
-    set: (content: string) => post<ApiResponse<{ id: number }>>('/api/admin/announcement', { content }),
+    get: () => get<ApiResponse<{
+      id: number; content: string; active: boolean
+      title?: string; image?: string; contact_type?: string; contact_value?: string
+    }>>('/api/announcement'),
+    set: (content: string, extra?: { title?: string; image?: string; contact_type?: string; contact_value?: string }) =>
+      post<ApiResponse<{ id: number }>>('/api/admin/announcement', { content, ...(extra || {}) }),
     disable: () => post<ApiResponse<any>>('/api/admin/announcement/disable'),
   },
 }

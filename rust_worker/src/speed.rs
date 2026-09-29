@@ -1,14 +1,17 @@
-//! 刷课节奏档位 —— 用户在下单时选择的三档速度（急速 / 均衡 / 温柔）
+//! 刷课节奏档位 —— 用户在下单时选择的三档速度（暴力 / 适中 / 保守）
 //!
 //! 设计约束（不可突破的红线）：
 //! 平台通过 `beginTime`/`finalTime` 的重叠数量识别并行刷课，历史记录显示阈值约 10 个
 //! 并发（见 CHANGELOG 2026-05-24）。因此**任何档位**的课程并发上限都不得超过 8，
-//! 急速档只是取到这条上界，而不是无限制并发。
+//! 暴力档只是取到这条上界，而不是无限制并发。
 //!
 //! 三档定位：
-//!   - 急速：课程全量并行（8）、课程间零等待、不做人工错峰 —— 最快，风控风险略高
-//!   - 均衡：默认档。中等并发（4）+ 适度错峰，速度与安全的平衡点
-//!   - 温柔：单课程串行、课程之间长间隔错峰、每次上报额外随机停顿 —— 最慢，最像真人
+//!   - 暴力：课程全量并行（8）、课程间零等待 —— 最快，风控风险最高
+//!   - 适中：默认档。中等并发（4）+ 适度错峰，速度与安全的平衡点
+//!   - 保守：**完全串行**：一节课一节课来，课程并发与扫描并发都是 1，
+//!     课程之间长间隔错峰、每次上报额外随机停顿 —— 最慢，最像真人
+//!
+//! 落库标识沿用 turbo/balanced/gentle（历史订单与新前端不用迁移数据）。
 
 use std::time::Duration;
 
@@ -21,11 +24,11 @@ pub const MAX_COURSE_CONCURRENCY: usize = 8;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SpeedMode {
-    /// 急速模式：全量并行，刷完立即衔接下一节
+    /// 暴力档：全量并行，刷完立即衔接下一节
     Turbo,
-    /// 均衡模式（默认）
+    /// 适中档（默认）
     Balanced,
-    /// 温柔模式：时间拉长、尽量错开
+    /// 保守档：严格串行，一节课接一节课
     Gentle,
 }
 
@@ -57,10 +60,16 @@ impl SpeedMode {
     /// 展示名（前端也可自行本地化，这里供接口/日志复用）
     pub fn label(self) -> &'static str {
         match self {
-            SpeedMode::Turbo => "急速模式",
-            SpeedMode::Balanced => "均衡模式",
-            SpeedMode::Gentle => "温柔模式",
+            SpeedMode::Turbo => "暴力档",
+            SpeedMode::Balanced => "适中档",
+            SpeedMode::Gentle => "保守档",
         }
+    }
+
+    /// 是否完全串行（一节课接一节课，任何环节都不并行）
+    pub fn is_serial(self) -> bool {
+        let p = self.profile();
+        p.course_concurrency == 1 && p.scan_concurrency == 1
     }
 
     pub fn profile(self) -> SpeedProfile {
@@ -83,11 +92,12 @@ impl SpeedMode {
                 report_extra_delay_ms: 0,
                 report_extra_jitter_ms: 0,
             },
+            // 保守档：并发全为 1（真串行）+ 长间隔 + 每次上报额外停顿
             SpeedMode::Gentle => SpeedProfile {
                 mode: self,
                 course_concurrency: 1,
-                course_stagger_ms: 20_000,
-                scan_concurrency: 2,
+                course_stagger_ms: 30_000,
+                scan_concurrency: 1,
                 scan_jitter_ms: 3_000,
                 report_extra_delay_ms: 1_500,
                 report_extra_jitter_ms: 5_000,
@@ -180,13 +190,31 @@ mod tests {
         let t = SpeedMode::Turbo.profile();
         let b = SpeedMode::Balanced.profile();
         let g = SpeedMode::Gentle.profile();
-        // 急速 快于 均衡 快于 温柔
+        // 暴力 快于 适中 快于 保守
         assert!(t.course_concurrency >= b.course_concurrency);
         assert!(b.course_concurrency >= g.course_concurrency);
         assert!(t.course_stagger_ms <= b.course_stagger_ms);
         assert!(b.course_stagger_ms <= g.course_stagger_ms);
         assert!(t.scan_concurrency >= g.scan_concurrency);
         assert!(t.report_extra_delay_ms <= g.report_extra_delay_ms);
+    }
+
+    #[test]
+    fn test_conservative_mode_is_fully_serial() {
+        // 保守档的卖点就是"一节课一节课来"：课程与扫描都必须串行
+        let g = SpeedMode::Gentle.profile();
+        assert_eq!(g.course_concurrency, 1, "保守档课程并发必须为 1");
+        assert_eq!(g.scan_concurrency, 1, "保守档扫描并发必须为 1");
+        assert!(SpeedMode::Gentle.is_serial());
+        assert!(!SpeedMode::Balanced.is_serial());
+        assert!(!SpeedMode::Turbo.is_serial());
+    }
+
+    #[test]
+    fn test_labels_are_new_wording() {
+        assert_eq!(SpeedMode::Gentle.label(), "保守档");
+        assert_eq!(SpeedMode::Balanced.label(), "适中档");
+        assert_eq!(SpeedMode::Turbo.label(), "暴力档");
     }
 
     #[test]

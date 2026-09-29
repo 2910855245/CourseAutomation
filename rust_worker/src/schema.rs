@@ -218,6 +218,43 @@ CREATE TABLE IF NOT EXISTS ai_usage (
     cost_yuan FLOAT DEFAULT 0.0,
     ok INTEGER DEFAULT 1
 );
+
+-- 访客身份（邀请与刷课卡的载体）。vid 由服务端下发到 HttpOnly cookie，
+-- 不依赖浏览器 localStorage —— 清缓存会丢身份，所以领卡时必须留联系方式。
+CREATE TABLE IF NOT EXISTS visitors (
+    vid VARCHAR(64) PRIMARY KEY,
+    invite_code VARCHAR(32) UNIQUE NOT NULL,
+    ref_code VARCHAR(32) DEFAULT '',
+    contact VARCHAR(255) DEFAULT '',
+    ua VARCHAR(255) DEFAULT '',
+    created_at VARCHAR(255) NOT NULL,
+    last_seen VARCHAR(255)
+);
+
+-- 邀请关系（一个被邀请人只记一次；converted=1 表示已转化为有效邀请）
+CREATE TABLE IF NOT EXISTS invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    inviter_vid VARCHAR(64) NOT NULL,
+    invitee_vid VARCHAR(64) NOT NULL,
+    ref_code VARCHAR(32) NOT NULL,
+    converted INTEGER DEFAULT 0,
+    converted_order_id VARCHAR(64) DEFAULT '',
+    created_at VARCHAR(255) NOT NULL,
+    UNIQUE(invitee_vid)
+);
+
+-- 刷课卡：有效期内免单（可配置有效天数；一张卡可代表不限次或限次）
+CREATE TABLE IF NOT EXISTS brush_cards (
+    card_id VARCHAR(64) PRIMARY KEY,
+    code VARCHAR(32) UNIQUE NOT NULL,
+    owner_vid VARCHAR(64) NOT NULL,
+    contact VARCHAR(255) DEFAULT '',
+    source VARCHAR(32) DEFAULT 'invite',
+    granted_at VARCHAR(255) NOT NULL,
+    expires_at VARCHAR(255) NOT NULL,
+    used_orders INTEGER DEFAULT 0,
+    revoked INTEGER DEFAULT 0
+);
 "#;
 
 /// 索引（统一在建表+补列之后执行，避免老库缺列导致建索引失败）
@@ -240,6 +277,9 @@ CREATE INDEX IF NOT EXISTS ix_queue_jobs_chaoxing_username ON queue_jobs_chaoxin
 CREATE INDEX IF NOT EXISTS ix_queue_jobs_chaoxing_status ON queue_jobs_chaoxing (status);
 CREATE INDEX IF NOT EXISTS ix_queue_jobs_chaoxing_deleted_at ON queue_jobs_chaoxing (deleted_at);
 CREATE INDEX IF NOT EXISTS ix_ai_usage_created_at ON ai_usage (created_at);
+CREATE INDEX IF NOT EXISTS ix_invites_inviter ON invites (inviter_vid);
+CREATE INDEX IF NOT EXISTS ix_invites_ref ON invites (ref_code);
+CREATE INDEX IF NOT EXISTS ix_brush_cards_owner ON brush_cards (owner_vid);
 "#;
 
 /// ypay_account 老库可能缺失的列（对应 api/database.py 的 _add_columns_if_missing）

@@ -250,7 +250,12 @@ async fn create_order(db: &Db, username: &str, password: &str, item: &Value,
 }
 
 /// 批量下单（对齐 create_batch_orders 主流程）
-pub async fn create_batch_orders(db: &Db, body: &Value) -> Result<Value> {
+///
+/// `vid` / `benefit`：营销推广的免费待遇。命中时所有订单 0 元、标记为已支付并
+/// **直接进队列**（免费用户不该走支付流程，也不该等对账），同时把邀请关系标记为
+/// 已转化、消耗一次卡额度。
+pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
+                                 benefit: crate::promo::Benefit) -> Result<Value> {
     let username = body["username"].as_str().unwrap_or("").to_string();
     let password = body["password"].as_str().unwrap_or("").to_string();
     let mut orders: Vec<Value> = body["orders"].as_array().cloned().unwrap_or_default();
@@ -285,11 +290,55 @@ pub async fn create_batch_orders(db: &Db, body: &Value) -> Result<Value> {
         if course_ids.is_empty() && item["video_count"].as_i64().unwrap_or(0) == 0 {
             continue;
         }
-        let order = create_order(db, &username, &password, item, "").await?;
+        // 免费订单：价格清零，免费单默认走保守档（除非用户自己选过档位）
+        let mut item = item.clone();
+        if benefit.is_free() {
+            if item["speed_mode"].as_str().unwrap_or("").is_empty() {
+                item["speed_mode"] = json!(benefit.speed_mode);
+            }
+            item["price"] = json!(0.0);
+        }
+        let order = create_order(db, &username, &password, &item, "").await?;
         let mut masked = order.clone();
         masked["password"] = json!("***");
         masked["view_token"] = json!(view_token(order["order_id"].as_str().unwrap_or("")));
+        masked["free"] = json!(benefit.is_free());
         created.push(masked);
+    }
+
+    // 免费单：标记已支付 + 直接入队（复用支付成功那条唯一入队通道）
+    if benefit.is_free() {
+        for order in &created {
+            let oid = order["order_id"].as_str().unwrap_or("").to_string();
+            if oid.is_empty() {
+                continue;
+            }
+            let oid2 = oid.clone();
+            let reason = benefit.reason.clone();
+            let pool = db.clone_pool();
+            let _ = tokio::task::spawn_blocking(move || -> Result<()> {
+                let conn = pool.get()?;
+                let now = crate::queue::now_str();
+                // paid_processed 的 'free' 是免费单的标记；payment_channel 便于后台统计
+                conn.execute(
+                    "UPDATE orders SET status='paid', paid=1, payment_channel='free',
+                            payment_time=?1, paid_processed=?2, updated_at=?1
+                     WHERE order_id=?3",
+                    rusqlite::params![now, format!("free:{reason}"), oid2],
+                )?;
+                Ok(())
+            })
+            .await;
+            crate::pay_routes::enqueue_paid_order(db, &oid).await;
+        }
+        if !vid.is_empty() {
+            if let Some(first) = created.first() {
+                let oid = first["order_id"].as_str().unwrap_or("");
+                crate::promo::mark_converted(db, vid, oid).await;
+            }
+        }
+        crate::promo::consume_card(db, &benefit.card_id).await;
+        tracing::info!(orders = created.len(), reason = %benefit.reason, "免费订单已创建并直接入队");
     }
 
     Ok(json!({
@@ -297,8 +346,10 @@ pub async fn create_batch_orders(db: &Db, body: &Value) -> Result<Value> {
         "message": format!("成功创建 {} 个订单", created.len()),
         "data": {
             "orders": created,
-            "total_price": total_price,
-            "paid": false,
+            "total_price": if benefit.is_free() { 0.0 } else { total_price },
+            "paid": benefit.is_free(),
+            "free": benefit.is_free(),
+            "free_reason": benefit.reason,
         },
     }))
 }

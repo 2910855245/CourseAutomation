@@ -40,6 +40,7 @@ const roleBadge = computed(() => (isAdmin.value ? '管理员' : ''))
       <nav class="desktop-nav">
         <router-link to="/" exact-active-class="nav-active">首页</router-link>
         <router-link to="/orders" active-class="nav-active">我的订单</router-link>
+        <router-link to="/invite" active-class="nav-active">邀请有礼</router-link>
         <router-link v-if="isAdmin" to="/admin" active-class="nav-active">管理后台</router-link>
         <a v-if="showLogout" href="#" class="logout-link" @click.prevent="emit('logout')">退出</a>
       </nav>
@@ -65,6 +66,7 @@ const roleBadge = computed(() => (isAdmin.value ? '管理员' : ''))
       <div v-if="mobileMenuOpen" class="mobile-nav">
         <router-link to="/" class="mn-item" @click="closeMobileMenu()">首页</router-link>
         <router-link to="/orders" class="mn-item" @click="closeMobileMenu()">我的订单</router-link>
+        <router-link to="/invite" class="mn-item" @click="closeMobileMenu()">邀请有礼</router-link>
         <router-link v-if="isAdmin" to="/admin" class="mn-item" @click="closeMobileMenu()">管理后台</router-link>
         <a v-if="showLogout" href="#" class="mn-item logout-link" @click.prevent="emit('logout'); closeMobileMenu()">退出</a>
         <span v-if="showRoleBadge && roleBadge" class="mn-badge">{{ roleBadge }}</span>

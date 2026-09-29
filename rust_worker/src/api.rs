@@ -135,8 +135,15 @@ async fn vmq_push(
 }
 
 /// 批量下单（写路径，与 Python 双跑对照验收）
-async fn batch_orders(State(state): State<AppState>, Json(body): Json<Value>) -> Json<Value> {
-    match crate::order::create_batch_orders(&state.db, &body).await {
+async fn batch_orders(
+    State(state): State<AppState>,
+    ext: Option<Extension<crate::promo_routes::VisitorId>>,
+    Json(body): Json<Value>,
+) -> Json<Value> {
+    let vid = ext.map(|e| e.0.as_str().to_string()).unwrap_or_default();
+    // 免费待遇（全局免费开关或本人持有效刷课卡）：命中时订单 0 元并直接进队列
+    let benefit = crate::promo::check_benefit(&state.db, &vid).await;
+    match crate::order::create_batch_orders(&state.db, &body, &vid, benefit).await {
         Ok(v) => Json(v),
         Err(e) => Json(json!({"success": false, "message": e.to_string()})),
     }
@@ -182,6 +189,13 @@ async fn system_status(State(state): State<AppState>) -> Json<Value> {
 const ANN_CONTENT: &str = "announcement_content";
 const ANN_ID: &str = "announcement_id";
 const ANN_ACTIVE: &str = "announcement_active";
+/// 公告附加项：标题 / 图片（URL 或 data URL）/ 联系方式（类型 + 值）
+const ANN_TITLE: &str = "announcement_title";
+const ANN_IMAGE: &str = "announcement_image";
+const ANN_CONTACT_TYPE: &str = "announcement_contact_type";
+const ANN_CONTACT_VALUE: &str = "announcement_contact_value";
+/// 图片体积上限（data URL 直接存库，超过就会把库撑大）
+const ANN_IMAGE_MAX: usize = 700 * 1024;
 
 async fn announcement_get(State(state): State<AppState>) -> Json<Value> {
     let content = crate::queue::config_get(&state.db, ANN_CONTENT).await.unwrap_or_default();
@@ -189,10 +203,23 @@ async fn announcement_get(State(state): State<AppState>) -> Json<Value> {
         .and_then(|v| v.parse().ok()).unwrap_or(0);
     let active = crate::queue::config_get(&state.db, ANN_ACTIVE).await
         .map(|v| v == "1").unwrap_or(false) && !content.trim().is_empty();
+    let title = crate::queue::config_get(&state.db, ANN_TITLE).await.unwrap_or_default();
+    let image = crate::queue::config_get(&state.db, ANN_IMAGE).await.unwrap_or_default();
+    let contact_type = crate::queue::config_get(&state.db, ANN_CONTACT_TYPE).await.unwrap_or_default();
+    let contact_value = crate::queue::config_get(&state.db, ANN_CONTACT_VALUE).await.unwrap_or_default();
+    let visible = |v: String| if active { v } else { String::new() };
     Json(json!({
         "success": true,
         "message": "ok",
-        "data": { "id": id, "content": if active { content } else { String::new() }, "active": active },
+        "data": {
+            "id": id,
+            "content": visible(content),
+            "active": active,
+            "title": visible(title),
+            "image": visible(image),
+            "contact_type": visible(contact_type),
+            "contact_value": visible(contact_value),
+        },
     }))
 }
 
@@ -201,13 +228,37 @@ async fn announcement_publish(State(state): State<AppState>, Json(body): Json<Va
     if content.is_empty() {
         return Json(json!({"success": false, "message": "公告内容不能为空"}));
     }
+    let title = body["title"].as_str().unwrap_or("").trim().chars().take(60).collect::<String>();
+    let image = body["image"].as_str().unwrap_or("").trim().to_string();
+    if image.len() > ANN_IMAGE_MAX {
+        return Json(json!({"success": false, "message": "图片过大（请压缩到 700KB 以内）"}));
+    }
+    // 只接受 http(s) 图片或 data:image，避免把 javascript:/file: 之类写进前端 <img>
+    if !image.is_empty()
+        && !(image.starts_with("http://") || image.starts_with("https://")
+             || image.starts_with("data:image/"))
+    {
+        return Json(json!({"success": false, "message": "图片地址不合法（需 http(s) 或上传图片）"}));
+    }
+    let contact_type = body["contact_type"].as_str().unwrap_or("").trim()
+        .chars().take(16).collect::<String>();
+    let contact_value = body["contact_value"].as_str().unwrap_or("").trim()
+        .chars().take(120).collect::<String>();
     // 严格递增的 id（同一秒内连续发布也不会撞号）
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     let prev: i64 = crate::queue::config_get(&state.db, ANN_ID).await
         .and_then(|v| v.parse().ok()).unwrap_or(0);
     let id = now.max(prev + 1);
-    for (k, v) in [(ANN_CONTENT, content.as_str()), (ANN_ACTIVE, "1")] {
+    let fields = [
+        (ANN_CONTENT, content.as_str()),
+        (ANN_TITLE, title.as_str()),
+        (ANN_IMAGE, image.as_str()),
+        (ANN_CONTACT_TYPE, contact_type.as_str()),
+        (ANN_CONTACT_VALUE, contact_value.as_str()),
+        (ANN_ACTIVE, "1"),
+    ];
+    for (k, v) in fields {
         if let Err(e) = crate::queue::config_set(&state.db, k, v).await {
             return Json(json!({"success": false, "message": e.to_string()}));
         }

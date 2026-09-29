@@ -26,19 +26,22 @@ const {
   payBatchId, payBatchOutTradeNo, showPaySuccess, paySuccessAmount, payTimedOut,
   handleOrderSuccess, goToOrders, submitAndPay, onPaySuccessDone, closePay, savePayQr, switchPayMethod,
   pct, pctClass, LS_KEY,
-  showAnnouncement, announcementContent, checkAnnouncement, dismissAnnouncement,
+  showAnnouncement, announcementContent, announcementTitle, announcementImage,
+  announcementContactType, announcementContactValue, copyAnnouncementContact,
+  checkAnnouncement, dismissAnnouncement,
+  benefit, inviteInfo, myCard, loadBenefit,
 } = useHomeState()
 
 // 刷课节奏三档（与后端 speed.rs 的 SpeedMode 对应）
 const speedOptions = [
-  { key: 'turbo' as const, name: '急速', sub: '全量并行 · 最快' },
-  { key: 'balanced' as const, name: '均衡', sub: '推荐 · 兼顾安全' },
-  { key: 'gentle' as const, name: '温柔', sub: '长间隔 · 最像真人' },
+  { key: 'turbo' as const, name: '暴力', sub: '全量并行 · 最快' },
+  { key: 'balanced' as const, name: '适中', sub: '推荐 · 兼顾安全' },
+  { key: 'gentle' as const, name: '保守', sub: '一节课一节课 · 最稳' },
 ]
 const speedModeDesc = computed(() => ({
-  turbo: '多门课程同时开刷，一节刷完立刻推进下一节，整体完成最快。',
+  turbo: '多门课程同时开刷，整体完成最快，风控风险最高。',
   balanced: '中等并发 + 适度错峰，完成时间与账号安全的平衡点。',
-  gentle: '课程依次进行，课程之间自动拉长间隔，节奏最接近真人。',
+  gentle: '完全串行：一节课刷完再刷下一节，课程间自动拉长间隔，最接近真人。',
 }[speedMode.value]))
 
 // 场景说明（原来铺三张静态卡片，改成一条紧凑提示，减少视觉噪声）
@@ -89,6 +92,7 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', handleVisibilityChange)
   loadPlatformNames()
   checkAnnouncement()
+  loadBenefit()
   try {
     const res = await api.pricing.get()
     if (res.data) {
@@ -362,7 +366,10 @@ onMounted(async () => {
               </button>
             </div>
             <p v-if="speedMode === 'turbo'" class="sp-warn">
-              急速模式并发最高（已控制在平台检测安全线内），建议仅在需要当天见效时使用。
+              暴力档并发最高（已控制在平台检测安全线内），建议仅在需要当天见效时使用。
+            </p>
+            <p v-else-if="benefit.free && speedMode === 'gentle'" class="sp-free">
+              免费单默认使用保守档：一节课接一节课，不影响刷课，最不容易被平台察觉。
             </p>
           </div>
 
@@ -378,7 +385,7 @@ onMounted(async () => {
                   <span class="co-stat"><b class="mono">{{ summary.exams }}</b> 场考试</span>
                 </template>
               </div>
-              <div v-if="!isPrivileged && summary.breakdown.length > 0" class="co-breakdown">
+              <div v-if="!(isPrivileged || benefit.free) && summary.breakdown.length > 0" class="co-breakdown">
                 <span v-for="(b, i) in summary.breakdown.slice(0, 3)" :key="i" class="co-bd-item">
                   {{ b.name.length > 10 ? b.name.slice(0, 10) + '…' : b.name }} <span class="mono">{{ b.videos }}</span>节 <span class="mono">¥{{ b.price.toFixed(2) }}</span>
                 </span>
@@ -387,7 +394,14 @@ onMounted(async () => {
             </div>
 
             <div class="co-action">
-              <div v-if="!isPrivileged" class="co-total">
+              <div v-if="isPrivileged || benefit.free" class="co-total">
+                <span class="co-total-label">合计</span>
+                <span class="co-total-val free">
+                  <span class="free-tag">{{ benefit.reason === 'card' ? '刷课卡免单' : '限时免费' }}</span>
+                  <span class="mono">¥0.00</span>
+                </span>
+              </div>
+              <div v-else class="co-total">
                 <span class="co-total-label">合计</span>
                 <span class="co-total-val mono">¥{{ summary.total.toFixed(2) }}</span>
               </div>
@@ -396,10 +410,29 @@ onMounted(async () => {
                 :disabled="paying || summary.courses === 0"
                 @click="submitAndPay"
               >
-                <span v-if="!paying">{{ isPrivileged ? '加入队列' : '提交并支付' }}</span>
+                <span v-if="!paying">{{ (isPrivileged || benefit.free) ? '免费提交' : '提交并支付' }}</span>
                 <span v-else class="btn-loading"><span class="spinner"></span>提交中</span>
               </button>
             </div>
+          </div>
+
+          <!-- 营销位：免费资格与邀请进度 -->
+          <div v-if="benefit.free || inviteInfo.can_claim > 0 || myCard" class="promo-strip">
+            <template v-if="myCard">
+              <span class="ps-tag ok">刷课卡生效中</span>
+              <span class="ps-text">有效期还剩 <b class="mono">{{ myCard.days_left }}</b> 天，期间下单不花钱</span>
+            </template>
+            <template v-else-if="benefit.reason === 'global'">
+              <span class="ps-tag ok">限时免费</span>
+              <span class="ps-text">活动期间全场 0 元，直接提交即可</span>
+            </template>
+            <template v-else>
+              <span class="ps-tag warn">可领卡</span>
+              <span class="ps-text">你有 <b class="mono">{{ inviteInfo.can_claim }}</b> 张刷课卡待领取</span>
+            </template>
+            <router-link to="/invite" class="ps-link">
+              {{ myCard || benefit.reason === 'global' ? '邀请好友得更多' : '立即领取' }} →
+            </router-link>
           </div>
         </section>
       </template>
@@ -467,8 +500,20 @@ onMounted(async () => {
       <div class="announcement-box">
         <div class="announcement-header">
           <span class="eyebrow">系统公告</span>
+          <h3 v-if="announcementTitle" class="announcement-title">{{ announcementTitle }}</h3>
         </div>
+        <img
+          v-if="announcementImage"
+          :src="announcementImage"
+          alt="公告图片"
+          class="announcement-image"
+        >
         <div class="announcement-body">{{ announcementContent }}</div>
+        <div v-if="announcementContactValue" class="announcement-contact">
+          <span class="ac-label">{{ announcementContactType || '联系方式' }}</span>
+          <span class="ac-value mono">{{ announcementContactValue }}</span>
+          <button class="btn btn-ghost btn-xs" @click="copyAnnouncementContact">复制</button>
+        </div>
         <div class="announcement-foot">
           <button class="btn btn-primary btn-block" @click="dismissAnnouncement">我知道了</button>
         </div>
@@ -1210,6 +1255,87 @@ onMounted(async () => {
   overflow-y: auto;
 }
 .announcement-foot { padding: 0 var(--space-6) var(--space-6); }
+
+.announcement-title {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  letter-spacing: var(--tracking-title);
+  margin-top: var(--space-2);
+  color: var(--c-text);
+}
+.announcement-image {
+  display: block;
+  width: calc(100% - var(--space-6) * 2);
+  margin: 0 var(--space-6) var(--space-4);
+  border-radius: 12px;
+  border: 1px solid var(--c-border);
+}
+.announcement-contact {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 var(--space-6) var(--space-4);
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--c-bg);
+  font-size: 12.5px;
+}
+.ac-label { color: var(--c-text-muted); flex-shrink: 0; }
+.ac-value { color: var(--c-text); font-weight: 600; flex: 1; word-break: break-all; }
+
+/* ==================== 营销提示位 ==================== */
+.promo-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: var(--c-primary-bg);
+  font-size: 12.5px;
+}
+.ps-tag {
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 11px;
+  flex-shrink: 0;
+  background: var(--c-surface);
+}
+.ps-tag.ok { color: var(--c-success); }
+.ps-tag.warn { color: var(--c-warning); }
+.ps-text { color: var(--c-text-secondary); flex: 1; min-width: 140px; }
+.ps-text b { color: var(--c-text); }
+.ps-link {
+  color: var(--c-primary);
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.ps-link:hover { text-decoration: underline; }
+
+.sp-free {
+  font-size: 12px;
+  color: var(--c-success);
+  line-height: 1.7;
+  margin-top: 10px;
+}
+
+.co-total-val.free {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--c-success);
+}
+.free-tag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--c-success-bg);
+  color: var(--c-success);
+  font-size: 11px;
+  font-weight: 700;
+}
 
 /* ==================== 重新登录 ==================== */
 .relogin-head { padding: var(--space-6) var(--space-6) 0; }
