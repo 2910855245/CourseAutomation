@@ -167,8 +167,10 @@ const payingOrderIds = ref<string[]>([])
 
 async function repay(orderIds2: string[]) {
   payingOrderIds.value = orderIds2
-  await createPay('ypay_wxpay')
+  // 先开弹窗再请求：创建失败时由 createPay 关掉弹窗并给出提示，
+  // 否则会停在"生成中…"且没有轮询的空壳弹窗里
   showPayModal.value = true
+  await createPay('ypay_wxpay')
 }
 
 async function createPay(method: 'ypay_wxpay' | 'ypay_alipay') {
@@ -423,11 +425,9 @@ const fmtMoney = (n: number) => `¥${(n || 0).toFixed(2)}`
             <p class="pm-hint">保存二维码后使用{{ payMethod === 'ypay_wxpay' ? '微信' : '支付宝' }}扫一扫支付</p>
           </template>
         </div>
-        <div class="modal-footer col">
-          <template v-if="!payTimedOut">
-            <button v-if="payQrCode" class="btn btn-primary btn-block" @click="savePayQr">保存二维码</button>
-            <button class="btn btn-ghost btn-block" @click="closePayModal">取消支付</button>
-          </template>
+        <div v-if="!payTimedOut" class="modal-footer col">
+          <button v-if="payQrCode" class="btn btn-primary btn-block" @click="savePayQr">保存二维码</button>
+          <button class="btn btn-ghost btn-block" @click="closePayModal">取消支付</button>
         </div>
       </div>
     </div>
