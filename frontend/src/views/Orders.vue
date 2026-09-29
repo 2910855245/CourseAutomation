@@ -359,14 +359,13 @@ function closeDetail() { detailOrder.value = null }
     <AppTopbar :show-role-badge="true" />
 
     <div class="content-wrapper">
-      <!-- 页头：眉标 + 标题 + 实时状态 -->
+      <!-- 页头：只留一个标题 + 真实连接状态（不再叠「订单中心/我的订单」两层同名标题） -->
       <header class="page-head anim-rise">
-        <span class="eyebrow">订单中心</span>
         <div class="ph-row">
           <h1 class="ph-title">我的订单</h1>
-          <span class="ph-live">
+          <span class="ph-live" :class="{ off: !realtime.connected }">
             <span class="live-dot"></span>
-            订单状态实时更新
+            {{ realtime.connected ? '实时同步' : '连接已断开' }}
           </span>
         </div>
       </header>
@@ -708,6 +707,8 @@ function closeDetail() { detailOrder.value = null }
   font-size: var(--fs-xs);
   color: var(--c-text-muted);
 }
+/* 断线时给出明确告警，而不是继续显示一句「实时更新」骗自己 */
+.ph-live.off { color: var(--c-warning); }
 
 .live-dot {
   width: 7px;
@@ -716,6 +717,7 @@ function closeDetail() { detailOrder.value = null }
   background: var(--c-success);
   animation: pulse-dot 2.2s var(--ease) infinite;
 }
+.ph-live.off .live-dot { background: var(--c-warning); animation: none; }
 
 /* ==================== 概览 ==================== */
 .stat-row {
