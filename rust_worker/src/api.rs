@@ -709,24 +709,30 @@ async fn queue_stats(State(state): State<AppState>) -> Json<Value> {
     let db = state.db.clone_pool();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
         let conn = db.get()?;
+        // 统计口径与任务列表保持一致：都被软删的任务不该继续出现在 KPI 里
+        // （此前列表过滤了 deleted_at、KPI 没过滤，两个数字对不上）
         let table_stats = |table: &str| -> rusqlite::Result<Map<String, Value>> {
             let mut m = Map::new();
             for st in ["pending", "running", "waiting", "completed", "failed"] {
                 let c: i64 = conn.query_row(
-                    &format!("SELECT COUNT(*) FROM {table} WHERE status=?1"),
+                    &format!("SELECT COUNT(*) FROM {table} WHERE status=?1 AND deleted_at IS NULL"),
                     rusqlite::params![st], |r| r.get(0))?;
                 m.insert(st.to_string(), json!(c));
             }
             let total: i64 = conn.query_row(
-                &format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))?;
+                &format!("SELECT COUNT(*) FROM {table} WHERE deleted_at IS NULL"),
+                [], |r| r.get(0))?;
             m.insert("total".into(), json!(total));
             Ok(m)
         };
+        let active = crate::queue::active_workers() as i64;
         let mut school = table_stats("queue_jobs_school")?;
         let mut chaoxing = table_stats("queue_jobs_chaoxing")?;
-        school.insert("active_workers".into(), json!(0));
+        // 学校队列是唯一被调度器消费的队列（学习通链路未落地），
+        // 所以进程级在跑数全部归到 school；chaoxing 恒为 0 是事实而非占位。
+        school.insert("active_workers".into(), json!(active));
         school.insert("max_workers".into(), json!(max_workers));
-        school.insert("active_study_workers".into(), json!(0));
+        school.insert("active_study_workers".into(), json!(active));
         school.insert("max_study_workers".into(), json!(max_workers));
         school.insert("paused".into(), json!(paused_school));
         school.insert("queue_name".into(), json!("school"));
@@ -744,7 +750,10 @@ async fn queue_stats(State(state): State<AppState>) -> Json<Value> {
         Ok(json!({
             "pending": sum("pending"), "running": sum("running"), "waiting": sum("waiting"),
             "completed": sum("completed"), "failed": sum("failed"), "total": sum("total"),
-            "active_workers": 0, "max_workers": max_workers, "paused": paused_all,
+            "active_workers": active, "max_workers": max_workers, "paused": paused_all,
+            // 调度器是否真的在消费（此前监控只显示"暂停/运行中"，开关没开会假装运行中）
+            "scheduler_enabled": crate::queue::dispatcher_enabled_public(),
+            "global_study_sessions": crate::study::global_session_limit_public(),
             "school": school, "chaoxing": chaoxing,
         }))
     })
@@ -1583,10 +1592,12 @@ fn server_specs() -> &'static Value {
     SPECS.get_or_init(|| {
         let cpu = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
         let mem_gb = detect_memory_gb();
-        // 推荐并发：CPU 核数 - 1（留一颗给系统），内存每 1GB 允许 2 个任务，取小值，夹在 1..=16
-        let by_cpu = cpu.saturating_sub(1).max(1);
+        // 推荐并发：任务全程是 I/O 等待（视频墙钟 + 平台请求），不占 CPU 时间片，
+        // 所以不按核数 1:1 推，而是按核数的 4 倍（每个任务实际只在"醒来上报"的
+        // 瞬间用一点 CPU）。内存仍按每 GB 允许 2 个任务兜底，取小值，夹在 1..=64。
+        let by_cpu = cpu.max(1) * 4;
         let by_mem = if mem_gb > 0.0 { (mem_gb * 2.0) as usize } else { by_cpu };
-        let recommended = by_cpu.min(by_mem).clamp(1, 16);
+        let recommended = by_cpu.min(by_mem).clamp(1, MAX_WORKERS_CEILING);
         json!({
             "cpu_count": cpu,
             "total_mem_gb": (mem_gb * 10.0).round() / 10.0,
@@ -1595,9 +1606,15 @@ fn server_specs() -> &'static Value {
     })
 }
 
-/// 默认并发：CPU 核数 - 1（夹在 1..=8），与队列调度器启动默认一致
+/// 并发上限硬边界，与 queue::MAX_WORKERS_CEILING 保持一致
+const MAX_WORKERS_CEILING: usize = 64;
+
+/// 默认并发：CPU 核数 - 1（夹在 1..=64），与队列调度器启动默认一致。
+/// Rust 任务全是 I/O 等待，上限远高于 Python 时代的 8 —— 提高的是"同时等
+/// 多少个视频的墙钟"，不是"每秒打多少请求"（后者由全局闸门固定在 ≈2 req/s）。
 fn default_max_workers() -> usize {
-    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).saturating_sub(1).clamp(1, 8)
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+        .saturating_sub(1).max(1).clamp(1, MAX_WORKERS_CEILING)
 }
 
 #[cfg(target_os = "linux")]

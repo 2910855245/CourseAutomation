@@ -1,12 +1,15 @@
 //! 任务队列与调度器（Rust 版）— 取代 Python task_queue + job_executor + task_runner
 //!
-//! 与 Python 共享 SQLite 队列表（queue_jobs_school / queue_jobs_chaoxing），
 //! 原子认领（pending/retrying → running）+ tokio task 执行 + status.json 协议 +
-//! 完成/失败/重试/等待语义对齐 Python。
+//! 完成/失败/重试语义。
 //!
-//! 灰度开关 RUST_QUEUE_ENABLED：默认关闭，Python 调度器继续工作；
-//! 开启后仅接管学校任务（学习通登录待 wreq 落地后再接管）。
+//! 开关 RUST_QUEUE_ENABLED：**默认开启**。历史上它是 Python→Rust 迁移期的灰度
+//! 开关（默认关闭，让 Python 调度器继续干活）。Python 已完全移除，这个默认值
+//! 就成了静默失灵：调度器每 10s 空转一圈，任何入队任务都不会被执行，而管理端
+//! 的队列监控还显示"运行中"。现在只保留显式 `false` 作为应急停用手段
+//! （常规暂停请用管理端的 queue_paused，它不影响进程且可热恢复）。
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -20,6 +23,38 @@ use crate::scan::ScanTaskInput;
 use crate::AppState;
 
 const SCHOOL_TABLE: &str = "queue_jobs_school";
+
+/// 当前在跑的 worker 数。管理端队列监控要显示"正在跑几个"，此前该值在
+/// `dispatcher_loop` 里是个局部变量、对外接口只好硬编码 0，监控因此永远显示
+/// 0 个工作线程。改为进程级原子量，由 `queue_stats` 读取。
+static ACTIVE_WORKERS: AtomicUsize = AtomicUsize::new(0);
+
+/// 供管理端读取的实时 worker 数
+pub fn active_workers() -> usize {
+    ACTIVE_WORKERS.load(Ordering::Relaxed)
+}
+
+/// 并发上限的硬边界。Rust 侧任务全为 I/O 等待（视频墙钟 + 平台请求），
+/// 单任务内存开销极小，因此上限远高于 Python 版；超过 64 之后真正的瓶颈
+/// 已经不是 worker 数而是平台出站闸门（见 platform_client::wait_rate_limit）。
+const MAX_WORKERS_CEILING: usize = 64;
+
+/// 调度器是否启用（默认启用；仅显式 RUST_QUEUE_ENABLED=false 才停用）
+fn dispatcher_enabled() -> bool {
+    std::env::var("RUST_QUEUE_ENABLED")
+        .map(|v| !matches!(v.trim().to_lowercase().as_str(), "false" | "0" | "no" | "off"))
+        .unwrap_or(true)
+}
+
+/// 供管理端队列监控读取（暴露调度器真实开关状态，避免监控显示"运行中"而实际空转）
+pub fn dispatcher_enabled_public() -> bool {
+    dispatcher_enabled()
+}
+
+/// 是否应重试（抽成纯函数以便单测）
+fn should_retry(retry_count: i64, max_retries: i64) -> bool {
+    retry_count < max_retries.max(0)
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct QueueJob {
@@ -82,9 +117,12 @@ async fn claim_next_job(state: &AppState) -> Result<Option<QueueJob>> {
         let tx = conn.transaction()?;
         let job = tx.query_row(
             &format!(
+                // deleted_at IS NULL 不可省：队列监控的「删除」是软删除
+                // （UPDATE ... SET deleted_at），漏掉这个过滤会把管理员已经
+                // 删掉的任务继续捞出来执行。
                 "SELECT job_id, username, password, website_id, job_type, course_ids, order_id, max_retries, retry_count, speed_mode
                  FROM {SCHOOL_TABLE}
-                 WHERE status IN ('pending','retrying')
+                 WHERE status IN ('pending','retrying') AND deleted_at IS NULL
                  ORDER BY priority ASC, created_at ASC LIMIT 1"
             ),
             [],
@@ -186,6 +224,70 @@ async fn update_job(state: &AppState, job: &QueueJob, fields: &[(&str, String)])
     Ok(())
 }
 
+/// 终态回写订单。
+///
+/// 此前队列只更新 `queue_jobs_*` 并广播信号，**从不改 orders.status**：
+/// 任务失败/完成之后订单仍停在 queued/running，顾客看到的是"永远排队中"，
+/// 只能靠管理员手动点「完成/标记失败」收尾。这里在任务进入终态时同步订单，
+/// 且只在订单仍处于流转中状态时改写，避免覆盖管理员的人工决策。
+async fn sync_order_state(state: &AppState, job: &QueueJob, status: &str, note: &str) {
+    if job.order_id.is_empty() {
+        return;
+    }
+    let pool = state.db.clone_pool();
+    let oid = job.order_id.clone();
+    let status = status.to_string();
+    let status_for_sql = status.clone();
+    let note = note.to_string();
+    let now = now_str();
+    let result = tokio::task::spawn_blocking(move || -> Result<usize> {
+        let conn = pool.get()?;
+        let n = conn.execute(
+            "UPDATE orders SET status=?1, admin_note=?2, finished_at=?3, updated_at=?3
+             WHERE order_id=?4
+               AND deleted_at IS NULL
+               AND status IN ('pending','accepted','queued','running','paid','waiting')",
+            rusqlite::params![status_for_sql, note, now, oid],
+        )?;
+        Ok(n)
+    })
+    .await;
+    match result {
+        Ok(Ok(0)) => {} // 订单已被人为推进到终态，不覆盖
+        Ok(Ok(_)) => {
+            progress::broadcast(state, &format!("order:{}", job.order_id), "order.update", json!({
+                "order_id": &job.order_id,
+                "status": &status,
+            }));
+        }
+        Ok(Err(e)) => tracing::warn!(job_id = %job.job_id, error = %e, "回写订单状态失败"),
+        Err(e) => tracing::warn!(job_id = %job.job_id, error = %e, "回写订单状态失败（spawn_blocking 异常）"),
+    }
+}
+
+/// 任务失败统一入口：按重试策略决定 → retrying 还是 failed（终态）。
+///
+/// **所有**失败路径都必须走这里。历史上登录失败是一条独立的提前 return，
+/// 直接写死 `status='failed'`，绕过了重试策略 —— 一次网络抖动或 OCR 抖动
+/// 就会把留给它的 3 次重试全部作废，且不写 finished_at。
+async fn handle_job_failure(state: &AppState, job: &QueueJob, err: &str) {
+    if should_retry(job.retry_count, job.max_retries) {
+        let _ = update_job(state, job,
+                           &[("status", "retrying".into()),
+                             ("error_message", err.to_string()),
+                             ("retry_count", (job.retry_count + 1).to_string())]).await;
+        tracing::warn!(job_id = %job.job_id, attempt = job.retry_count + 1,
+                       max = job.max_retries, error = %err, "任务失败，等待重试");
+    } else {
+        let _ = update_job(state, job,
+                           &[("status", "failed".into()),
+                             ("error_message", err.to_string()),
+                             ("finished_at", now_str())]).await;
+        sync_order_state(state, job, "failed", err).await;
+        tracing::warn!(job_id = %job.job_id, error = %err, "任务失败（已用尽重试）");
+    }
+}
+
 /// 执行单个学校任务：登录 → 扫描+刷课 → 状态更新（status.json 协议）
 async fn execute_school_job(state: &AppState, job: &QueueJob) {
     let base_url = crate::scan::platform_base_url(job.website_id);
@@ -197,8 +299,9 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
     let session = match crate::session::get_session(&base_url, &job.username, &job.password).await {
         Ok(s) => s,
         Err(e) => {
-            let _ = update_job(state, job,
-                               &[("status", "failed".into()), ("error_message", format!("登录失败: {e}"))]).await;
+            let msg = format!("登录失败: {e}");
+            let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+            handle_job_failure(state, job, &msg).await;
             return;
         }
     };
@@ -227,23 +330,10 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
                                &[("status", "completed".into()), ("progress", "100".into()),
                                  ("current_step_name", "刷课完成".into()),
                                  ("finished_at", now_str())]).await;
+            sync_order_state(state, job, "completed", "").await;
             tracing::info!(job_id = %job.job_id, "任务完成");
         }
-        Err(e) => {
-            // 重试语义（对齐 Python：retry_count < max_retries → retrying，否则 failed）
-            if job.retry_count < job.max_retries.max(0) {
-                let _ = update_job(state, job,
-                                   &[("status", "retrying".into()),
-                                     ("error_message", e.to_string()),
-                                     ("retry_count", (job.retry_count + 1).to_string())]).await;
-            } else {
-                let _ = update_job(state, job,
-                                   &[("status", "failed".into()),
-                                     ("error_message", e.to_string()),
-                                     ("finished_at", now_str())]).await;
-            }
-            tracing::warn!(job_id = %job.job_id, error = %e, "任务失败");
-        }
+        Err(e) => handle_job_failure(state, job, &e.to_string()).await,
     }
     let _ = tokio::fs::remove_dir_all(&tmpdir).await;
 }
@@ -262,7 +352,10 @@ async fn reclaim_stale_running(state: &AppState) {
     let result = tokio::task::spawn_blocking(move || -> Result<usize> {
         let conn = pool.get()?;
         let n = conn.execute(
-            &format!("UPDATE {SCHOOL_TABLE} SET status='pending', started_at=NULL WHERE status='running'"),
+            &format!(
+                "UPDATE {SCHOOL_TABLE} SET status='pending', started_at=NULL
+                 WHERE status='running' AND deleted_at IS NULL"
+            ),
             [],
         )?;
         Ok(n)
@@ -284,13 +377,13 @@ async fn reclaim_stale_running(state: &AppState) {
 pub async fn dispatcher_loop(state: Arc<AppState>) {
     tracing::info!("Rust 队列调度器启动（学校任务）");
     reclaim_stale_running(&state).await;
-    let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     // 配置缓存：(上次刷新时间, 并发上限, 是否暂停)，避免每轮都查库
     let mut cfg_cache: (std::time::Instant, usize, bool) =
         (std::time::Instant::now(), default_max_workers(), false);
     loop {
-        if !std::env::var("RUST_QUEUE_ENABLED").map(|v| v == "true").unwrap_or(false) {
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        // 显式 false 才停用（常规暂停走 queue_paused 热配置，不重启进程）
+        if !dispatcher_enabled() {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             continue;
         }
         if cfg_cache.0.elapsed() > std::time::Duration::from_secs(5) {
@@ -301,18 +394,17 @@ pub async fn dispatcher_loop(state: Arc<AppState>) {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             continue;
         }
-        if active.load(std::sync::atomic::Ordering::Relaxed) >= cfg_cache.1 {
+        if ACTIVE_WORKERS.load(Ordering::Relaxed) >= cfg_cache.1 {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             continue;
         }
         match claim_next_job(&state).await {
             Ok(Some(job)) => {
                 let state2 = state.clone();
-                let active2 = active.clone();
-                active.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                ACTIVE_WORKERS.fetch_add(1, Ordering::Relaxed);
                 tokio::spawn(async move {
                     execute_school_job(&state2, &job).await;
-                    active2.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    ACTIVE_WORKERS.fetch_sub(1, Ordering::Relaxed);
                 });
             }
             Ok(None) => tokio::time::sleep(std::time::Duration::from_secs(2)).await,
@@ -324,19 +416,24 @@ pub async fn dispatcher_loop(state: Arc<AppState>) {
     }
 }
 
-/// 默认并发上限：环境变量 > CPU 核数-1（夹在 1..=8）
+/// 默认并发上限：环境变量 > CPU 核数-1，夹在 1..=64。
+/// Rust 任务全是 I/O 等待，上限远高于 Python 时代的 8。
 fn default_max_workers() -> usize {
     std::env::var("RUST_QUEUE_MAX_WORKERS").ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).saturating_sub(1).clamp(1, 8))
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).saturating_sub(1).max(1))
+        .clamp(1, MAX_WORKERS_CEILING)
 }
 
 /// 读取运行期配置（并发上限 + 暂停），失败时退回默认值
 async fn read_runtime_config(db: &Db) -> (usize, bool) {
+    // 夹在 1..=64：管理端写入的值不应能把进程拖垮（每个 worker 都是一条
+    // 常驻 tokio 任务 + 一个临时目录），越界值一律按边界处理而不是照单全收。
     let max = config_get(db, "queue_max_workers").await
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n > 0)
-        .unwrap_or_else(default_max_workers);
+        .unwrap_or_else(default_max_workers)
+        .clamp(1, MAX_WORKERS_CEILING);
     let paused = config_get(db, "queue_paused").await.map(|v| v == "1").unwrap_or(false)
         || config_get(db, "queue_paused_school").await.map(|v| v == "1").unwrap_or(false);
     (max, paused)
@@ -377,4 +474,40 @@ pub async fn config_set(db: &Db, key: &str, value: &str) -> Result<()> {
     })
     .await??;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_retry_respects_budget() {
+        // retry_count 从 0 起算：max=3 时应允许 3 次重试（0,1,2 都重试，3 才终态）
+        assert!(should_retry(0, 3));
+        assert!(should_retry(1, 3));
+        assert!(should_retry(2, 3));
+        assert!(!should_retry(3, 3));
+        // max_retries=0 表示不重试（负数同样按 0 处理，避免 max() 溢出语义歧义）
+        assert!(!should_retry(0, 0));
+        assert!(!should_retry(0, -1));
+    }
+
+    #[test]
+    fn test_default_max_workers_within_ceiling() {
+        let n = default_max_workers();
+        assert!(n >= 1 && n <= MAX_WORKERS_CEILING, "默认并发越界: {n}");
+    }
+
+    #[test]
+    fn test_dispatcher_enabled_defaults_on() {
+        // 不设变量 → 默认启用（这是本次修复的核心：此前默认关闭导致队列空转）
+        std::env::remove_var("RUST_QUEUE_ENABLED");
+        assert!(dispatcher_enabled());
+        // 显式 false → 停用
+        std::env::set_var("RUST_QUEUE_ENABLED", "false");
+        assert!(!dispatcher_enabled());
+        std::env::set_var("RUST_QUEUE_ENABLED", "true");
+        assert!(dispatcher_enabled());
+        std::env::remove_var("RUST_QUEUE_ENABLED");
+    }
 }

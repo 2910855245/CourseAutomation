@@ -1,7 +1,11 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useAdminStore } from '@/stores/admin'
 const { fmtDate } = useAdminStore().state().dashboard
 const { applyAutoConcurrency, cancelQueueJob, clearQueueHistory, deleteQueueJob, detectServerSpecs, loadQueueData, loadingQueue, maxWorkersInput, pauseQueue, queueFilter, queueJobs, queuePausing, queueStats, queueStatusFilter, resumeQueue, retryQueueJob, serverSpecs, setMaxWorkers } = useAdminStore().state().payments
+
+// 调度器开关的真实状态：接口未返回该字段时按"启用"处理（兼容旧后端）
+const schedulerOff = computed(() => queueStats.value?.scheduler_enabled === false)
 </script>
 
 <template>
@@ -15,9 +19,17 @@ const { applyAutoConcurrency, cancelQueueJob, clearQueueHistory, deleteQueueJob,
         <div class="queue-status-badge">
           <span
             class="qsb-dot"
-            :class="queueStats.paused ? 'qsb-paused' : 'qsb-live'"
+            :class="queueStats.paused ? 'qsb-paused' : (schedulerOff ? 'qsb-off' : 'qsb-live')"
           />
-          <span class="qsb-text">{{ queueStats.paused ? '全部已暂停' : '运行中' }}</span>
+          <span class="qsb-text">
+            {{ schedulerOff ? '调度器已停用' : (queueStats.paused ? '全部已暂停' : '运行中') }}
+          </span>
+        </div>
+        <div
+          v-if="schedulerOff"
+          class="queue-off-hint"
+        >
+          后端以 RUST_QUEUE_ENABLED=false 启动，任何入队任务都不会被执行
         </div>
         <div class="queue-actions">
           <button
@@ -52,7 +64,7 @@ const { applyAutoConcurrency, cancelQueueJob, clearQueueHistory, deleteQueueJob,
           v-model.number="maxWorkersInput"
           type="number"
           min="1"
-          max="20"
+          max="64"
           class="qcfg-input"
         >
         <button
@@ -143,10 +155,24 @@ const { applyAutoConcurrency, cancelQueueJob, clearQueueHistory, deleteQueueJob,
         </div>
         <div class="qkpi">
           <div class="qkpi-val qkpi-blue">
-            {{ queueStats.active_workers || 0 }}
+            {{ queueStats.active_workers || 0 }}<span class="qkpi-sub">/{{ queueStats.max_workers || '-' }}</span>
           </div>
           <div class="qkpi-label">
-            工作线程
+            工作线程（在跑/上限）
+          </div>
+        </div>
+        <div
+          v-if="queueStats.global_study_sessions"
+          class="qkpi"
+        >
+          <div class="qkpi-val qkpi-blue">
+            {{ queueStats.global_study_sessions }}
+          </div>
+          <div
+            class="qkpi-label"
+            title="进程内同时在刷的视频会话总数上限（跨订单共享）。它才是贴着平台风控的旋钮，调大 worker 数不会突破它。"
+          >
+            全局会话上限
           </div>
         </div>
       </div>
@@ -333,6 +359,9 @@ const { applyAutoConcurrency, cancelQueueJob, clearQueueHistory, deleteQueueJob,
 .qsb-dot { width: 9px; height: 9px; border-radius: 50%; }
 .qsb-dot.qsb-live { background: var(--c-success); animation: qsb-pulse 1.8s ease-in-out infinite; }
 .qsb-dot.qsb-paused { background: var(--c-warning); }
+.qsb-dot.qsb-off { background: var(--c-danger); }
+.queue-off-hint { font-size: 12px; color: var(--c-danger); flex-basis: 100%; }
+.qkpi-sub { font-size: 14px; font-weight: 600; color: var(--c-text-muted); margin-left: 2px; }
 @keyframes qsb-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, .35); }
   50% { box-shadow: 0 0 0 5px rgba(34, 197, 94, 0); }

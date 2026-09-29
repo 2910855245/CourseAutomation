@@ -20,6 +20,42 @@ use crate::speed::{SpeedMode, SpeedProfile};
 /// 三档均不改动该比率 —— 提速来自并发与错峰，而不是压缩单个视频的安全等待。
 const MIN_RATIO: f64 = 2.1;
 
+/// 进程级同时在刷的视频会话上限（跨订单共享）。
+///
+/// 队列 worker 数可以调到几十，但每个订单内部还有自己的课程并发（急速档 8），
+/// 两者相乘就是进程内的并发会话总数：64 worker × 8 = 512 路会话同时抢
+/// [`crate::platform_client::wait_rate_limit`] 那道 0.5s 的全局闸门。闸门容量
+/// 约 2 req/s，而单个会话上报密度约 4 次/分钟 —— 512 路会话意味着每路的上报
+/// 被推迟十几倍，视频墙钟被拉长到不可用，还会让平台的会话超时。
+///
+/// 因此这里加一道闸把总会话数压住：worker 并发决定"同时处理多少个订单"，
+/// 本上限决定"同时有多少路视频在跑"，后者才是真正贴着平台风险的旋钮。
+/// 默认 32（约为闸门容量的 1.3 倍，留有余量），可用 `GLOBAL_STUDY_SESSIONS` 调整。
+const DEFAULT_GLOBAL_SESSIONS: usize = 32;
+
+fn global_session_limit() -> usize {
+    std::env::var("GLOBAL_STUDY_SESSIONS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_GLOBAL_SESSIONS)
+}
+
+/// 供管理端读取当前生效的全局会话上限
+pub fn global_session_limit_public() -> usize {
+    global_session_limit()
+}
+
+/// 全局会话信号量（进程内唯一，首个调用点初始化）
+static GLOBAL_SESSIONS: tokio::sync::OnceCell<Arc<tokio::sync::Semaphore>> =
+    tokio::sync::OnceCell::const_new();
+
+async fn global_session_sem() -> &'static Arc<tokio::sync::Semaphore> {
+    GLOBAL_SESSIONS
+        .get_or_init(|| async { Arc::new(tokio::sync::Semaphore::new(global_session_limit())) })
+        .await
+}
+
 fn make_client() -> Client {
     crate::platform_client::build_client_with_ua(
         crate::platform_client::SHORT_UA, true, None)
@@ -178,6 +214,12 @@ async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
     if actual_target == 0 {
         return Ok(true);
     }
+    // 全局会话闸：许可在整个视频生命周期内持有，把进程内并发会话总数压在上限内。
+    // 等待期间不发任何请求，只是排队（因此不会对平台产生额外流量）。
+    let _session_permit = match global_session_sem().await.clone().acquire_owned().await {
+        Ok(p) => p,
+        Err(_) => return Err(anyhow::anyhow!("全局会话闸已关闭")),
+    };
     let start = Instant::now();
     let mut total_time: u64 = 0;
     let mut study_id: i64 = 0;
