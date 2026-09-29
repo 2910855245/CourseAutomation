@@ -14,7 +14,12 @@ pub struct Db {
 }
 
 impl Db {
-    /// 打开（或创建）SQLite 数据库：WAL + busy_timeout，连接池上限 8
+    /// 打开（或创建）SQLite 数据库：WAL + busy_timeout + 读缓存调优
+    ///
+    /// 连接池上限 16：每个 HTTP 请求的库操作都要先 `pool.get()`，池大小就是
+    /// 并发查库的硬上限。原先 8 个连接在压测下会先于 CPU 打满（请求排队在
+    /// `spawn_blocking` 里等连接），提高到 16 后吞吐随并发线性增长到更高拐点。
+    /// SQLite 写本身仍串行（单写者），所以再往上加收益递减。
     pub fn open(path: &str) -> Result<Self> {
         if let Some(dir) = std::path::Path::new(path).parent() {
             if !dir.as_os_str().is_empty() && !dir.exists() {
@@ -28,11 +33,17 @@ impl Db {
                     "PRAGMA journal_mode=WAL;
                      PRAGMA synchronous=NORMAL;
                      PRAGMA busy_timeout=5000;
-                     PRAGMA foreign_keys=ON;",
+                     PRAGMA foreign_keys=ON;
+                     -- 每连接 16MB 页缓存（负值 = KB，避免默认 2MB 反复读盘）
+                     PRAGMA cache_size=-16000;
+                     -- 只读内存映射：统计/列表类全表扫不必走 read() 系统调用
+                     PRAGMA mmap_size=268435456;
+                     -- 临时表（GROUP BY / ORDER BY 溢出）留在内存，不落磁盘
+                     PRAGMA temp_store=MEMORY;",
                 )
             });
         let pool = Pool::builder()
-            .max_size(8)
+            .max_size(16)
             .build(manager)
             .with_context(|| format!("打开数据库失败: {path}"))?;
         // 连接预热

@@ -23,28 +23,40 @@ export function useHomeState() {
   // ── Session persistence ──
   const LS_KEY = 'course_platform_remember'
 
-  interface SavedData { username: string; password?: string; scanData: PlatformResult[]; scanDone: boolean; checkedIds: string[]; pkgIdx: number; ts: number }
+  // 本地只记「学号」，**不记密码，也不记扫描结果**。
+  //
+  // 两点原因：
+  //  1. 平台账号是学员本人的校园账号，明文写进 localStorage 等于任何一个 XSS
+  //     或本地翻看都能直接拿到；密码改为每次会话由用户输入，只留在内存里。
+  //  2. 扫描结果依赖平台实时状态，且下单/扫描这两步本来就必须有密码 ——
+  //     只恢复「结果」而不恢复密码，用户会卡在一个没有密码输入框的结果页上
+  //     无法提交。所以恢复出来的会话一律回到登录页，重新扫描即可。
+  interface SavedData { username: string; ts: number }
+
+  const SESSION_TTL_MS = 7 * 24 * 3600 * 1000
 
   function loadSaved(): SavedData | null {
     try {
       const raw = localStorage.getItem(LS_KEY)
       if (!raw) return null
-      const data = JSON.parse(raw) as SavedData
+      const data = JSON.parse(raw) as Partial<SavedData> & Record<string, unknown>
       if (!data || typeof data !== 'object') { localStorage.removeItem(LS_KEY); return null }
       if (!data.username || !data.ts) { localStorage.removeItem(LS_KEY); return null }
-      if (Date.now() - data.ts > 7 * 24 * 3600 * 1000) { localStorage.removeItem(LS_KEY); return null }
-      if (!Array.isArray(data.scanData)) { data.scanData = []; data.scanDone = false }
-      return data
+      if (Date.now() - (data.ts as number) > SESSION_TTL_MS) { localStorage.removeItem(LS_KEY); return null }
+      // 旧版本把密码 + 扫描结果一起存了：读到就即刻瘦身回写，
+      // 别让历史残留的明文密码继续躺在浏览器里。
+      const slim: SavedData = { username: data.username as string, ts: data.ts as number }
+      if (raw !== JSON.stringify(slim)) {
+        try { localStorage.setItem(LS_KEY, JSON.stringify(slim)) } catch { }
+      }
+      return slim
     } catch { localStorage.removeItem(LS_KEY); return null }
   }
 
   function saveSession() {
     try {
-      localStorage.setItem(LS_KEY, JSON.stringify({
-        username: username.value.trim(), password: password.value, scanData: scanData.value, scanDone: scanDone.value,
-        checkedIds: [...checkedCourseIds.value], ts: Date.now(),
-      }))
-    } catch {}
+      localStorage.setItem(LS_KEY, JSON.stringify({ username: username.value.trim(), ts: Date.now() }))
+    } catch { }
   }
 
   function clearSaved() {
@@ -56,16 +68,18 @@ export function useHomeState() {
   // ── Scan state ──
   const savedData = ref<SavedData | null>(loadSaved())
   const username = ref(savedData.value?.username || '')
-  const password = ref(savedData.value?.password || '')
+  // 密码不落盘：每次会话需要时由用户重新输入（见 SavedData 注释）
+  const password = ref('')
   const scanning = ref(false)
   const activeTab = ref<'school' | 'chaoxing'>('school')
   const chaoxingUsername = ref('')
   const chaoxingPassword = ref('')
   const rescanning = ref(false)
-  const scanDone = ref(savedData.value?.scanDone || false)
+  // 扫描结果不落盘：恢复会话只带回学号，扫描结果一律重新拉取（见 SavedData 注释）
+  const scanDone = ref(false)
   const allDone = ref(false)
   const isLeaving = ref(false)
-  const scanData = ref<PlatformResult[]>(savedData.value?.scanData || [])
+  const scanData = ref<PlatformResult[]>([])
   const countdown = ref(3)
   const loginError = ref<'all' | 'partial' | null>(null)
   const failedPlatforms = ref<{ website_id: number; name: string; error: string }[]>([])
@@ -100,7 +114,7 @@ export function useHomeState() {
           priceChaoxing: d.priceChaoxing ?? 8,
         }
       }
-    } catch {}
+    } catch { }
   }
   loadPackagePricing()
 
@@ -115,13 +129,13 @@ export function useHomeState() {
   )
   function setSpeedMode(mode: SpeedMode) {
     speedMode.value = mode
-    try { localStorage.setItem(SPEED_LS_KEY, mode) } catch {}
+    try { localStorage.setItem(SPEED_LS_KEY, mode) } catch { }
   }
 
   const submittedCourseIds = ref(new Set<string>())
   const allInProgress = ref(false)
   const pendingOrderedCourseIds = ref<string[]>([])
-  const checkedCourseIds = ref(new Set<string>(savedData.value?.checkedIds || []))
+  const checkedCourseIds = ref(new Set<string>())
 
   function isCourseDone(c: CourseItem): boolean {
     // 学习通：积分达标 且 无待完成作业 且 无待完成视频
@@ -207,7 +221,7 @@ export function useHomeState() {
         for (const item of res.data.courses) map[item.course_id] = { price: item.price, type: item.type, label: item.label }
         backendPrices.value = map
       }
-    } catch {} finally { loadingPrices.value = false }
+    } catch { } finally { loadingPrices.value = false }
   }
 
   const summary = computed(() => {
@@ -305,7 +319,7 @@ export function useHomeState() {
         return
       }
       scanDone.value = true; saveSession()
-      try { const r = await api.orders.activeCourses(username.value.trim()); const activeIds: string[] = r?.data || []; for (const cid of activeIds) submittedCourseIds.value.add(cid) } catch {}
+      try { const r = await api.orders.activeCourses(username.value.trim()); const activeIds: string[] = r?.data || []; for (const cid of activeIds) submittedCourseIds.value.add(cid) } catch { }
       const total = scanData.value.reduce((s, p) => s + p.courses.length, 0)
       store.toast(`扫描完成：${okPlatforms.length} 个平台成功，共 ${total} 门课程`, 'success')
       await fetchBackendPrices()
@@ -425,7 +439,7 @@ export function useHomeState() {
     paying.value = true; payError.value = ''
     try {
       await fetchBackendPrices()
-      try { const r = await api.orders.activeCourses(username.value.trim()); const activeIds: string[] = r?.data || []; for (const cid of activeIds) { checkedCourseIds.value.delete(cid); submittedCourseIds.value.add(cid) } } catch {}
+      try { const r = await api.orders.activeCourses(username.value.trim()); const activeIds: string[] = r?.data || []; for (const cid of activeIds) { checkedCourseIds.value.delete(cid); submittedCourseIds.value.add(cid) } } catch { }
       if (checkedCourseIds.value.size === 0) { store.toast('所选课程均已有进行中的订单，无需重复提交', 'info'); paying.value = false; return }
       const grouped: Record<number, { ids: string[]; v: number; e: number; details: { video_total: number; video_completed: number; exam_total: number; exam_done: number }[] }> = {}
       for (const plat of scanData.value) {
@@ -478,7 +492,7 @@ export function useHomeState() {
       const qrCodes: Record<string, string> = {}; const batchIds: Record<string, string> = {}; const batchOutTradeNos: Record<string, string> = {}; const reallyPrices: Record<string, number> = {}
       const orderIds = allOrders.map((o: any) => o.order_id)
       for (const m of methods) {
-        try { const payRes = await api.payment.batchCreate({ order_ids: orderIds, pay_type: m.pay_type }); const pd = (payRes?.data || {}) as any; batchIds[m.key] = pd.batch_id || ''; batchOutTradeNos[m.key] = pd.out_trade_no || ''; if (pd.qr_image) qrCodes[m.key] = pd.qr_image; if (pd.really_price) reallyPrices[m.key] = pd.really_price } catch {}
+        try { const payRes = await api.payment.batchCreate({ order_ids: orderIds, pay_type: m.pay_type }); const pd = (payRes?.data || {}) as any; batchIds[m.key] = pd.batch_id || ''; batchOutTradeNos[m.key] = pd.out_trade_no || ''; if (pd.qr_image) qrCodes[m.key] = pd.qr_image; if (pd.really_price) reallyPrices[m.key] = pd.really_price } catch { }
       }
       payQrCodes.value = qrCodes; payReallyPrices.value = reallyPrices; payBatchIds.value = batchIds; payBatchOutTradeNos.value = batchOutTradeNos
       payQrCode.value = qrCodes[selectedPayMethod.value] || ''; payBatchId.value = batchIds[selectedPayMethod.value] || ''; payBatchOutTradeNo.value = batchOutTradeNos[selectedPayMethod.value] || ''
@@ -500,7 +514,7 @@ export function useHomeState() {
         if (r?.expired) { stopped = true; payPollTimer.value = null; payTimedOut.value = true; store.toast('订单已过期，请重新下单', 'warning'); return }
         if (pollCount >= maxPolls) { stopped = true; payPollTimer.value = null; payTimedOut.value = true; store.toast('支付超时，订单已提交，请到订单页查询', 'warning'); return }
         if (r?.paid) { stopped = true; payPollTimer.value = null; paySuccessAmount.value = payTotal.value; showPaySuccess.value = true; return }
-      } catch {}
+      } catch { }
       if (!stopped) payPollTimer.value = setTimeout(tick, 3000)
     }
     payPollTimer.value = setTimeout(tick, 3000)
@@ -552,7 +566,7 @@ export function useHomeState() {
         announcementContent.value = res.data.content
         showAnnouncement.value = true
       }
-    } catch {}
+    } catch { }
   }
 
   function dismissAnnouncement() {

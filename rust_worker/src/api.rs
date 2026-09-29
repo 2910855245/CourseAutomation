@@ -83,7 +83,12 @@ fn bearer_ok(headers: &HeaderMap) -> bool {
 
 /// 订单访问鉴权：管理员 Bearer，或游客 view_token（sha256(order_id:secret)[:24]）
 fn order_access_ok(headers: &HeaderMap, order_id: &str, token: &str) -> bool {
-    bearer_ok(headers) || (!token.is_empty() && token == crate::order::view_token(order_id))
+    // view_token 是 24 位 hex（96 bit），本就不易枚举；这里再用常数时间比较，
+    // 避免响应耗时泄露「前缀猜对了多少位」
+    bearer_ok(headers)
+        || (!token.is_empty()
+            && crate::crypto::ct_eq(token.as_bytes(),
+                                    crate::order::view_token(order_id).as_bytes()))
 }
 
 
@@ -376,23 +381,67 @@ fn order_row_to_json(r: &rusqlite::Row, course_ids: &str) -> rusqlite::Result<Va
 
 
 /// 对齐 Python _inject_task_progress：队列任务进度注入（completed→100，默认 0）
-fn inject_progress(conn: &rusqlite::Connection, items: &mut Vec<Value>) -> rusqlite::Result<()> {
+///
+/// 原实现是每个订单 2 次 `query_row`（school + chaoxing），列表 50 条就是 100
+/// 次往返 —— 一次列表请求把连接池占满，是压测里最先暴露的瓶颈。改成两张表
+/// 各一条 `IN (...)` 批量查询后在内存里归并：往返次数 2N → 2，且不再随列表
+/// 长度增长。
+///
+/// 语义保持与原先一致：同一订单 school 表优先于 chaoxing 表；同表内取
+/// `created_at` 最新的一条。
+///
+/// 失败时**不**让整个列表请求失败（与旧行为一致：旧代码对查询错误取 `.ok()`），
+/// 只记一条 warn 并保留 progress=0。
+fn inject_progress(conn: &rusqlite::Connection, items: &mut [Value]) {
+    if items.is_empty() {
+        return;
+    }
+    let ids: Vec<String> = items.iter()
+        .filter_map(|i| i["order_id"].as_str().map(String::from))
+        .collect();
+    if ids.is_empty() {
+        return;
+    }
+    if let Err(e) = inject_progress_inner(conn, items, &ids) {
+        tracing::warn!(error = %e, "队列进度注入失败，本次列表进度显示为 0");
+    }
+}
+
+fn inject_progress_inner(
+    conn: &rusqlite::Connection,
+    items: &mut [Value],
+    ids: &[String],
+) -> rusqlite::Result<()> {
+    // SQLite 变量数上限（默认 999）：分批绑定，避免长列表直接报错
+    const CHUNK: usize = 500;
+    let mut latest: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    // school 先查：or_insert 保证 school 的记录不被 chaoxing 覆盖（学校优先）
+    for table in ["queue_jobs_school", "queue_jobs_chaoxing"] {
+        for chunk in ids.chunks(CHUNK) {
+            let placeholders = std::iter::repeat_n("?", chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT order_id, status, progress FROM {table}
+                 WHERE order_id IN ({placeholders})
+                 ORDER BY created_at DESC"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(
+                rusqlite::params_from_iter(chunk.iter().map(|s| s.as_str())),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?)),
+            )?;
+            for row in rows {
+                let (order_id, status, progress) = row?;
+                // 已按 created_at DESC 排序：首次出现即该表最新一条
+                latest.entry(order_id)
+                    .or_insert(if status == "completed" { 100.0 } else { progress });
+            }
+        }
+    }
     for item in items.iter_mut() {
-        let order_id = item["order_id"].as_str().unwrap_or("").to_string();
-        let progress: f64 = ["queue_jobs_school", "queue_jobs_chaoxing"].iter()
-            .find_map(|t| {
-                conn.query_row(
-                    &format!(
-                        "SELECT status, progress FROM {t} WHERE order_id=?1
-                         ORDER BY created_at DESC LIMIT 1"
-                    ),
-                    rusqlite::params![order_id],
-                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)),
-                ).ok()
-            })
-            .map(|(status, p)| if status == "completed" { 100.0 } else { p })
-            .unwrap_or(0.0);
-        item["progress"] = json!(progress);
+        let order_id = item["order_id"].as_str().unwrap_or("");
+        item["progress"] = json!(latest.get(order_id).copied().unwrap_or(0.0));
     }
     Ok(())
 }
@@ -425,7 +474,7 @@ async fn orders_list(
                     let cids: String = r.get(12)?;
                     order_row_to_json(r, &cids)
                 })?.collect::<Result<Vec<_>, _>>()?;
-                inject_progress(&conn, &mut rows)?;
+                inject_progress(&conn, &mut rows);
                 (total, rows)
             }
             None => {
@@ -443,7 +492,7 @@ async fn orders_list(
                     let cids: String = r.get(12)?;
                     order_row_to_json(r, &cids)
                 })?.collect::<Result<Vec<_>, _>>()?;
-                inject_progress(&conn, &mut rows)?;
+                inject_progress(&conn, &mut rows);
                 (total, rows)
             }
         };
@@ -513,33 +562,33 @@ async fn admin_dashboard(State(state): State<AppState>) -> Json<Value> {
         let today_prefix: String = crate::queue::now_str()[..10].into();
         let today = today_prefix.as_str();
 
-        let (total, today_c, week_c, completed, pending, running, failed): (i64, i64, i64, i64, i64, i64, i64) = {
-            let count = |sql: &str, params: &[&dyn rusqlite::ToSql]| -> i64 {
-                conn.query_row(sql, params, |r| r.get(0)).unwrap_or(0)
-            };
-            (
-                count("SELECT COUNT(*) FROM orders WHERE deleted_at IS NULL", &[]),
-                count("SELECT COUNT(*) FROM orders WHERE deleted_at IS NULL AND created_at LIKE ?1", &[&format!("{today}%")]),
-                count("SELECT COUNT(*) FROM orders WHERE deleted_at IS NULL AND created_at >= ?1", &[&week_start_prefix()]),
-                count("SELECT COUNT(*) FROM orders WHERE deleted_at IS NULL AND status='completed'", &[]),
-                count("SELECT COUNT(*) FROM orders WHERE deleted_at IS NULL AND status='pending'", &[]),
-                count("SELECT COUNT(*) FROM orders WHERE deleted_at IS NULL AND status='running'", &[]),
-                count("SELECT COUNT(*) FROM orders WHERE deleted_at IS NULL AND status='failed'", &[]),
-            )
-        };
+        // 原先这里是 7 次 COUNT + 3 次 SUM = 10 次全表扫描（每次都要重新
+        // `pool.get()`）。合成一条条件聚合：一次扫描同时算出所有计数与金额。
+        // 三个时间边界沿用原口径：今日=日期前缀、本周=近 7 天前缀、今日金额=今日零点
+        let today_like = format!("{today}%");
+        let week_from = week_start_prefix();
+        let today_midnight = format!("{}T00:00:00", &today_prefix[..10]);
+        let (total, today_c, week_c, completed, pending, running, failed,
+             rev_total, rev_today, rev_week): (i64, i64, i64, i64, i64, i64, i64, f64, f64, f64) =
+            conn.query_row(
+                "SELECT
+                    COUNT(*),
+                    COALESCE(SUM(created_at LIKE ?1), 0),
+                    COALESCE(SUM(created_at >= ?2), 0),
+                    COALESCE(SUM(status='completed'), 0),
+                    COALESCE(SUM(status='pending'), 0),
+                    COALESCE(SUM(status='running'), 0),
+                    COALESCE(SUM(status='failed'), 0),
+                    COALESCE(SUM(price), 0),
+                    COALESCE(SUM(CASE WHEN created_at LIKE ?1 THEN price ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN created_at >= ?3 THEN price ELSE 0 END), 0)
+                 FROM orders WHERE deleted_at IS NULL",
+                rusqlite::params![today_like, week_from, today_midnight],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?,
+                        r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?)),
+            ).unwrap_or_default();
         // 简化：week 按近 7 天日期前缀计算（对齐 Python 的口径近似）
         let week_c = week_c.max(today_c);
-
-        let revenue = |cond: &str, params: Vec<String>| -> f64 {
-            conn.query_row(
-                &format!("SELECT COALESCE(SUM(price),0) FROM orders WHERE deleted_at IS NULL AND {cond}"),
-                rusqlite::params_from_iter(params.iter().map(|s| s.as_str())),
-                |r| r.get(0),
-            ).unwrap_or(0.0)
-        };
-        let rev_total: f64 = revenue("1=1", vec![]);
-        let rev_today: f64 = revenue("created_at LIKE ?1", vec![format!("{today}%")]);
-        let rev_week: f64 = revenue("created_at >= ?1", vec![format!("{}T00:00:00", &today_prefix[..10])]);
 
         let mut stmt = conn.prepare(
             "SELECT website_id, COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE deleted_at IS NULL GROUP BY website_id")?;
@@ -1021,7 +1070,7 @@ async fn admin_orders_list(
                 order_row_to_json(r, &cids)
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        inject_progress(&conn, &mut rows)?;
+        inject_progress(&conn, &mut rows);
         Ok(json!({"total": total, "items": rows}))
     })
     .await

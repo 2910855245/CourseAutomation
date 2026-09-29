@@ -94,7 +94,7 @@ pub async fn push_progress(
         .get("x-worker-token")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if provided != crate::worker_token() {
+    if !crate::crypto::ct_eq(provided.as_bytes(), crate::worker_token().as_bytes()) {
         return (axum::http::StatusCode::UNAUTHORIZED,
                 Json(json!({"detail": "无效的 Worker 凭证"}))).into_response();
     }
@@ -258,7 +258,8 @@ async fn handle_control(
                 if order_id.is_empty() {
                     continue;
                 }
-                if token == crate::order::view_token(order_id) {
+                if crate::crypto::ct_eq(token.as_bytes(),
+                                        crate::order::view_token(order_id).as_bytes()) {
                     topics.push(format!("order:{order_id}"));
                 } else {
                     invalid.push(order_id.to_string());

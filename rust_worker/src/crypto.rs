@@ -49,6 +49,19 @@ fn candidate_keys() -> Vec<[u8; 32]> {
     keys
 }
 
+/// 常数时间字节比较：用于比对密钥/令牌，避免 `==` 的短路比较把「前几位
+/// 猜对了」这个信息通过响应耗时泄露出去（时间侧信道）。
+pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 fn hex_to_key(hex_key: &str) -> Option<[u8; 32]> {
     if hex_key.len() != 64 {
         return None;

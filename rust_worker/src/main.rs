@@ -14,6 +14,7 @@ mod cx_scan;
 mod cx_study;
 mod db;
 mod exam;
+mod guard;
 mod llm;
 mod login;
 mod ocr;
@@ -183,6 +184,10 @@ async fn main() -> anyhow::Result<()> {
         .layer(middleware::from_fn(cache_headers))
         .layer(CompressionLayer::new())
         .layer(middleware::from_fn(trace_request))
+        // 限流在 trace 之外（被拦的请求也要留下日志），安全头在最外层
+        // （429/404 这类由内层产生的响应同样要带上安全头）。
+        .layer(middleware::from_fn_with_state(guard::RateLimiter::from_env(), guard::rate_limit))
+        .layer(middleware::from_fn(guard::security_headers))
         .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");
@@ -190,7 +195,12 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&addr).await
         .with_context(|| format!("绑定 {addr} 失败"))?;
-    axum::serve(listener, app).await?;
+    // 带连接信息：限流中间件需要 socket 对端地址来判断能否采信 X-Forwarded-For
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -220,6 +230,21 @@ async fn cache_headers(req: Request, next: Next) -> Response {
     resp
 }
 
+/// index.html 内存缓存。
+///
+/// 每次 SPA 回退（首页、/orders、/admin…任意前端路由）原先都要 `fs::read`，
+/// 压测下这条路径的磁盘 I/O 完全没必要 —— 文件只在 `npm run build` 后变化。
+/// 进程启动后读一次常驻内存。注意：重新构建前端后需重启后端才能取到新
+/// index.html（assets 文件名带 hash，缓存策略不受影响）。
+static INDEX_HTML: OnceLock<String> = OnceLock::new();
+
+fn index_html() -> Option<&'static str> {
+    INDEX_HTML.get_or_init(|| {
+        std::fs::read_to_string("static/index.html").unwrap_or_default()
+    });
+    INDEX_HTML.get().map(|s| s.as_str()).filter(|s| !s.is_empty())
+}
+
 /// SPA 回退：非 API/静态路径返回 index.html（no-cache）。
 ///
 /// `/api/*` 下的未知路径**不再**回退到 index.html：以前它会给前端返回 200 + HTML，
@@ -237,8 +262,8 @@ async fn spa_fallback(req: Request) -> Response {
         );
         return resp;
     }
-    match tokio::fs::read("static/index.html").await {
-        Ok(body) => {
+    match index_html() {
+        Some(body) => {
             let mut resp = Response::new(Body::from(body));
             *resp.status_mut() = StatusCode::OK;
             resp.headers_mut().insert(
@@ -251,7 +276,7 @@ async fn spa_fallback(req: Request) -> Response {
             );
             resp
         }
-        Err(_) => {
+        None => {
             let mut resp = Response::new(Body::from("index.html 未找到（请先 npm run build）"));
             *resp.status_mut() = StatusCode::NOT_FOUND;
             resp
