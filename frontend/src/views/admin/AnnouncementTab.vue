@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { api } from '@/api'
+import { useAppStore } from '@/stores/app'
+
+// 原来三个操作全是 `catch {}` 静默吞错、成功也没有任何提示：
+// 发布成功/失败在界面上唯一的差别只是徽标文字，操作者很容易误判。
+const store = useAppStore()
 
 const announcementText = ref('')
 const announcementActive = ref(false)
@@ -15,7 +20,9 @@ async function loadAnnouncement() {
       announcementActive.value = res.data.active
       announcementId.value = res.data.id || 0
     }
-  } catch {}
+  } catch (e: any) {
+    store.toast(e?.message || '加载公告失败', 'error')
+  }
 }
 
 async function publishAnnouncement() {
@@ -23,19 +30,29 @@ async function publishAnnouncement() {
   announcementSaving.value = true
   try {
     const res = await api.announcement.set(announcementText.value.trim())
+    if (res?.success === false) { store.toast(res.message || '发布失败', 'error'); return }
     if (res?.data?.id) announcementId.value = res.data.id
     announcementActive.value = true
-  } catch {}
-  announcementSaving.value = false
+    store.toast('公告已发布，前台访客下次打开首页即可看到', 'success')
+  } catch (e: any) {
+    store.toast(e?.message || '发布失败', 'error')
+  } finally {
+    announcementSaving.value = false
+  }
 }
 
 async function disableAnnouncement() {
   announcementSaving.value = true
   try {
-    await api.announcement.disable()
+    const res = await api.announcement.disable()
+    if (res?.success === false) { store.toast(res.message || '停用失败', 'error'); return }
     announcementActive.value = false
-  } catch {}
-  announcementSaving.value = false
+    store.toast('公告已停用', 'success')
+  } catch (e: any) {
+    store.toast(e?.message || '停用失败', 'error')
+  } finally {
+    announcementSaving.value = false
+  }
 }
 
 onMounted(loadAnnouncement)
