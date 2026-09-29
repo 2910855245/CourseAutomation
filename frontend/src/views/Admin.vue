@@ -132,61 +132,58 @@ useAdminStore().init({
 
 <template>
   <div class="admin-root">
-    <!-- Login Screen -->
+    <!-- 登录分屏 -->
     <div v-if="!isLoggedIn" class="login-screen">
       <div class="login-split">
-      <div class="brand-side">
-        <div class="bs-logo">
-          <span class="bs-mark">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.5 12.5H11L9.5 22 19 10.5h-6.5L13 2z"/></svg>
-          </span>
-          <span>Fuk 文理网课</span>
-        </div>
-        <div class="bs-copy">
-          <h2>运营后台</h2>
-          <p>订单、队列、支付、风控，一站式管理面板。</p>
-        </div>
-        <ul class="bs-points">
-          <li>实时队列监控与订单全链路追踪</li>
-          <li>YPay / VMQ 聚合支付与对账</li>
-          <li>网络代理、系统公告与安全中心</li>
-        </ul>
-        <div class="bs-foot">仅限管理员访问 · 操作全程留痕</div>
-      </div>
-      <div class="form-side">
-      <div class="login-card">
-        <form @submit="doLogin">
-          <div class="field">
-            <label>用户名</label>
-            <input v-model="adminUser" placeholder="请输入管理员用户名" autocomplete="username" />
+        <div class="brand-side">
+          <div class="bs-logo">
+            <span class="bs-mark">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.5 12.5H11L9.5 22 19 10.5h-6.5L13 2z"/></svg>
+            </span>
+            <span>Fuk 文理网课</span>
           </div>
-          <div class="field">
-            <label>密码</label>
-            <input v-model="adminPass" type="password" placeholder="请输入密码" autocomplete="current-password" />
+          <div class="bs-copy">
+            <h2>运营后台</h2>
+            <p>订单、队列、支付、风控，一站式管理面板。</p>
           </div>
-          <button type="submit" class="btn btn-primary btn-lg btn-block">
-登录后台
-</button>
-          <div v-if="loginErr" class="login-err">
-{{ loginErr }}
-</div>
-        </form>
-        <div class="login-back">
-          <router-link to="/">
-&larr; 返回前台首页
-</router-link>
+          <ul class="bs-points">
+            <li>实时队列监控与订单全链路追踪</li>
+            <li>YPay / VMQ 聚合支付与对账</li>
+            <li>系统通告与安全中心</li>
+          </ul>
+          <div class="bs-foot">仅限管理员访问 · 操作全程留痕</div>
         </div>
-      </div>
-      </div>
+
+        <div class="login-card">
+          <div class="lc-head">
+            <span class="eyebrow">管理员登录</span>
+            <h2 class="lc-title">登录控制台</h2>
+          </div>
+          <form @submit="doLogin">
+            <div class="field">
+              <label>用户名</label>
+              <input v-model="adminUser" placeholder="请输入管理员用户名" autocomplete="username" />
+            </div>
+            <div class="field">
+              <label>密码</label>
+              <input v-model="adminPass" type="password" placeholder="请输入密码" autocomplete="current-password" />
+            </div>
+            <button type="submit" class="btn btn-primary btn-lg btn-block">登录后台</button>
+            <div v-if="loginErr" class="login-err">{{ loginErr }}</div>
+          </form>
+          <div class="login-back">
+            <router-link to="/">&larr; 返回前台首页</router-link>
+          </div>
+        </div>
       </div>
     </div>
 
-    <!-- Admin Layout -->
+    <!-- 后台布局 -->
     <div v-else class="admin-layout">
-      <!-- Mobile sidebar overlay -->
+      <!-- 移动端遮罩 -->
       <div class="sidebar-overlay" :class="{ show: mobileSidebarOpen }" @click="mobileSidebarOpen = false"></div>
 
-      <!-- Sidebar -->
+      <!-- 侧栏导航 -->
       <aside class="sidebar" :class="{ collapsed: sidebarCollapsed, 'mobile-open': mobileSidebarOpen }">
         <div class="sidebar-brand">
           <router-link to="/admin" class="sb-logo">
@@ -266,14 +263,14 @@ useAdminStore().init({
         </div>
       </aside>
 
-      <!-- Main Content -->
+      <!-- 主内容区 -->
       <main class="main-content">
         <header class="content-topbar">
-          <div style="display:flex;align-items:center;gap:10px">
-            <button class="mobile-sidebar-toggle" @click="mobileSidebarOpen = !mobileSidebarOpen">
+          <div class="topbar-left">
+            <button class="mobile-sidebar-toggle" @click="mobileSidebarOpen = !mobileSidebarOpen" aria-label="打开菜单">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
             </button>
-            <h2>{{ ['queue', 'queue_school', 'queue_chaoxing'].includes(activeTab) ? '队列监控' : allSidebarItems.find(i => i.key === activeTab)?.label }}</h2>
+            <h2 class="topbar-title">{{ ['queue', 'queue_school', 'queue_chaoxing'].includes(activeTab) ? '队列监控' : allSidebarItems.find(i => i.key === activeTab)?.label }}</h2>
             <span v-if="activeTab === 'queue'" class="topbar-tag">全部</span>
             <span v-else-if="activeTab === 'queue_school'" class="topbar-tag">学校平台</span>
             <span v-else-if="activeTab === 'queue_chaoxing'" class="topbar-tag">学习通</span>
@@ -329,7 +326,7 @@ useAdminStore().init({
 </div>
       </main>
 
-      <!-- Mobile Bottom Nav -->
+      <!-- 移动端底部导航 -->
       <nav class="mobile-bottom-nav">
         <button :class="['mbn-item', { active: activeTab === 'overview' }]" @click="switchTab('overview')">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1"/></svg>
@@ -353,185 +350,175 @@ useAdminStore().init({
 </template>
 
 <style scoped>
-/* 原先为非 scoped 全局样式，会泄漏到全站且只在访问 /admin 后才注入
-   （导致首页/订单页在进过后台前后外观不一致）。
-   被外部依赖的类已上提到 styles/main.css，此处收敛为组件作用域。 */
+/* 外壳样式：公共类（login-screen / login-split / brand-side / sidebar-item /
+   content-body / mobile-bottom-nav 等）直接沿用 styles/main.css，
+   此处仅补齐其未覆盖的容器、顶栏与移动端形态。 */
 .admin-root { min-height: 100vh; }
 
-/* Login Screen */
-.login-screen {
-  min-height: 100vh; display: flex;
-  background: var(--c-bg);
+/* ==================== 登录分屏 ==================== */
+.login-card { width: 100%; }
+.lc-head { margin-bottom: var(--space-6); }
+.lc-title {
+  margin-top: var(--space-2);
+  font-size: var(--fs-title);
+  font-weight: 700;
+  letter-spacing: var(--tracking-title);
+  color: var(--c-text);
 }
-.login-split {
-  flex: 1; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
-}
-.brand-side {
-  background: #141417; color: #fff;
-  padding: 52px 60px;
-  display: flex; flex-direction: column;
-}
-.bs-logo { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
-.bs-mark {
-  width: 28px; height: 28px; border-radius: 8px; background: #fff; color: #141417;
-  display: inline-flex; align-items: center; justify-content: center;
-}
-.bs-copy { margin-top: 92px; }
-.bs-copy h2 { font-size: 34px; font-weight: 700; letter-spacing: -.025em; line-height: 1.2; }
-.bs-copy p { margin-top: 12px; font-size: 14px; line-height: 1.7; color: rgba(255,255,255,.6); max-width: 36ch; }
-.bs-points { list-style: none; margin: 36px 0 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
-.bs-points li { display: flex; align-items: center; gap: 12px; font-size: 13.5px; color: rgba(255,255,255,.78); }
-.bs-points li::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: rgba(255,255,255,.35); flex-shrink: 0; }
-.bs-foot { margin-top: auto; font-size: 12px; color: rgba(255,255,255,.38); }
-.form-side { display: flex; align-items: center; justify-content: center; padding: 40px 24px; }
-@media (max-width: 900px) {
-  .login-split { grid-template-columns: 1fr; }
-  .brand-side { display: none; }
-}
-.login-card {
-  background: var(--c-surface); border: 1px solid var(--c-border-light); border-radius: 20px; padding: 44px 40px;
-  width: 420px; max-width: 100%;
-  box-shadow: 0 8px 24px rgba(20, 20, 24, .06), 0 24px 56px rgba(20, 20, 24, .08);
-}
-.login-card h2, .login-card .lc-form-title { font-size: 20px; font-weight: 700; letter-spacing: -.015em; color: var(--c-text); }
-.login-desc { text-align: center; font-size: 13px; color: var(--c-text-muted); margin-bottom: 28px; }
-.login-back { text-align: center; margin-top: 20px; }
-.login-back a { font-size: 13px; color: var(--c-text-muted); text-decoration: none; }
-.login-back a:hover { color: var(--c-primary); }
+.login-card .field { margin-bottom: var(--space-4); }
+.login-card .field label { font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-secondary); }
+.login-card .btn-block { margin-top: var(--space-2); }
+.login-err { margin-top: var(--space-4); text-align: center; }
+.login-back { margin-top: var(--space-5); text-align: center; }
 
-.field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 16px; }
-.field label { font-size: 12.5px; font-weight: 600; color: var(--c-text-secondary); }
-.field input {
-  height: 44px; padding: 0 14px; border: 1.5px solid var(--c-border);
-  border-radius: 10px; background: var(--c-surface-2); color: var(--c-text);
-  font-size: 14px; outline: none; transition: all .15s;
-}
-.field input:focus { border-color: var(--c-primary); box-shadow: 0 0 0 3px var(--c-primary-bg); background: var(--c-surface); }
-.field input::placeholder { color: var(--c-text-muted); }
-.field-hint { font-size: 11px; color: var(--c-text-muted); margin-top: 2px; }
-.login-err { font-size: 13px; color: var(--c-danger); text-align: center; margin-top: 12px; }
-
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 20px; border: none; border-radius: 10px; font-weight: 600; font-size: 13.5px; cursor: pointer; transition: all .15s; white-space: nowrap; }
-.btn-primary { background: var(--c-primary); color: #fff; box-shadow: var(--shadow-primary); }
-.btn-primary:hover { background: var(--c-primary-hover); transform: translateY(-1px); box-shadow: var(--shadow-primary-lg); }
-.btn-primary:disabled { opacity: .55; cursor: not-allowed; transform: none; }
-.btn-ghost { background: transparent; color: var(--c-text-muted); padding: 6px 12px; }
-.btn-ghost:hover { color: var(--c-primary); background: var(--c-primary-bg); }
-.btn-lg { padding: 13px 28px; font-size: 15px; }
-.btn-block { width: 100%; }
-.btn-sm { padding: 5px 10px; font-size: 12px; }
-.btn-xs { padding: 4px 10px; font-size: 11.5px; border-radius: 6px; }
-.btn-success { background: var(--c-success); color: #fff; }
-.btn-success:hover { filter: brightness(1.1); }
-.btn-warn { background: var(--c-warning); color: #fff; }
-.btn-warn:hover { filter: brightness(1.1); }
-
-/* Layout */
+/* ==================== 布局骨架 ==================== */
 .admin-layout { display: flex; min-height: 100vh; }
-
-/* Mobile sidebar toggle - hidden on desktop */
 .mobile-sidebar-toggle { display: none; }
 
-/* Mobile bottom nav - hidden on desktop */
-.mobile-bottom-nav { display: none; }
-
-/* Sidebar */
+/* ==================== 侧栏 ==================== */
 .sidebar {
-  width: 220px; flex-shrink: 0; background: var(--c-surface); border-right: 1px solid var(--c-border-light);
-  display: flex; flex-direction: column; position: fixed; top: 0; left: 0;
-  bottom: 0; z-index: 50; transition: width .2s ease;
+  position: fixed; top: 0; left: 0; bottom: 0; z-index: 50;
+  width: var(--sidebar-w);
+  flex-shrink: 0;
+  display: flex; flex-direction: column;
+  background: var(--c-surface);
+  border-right: 1px solid var(--c-border);
   overflow: hidden;
+  transition: width var(--t) var(--ease);
 }
-.sidebar.collapsed { width: 60px; }
+.sidebar.collapsed { width: 64px; }
 
 .sidebar-brand {
-  padding: 20px 16px; border-bottom: 1px solid rgba(255,255,255,.08);
+  padding: var(--space-5) var(--space-4);
+  border-bottom: 1px solid var(--c-border-light);
 }
 .sb-logo {
-  display: flex; align-items: center; gap: 10px; color: var(--c-text);
-  text-decoration: none; font-size: 16px; font-weight: 700; white-space: nowrap;
+  display: flex; align-items: center; gap: 10px;
+  color: var(--c-text);
+  font-size: var(--fs-md); font-weight: 700; letter-spacing: var(--tracking-title);
+  white-space: nowrap;
 }
 .sb-logo svg { color: var(--c-primary); flex-shrink: 0; }
-.sb-logo:hover { text-decoration: none; }
 
 .sidebar-nav {
-  flex: 1; padding: 12px 8px; display: flex; flex-direction: column; gap: 2px;
-  overflow-y: auto; scrollbar-width: thin; scrollbar-color: #d4d4d8 transparent;
+  flex: 1;
+  display: flex; flex-direction: column; gap: 2px;
+  padding: var(--space-3) var(--space-2);
+  overflow-y: auto;
 }
-.sidebar-nav::-webkit-scrollbar { width: 5px; }
-.sidebar-nav::-webkit-scrollbar-track { background: transparent; }
-.sidebar-nav::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 3px; }
-.sidebar-nav::-webkit-scrollbar-thumb:hover { background: #bdbdc2; }
 .sidebar-group-label {
-  font-size: 11px; font-weight: 600; color: var(--c-text-muted); text-transform: uppercase;
-  letter-spacing: .5px; padding: 12px 12px 4px; white-space: nowrap;
+  padding: var(--space-4) var(--space-3) var(--space-1);
+  font-size: var(--fs-eyebrow); font-weight: 600;
+  letter-spacing: var(--ls-eyebrow); text-transform: uppercase;
+  color: var(--c-text-muted);
+  white-space: nowrap;
 }
-.sidebar-group-label:first-child { padding-top: 4px; }
+.sidebar-group-label:first-child { padding-top: var(--space-1); }
 
+/* main.css 的 .sidebar-item 未重置浏览器控件默认样式，这里补齐 button / a */
 .sidebar-item {
-  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
-  border-radius: 8px; background: transparent; border: none;
-  color: var(--c-text-muted); font-size: 13.5px; font-weight: 500;
-  cursor: pointer; transition: all .15s; width: 100%; text-align: left;
-  text-decoration: none; white-space: nowrap;
+  width: 100%;
+  background: transparent;
+  border: none;
+  font-family: inherit;
+  text-align: left;
+  text-decoration: none;
+  white-space: nowrap;
 }
-.sidebar-item:hover { background: var(--c-surface-2); color: var(--c-text); text-decoration: none; }
-.sidebar-item.active { background: var(--c-primary); color: #fff; box-shadow: none; }
-.sidebar-item.active .sidebar-item-icon { color: #fff; }
 .sidebar-item-icon { flex-shrink: 0; }
-
-.sidebar-parent { justify-content: space-between; }
-.sidebar-expand-icon { flex-shrink: 0; transition: transform .2s; margin-left: auto; }
+/* 覆盖全局 a:hover 的透明度，链接型侧栏项与按钮观感一致 */
+.sidebar-item:hover,
+.sb-logo:hover { opacity: 1; }
 .sidebar-expand-icon.expanded { transform: rotate(180deg); }
-.sidebar-sub-items { display: flex; flex-direction: column; gap: 1px; padding-left: 8px; }
-.sidebar-sub-item { padding: 7px 12px 7px 28px; font-size: 13px; }
-.sidebar-sub-item.active { background: var(--c-primary-bg); color: var(--c-primary); }
-.sidebar-sub-item.active .sidebar-item-icon { color: var(--c-primary); }
+
+/* 子项用左侧细线表达层级 */
+.sidebar-sub-items {
+  display: flex; flex-direction: column; gap: 1px;
+  margin: 2px 0 2px var(--space-4);
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--c-border-light);
+}
+.sidebar-sub-item {
+  width: 100%;
+  padding-left: var(--space-4);
+  background: transparent;
+  border: none;
+  font-family: inherit;
+  text-align: left;
+}
 
 .sidebar-footer {
-  padding: 8px; border-top: 1px solid rgba(255,255,255,.08);
   display: flex; flex-direction: column; gap: 2px;
+  padding: var(--space-2);
+  border-top: 1px solid var(--c-border-light);
 }
-.logout-item:hover { color: #fca5a5; background: rgba(239,68,68,.1); }
+.logout-item:hover { color: var(--c-danger); background: var(--c-danger-bg); }
 
-/* Main Content */
+.sidebar.collapsed .sb-logo,
+.sidebar.collapsed .sidebar-item { justify-content: center; }
+
+.sidebar-overlay { display: none; }
+
+/* ==================== 主内容 ==================== */
 .main-content {
-  flex: 1; margin-left: 220px; min-height: 100vh;
-  /* flex 子项默认 min-width:auto，会被宽表格撑大，导致整页出现横向滚动；
-     置 0 后由 .table-wrap 的 overflow-x:auto 接管横向滚动 */
-  min-width: 0;
-  display: flex; flex-direction: column; transition: margin-left .2s ease;
+  display: flex; flex-direction: column;
+  flex: 1; min-width: 0; min-height: 100vh;
+  margin-left: var(--sidebar-w);
+  transition: margin-left var(--t) var(--ease);
 }
-.sidebar.collapsed ~ .main-content { margin-left: 60px; }
+.sidebar.collapsed ~ .main-content { margin-left: 64px; }
 
 .content-topbar {
-  position: sticky; top: 0; z-index: 40; background: var(--c-surface);
-  border-bottom: 1px solid var(--c-border);
-  padding: 0 28px; height: 56px; display: flex; align-items: center;
-  justify-content: space-between;
+  position: sticky; top: 0; z-index: 40;
+  height: var(--topbar-h);
+  margin-bottom: 0;
+  padding: 0 var(--space-6);
+  flex-wrap: nowrap;
+  background: color-mix(in srgb, var(--c-surface) 88%, transparent);
+  backdrop-filter: saturate(180%) blur(14px);
+  -webkit-backdrop-filter: saturate(180%) blur(14px);
+  border-bottom: 1px solid var(--c-border-light);
 }
-.content-topbar h2 { font-size: 17px; font-weight: 700; color: var(--c-text); }
-.topbar-tag { font-size: 11px; font-weight: 600; padding: 2px 10px; border-radius: 12px; background: var(--c-border-light); color: var(--c-text-muted); }
-.topbar-tag-school { background: var(--c-success-bg); color: var(--c-success); }
-.topbar-tag-chaoxing { background: var(--c-primary-bg); color: var(--c-primary); }
-.topbar-right { display: flex; align-items: center; gap: 8px; }
+.topbar-left { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.topbar-title {
+  font-size: var(--fs-lg); font-weight: 700; letter-spacing: var(--tracking-title);
+  color: var(--c-text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.topbar-tag {
+  flex-shrink: 0;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--c-surface-3);
+  color: var(--c-text-muted);
+  font-size: var(--fs-xs); font-weight: 600;
+}
+.topbar-right { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
 .theme-toggle-btn {
   display: flex; align-items: center; justify-content: center;
   width: 34px; height: 34px; padding: 0;
-  background: none; border: none; cursor: pointer;
-  border-radius: 10px;
-  color: var(--c-text-secondary);
-  transition: background-color .2s ease, color .2s ease, transform .2s ease;
+  border: none; border-radius: var(--radius-sm);
+  background: transparent; color: var(--c-text-secondary);
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
 }
-.theme-toggle-btn:hover { background: var(--c-surface-3); color: var(--c-text); }
+.theme-toggle-btn:hover { background: var(--c-surface-2); color: var(--c-text); }
 .theme-toggle-btn:active { transform: scale(.94); }
-.admin-badge {
-  padding: 3px 12px; border-radius: 20px; font-size: 11.5px; font-weight: 600;
-  background: var(--c-primary-bg);
-  color: var(--c-primary);
-}
 
-.content-body { flex: 1; padding: 24px 28px 40px; }
+/* ==================== 移动端底部导航 ==================== */
+.mobile-bottom-nav { display: none; }
+.mbn-item {
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 6px 0;
+  border: none; background: transparent;
+  font-family: inherit;
+  font-size: var(--fs-eyebrow); font-weight: 600;
+  color: var(--c-text-muted);
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease);
+}
+.mbn-item.active { color: var(--c-primary); }
 
 /* KPI Cards */
 .overview-content { display: flex; flex-direction: column; gap: 18px; }
@@ -1468,49 +1455,46 @@ useAdminStore().init({
   .chart-area { height: 120px; }
   .mt-row { grid-template-columns: 1fr 1fr 1fr; }
 
-  /* Sidebar: hidden by default, overlay when open */
+  /* 侧栏：默认隐藏，作为抽屉滑入 */
   .admin-layout { flex-direction: column; }
   .sidebar {
-    position: fixed;
-    left: 0; top: 0; bottom: 0;
-    width: 260px;
+    width: 264px;
     transform: translateX(-100%);
-    transition: transform .25s ease;
-    z-index: 50;
+    transition: transform var(--t) var(--ease);
   }
+  .sidebar.collapsed { width: 264px; transform: translateX(-100%); }
   .sidebar.mobile-open { transform: translateX(0); }
   .sidebar-overlay {
     display: none;
     position: fixed;
     inset: 0;
-    background: rgba(22,22,26,.42);
     z-index: 45;
+    background: rgba(16, 14, 10, .45);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
   }
   .sidebar-overlay.show { display: block; }
-  .sidebar .sidebar-item-label { display: inline; }
-  .sidebar .sb-logo span { display: inline; }
-  .sidebar.collapsed { width: 260px; transform: translateX(-100%); }
 
   .main-content { margin-left: 0; width: 100%; }
   .sidebar.collapsed ~ .main-content { margin-left: 0; }
 
-  /* Mobile sidebar toggle button */
+  /* 移动端菜单按钮 */
   .mobile-sidebar-toggle {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 40px; height: 40px;
-    background: var(--c-primary);
-    border: none;
-    border-radius: 10px;
-    cursor: pointer;
+    width: 38px; height: 38px;
     flex-shrink: 0;
-    color: #fff;
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius-sm);
+    background: var(--c-surface);
+    color: var(--c-text-secondary);
+    cursor: pointer;
   }
 
-  .content-topbar { padding: 0 12px; height: 48px; }
-  .content-topbar h2 { font-size: 14px; }
-  .content-body { padding: 12px 12px 80px; }
+  .content-topbar { height: 52px; padding: 0 var(--space-4); }
+  .topbar-title { font-size: var(--fs-md); }
+  .content-body { padding: var(--space-4) var(--space-4) calc(var(--space-16) + env(safe-area-inset-bottom)); }
 
   .app-config-layout { grid-template-columns: 1fr; }
   .app-qrcode-img { width: 180px; height: 180px; }
@@ -1524,7 +1508,8 @@ useAdminStore().init({
   .data-table { font-size: 12px; }
   .data-table th, .data-table td { padding: 8px; font-size: 11px; }
 
-  /* Mobile Bottom Nav - removed, sidebar handles navigation */
+  /* 移动端底部导航 */
+  .mobile-bottom-nav { display: flex; }
 
   .pagination { flex-wrap: wrap; gap: 6px; }
   .pagination button { padding: 5px 10px; font-size: 11px; }

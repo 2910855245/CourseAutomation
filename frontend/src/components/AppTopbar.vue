@@ -25,63 +25,49 @@ function closeMobileMenu() {
 
 const store = useAppStore()
 const isAdmin = computed(() => store.isAdminLoggedIn)
-const primaryRole = computed(() => {
-  if (isAdmin.value) return 'admin'
-  return ''
-})
-const roleBadge = computed(() => {
-  if (isAdmin.value) return '管理员'
-  return ''
-})
+const roleBadge = computed(() => (isAdmin.value ? '管理员' : ''))
 </script>
 
 <template>
   <header class="topbar">
     <div class="topbar-inner">
+      <!-- 标识：方章 + 字标，比纯文字更像一个"产品"而非一个页面 -->
       <router-link to="/" class="logo">
-        {{ title }}
+        <span class="logo-mark">F</span>
+        <span class="logo-text">{{ title }}</span>
       </router-link>
+
       <nav class="desktop-nav">
-        <router-link to="/" exact-active-class="nav-active">
-首页
-</router-link>
-        <router-link to="/orders" active-class="nav-active">
-我的订单
-</router-link>
-        <router-link v-if="isAdmin" to="/admin" active-class="nav-active">
-管理后台
-</router-link>
-        <span v-if="showRoleBadge && roleBadge" class="topbar-role-badge">{{ roleBadge }}</span>
+        <router-link to="/" exact-active-class="nav-active">首页</router-link>
+        <router-link to="/orders" active-class="nav-active">我的订单</router-link>
+        <router-link v-if="isAdmin" to="/admin" active-class="nav-active">管理后台</router-link>
         <a v-if="showLogout" href="#" class="logout-link" @click.prevent="emit('logout')">退出</a>
       </nav>
+
       <div class="topbar-actions">
+        <span v-if="showRoleBadge && roleBadge" class="topbar-role-badge">{{ roleBadge }}</span>
         <button
           class="theme-toggle"
           :title="store.isDark ? '切换到浅色' : '切换到暗色'"
           :aria-label="store.isDark ? '切换到浅色' : '切换到暗色'"
           @click="store.toggleTheme()"
         >
-          <svg v-if="store.isDark" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></svg>
-          <svg v-else width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" /></svg>
+          <svg v-if="store.isDark" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></svg>
+          <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" /></svg>
         </button>
         <button class="hamburger" :class="{ open: mobileMenuOpen }" aria-label="菜单" @click="toggleMobileMenu">
           <span></span><span></span><span></span>
         </button>
       </div>
     </div>
+
     <Transition name="slide-down">
-      <div v-if="mobileMenuOpen" class="mobile-nav" @click="closeMobileMenu">
-        <router-link to="/" class="mn-item">
-首页
-</router-link>
-        <router-link to="/orders" class="mn-item" @click="closeMobileMenu()">
-我的订单
-</router-link>
-        <router-link v-if="isAdmin" to="/admin" class="mn-item">
-管理后台
-</router-link>
-        <span v-if="showRoleBadge && roleBadge" class="mn-badge">{{ roleBadge }}</span>
+      <div v-if="mobileMenuOpen" class="mobile-nav">
+        <router-link to="/" class="mn-item" @click="closeMobileMenu()">首页</router-link>
+        <router-link to="/orders" class="mn-item" @click="closeMobileMenu()">我的订单</router-link>
+        <router-link v-if="isAdmin" to="/admin" class="mn-item" @click="closeMobileMenu()">管理后台</router-link>
         <a v-if="showLogout" href="#" class="mn-item logout-link" @click.prevent="emit('logout'); closeMobileMenu()">退出</a>
+        <span v-if="showRoleBadge && roleBadge" class="mn-badge">{{ roleBadge }}</span>
       </div>
     </Transition>
   </header>
@@ -89,121 +75,179 @@ const roleBadge = computed(() => {
 
 <style scoped>
 .topbar {
-  position: sticky; top: 0; z-index: 100;
-  background: var(--c-surface);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: color-mix(in srgb, var(--c-bg) 80%, transparent);
+  backdrop-filter: saturate(180%) blur(14px);
+  -webkit-backdrop-filter: saturate(180%) blur(14px);
   border-bottom: 1px solid var(--c-border-light);
 }
 .topbar-inner {
-  max-width: 820px; margin: 0 auto; height: 52px;
-  display: flex; align-items: center; justify-content: space-between; padding: 0 20px;
+  max-width: 960px;
+  margin: 0 auto;
+  height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: 0 var(--space-6);
 }
-.logo {
-  font-size: 14px; font-weight: 600;
-  color: var(--c-text); text-decoration: none;
-  transition: opacity .2s ease;
-}
-.logo:hover { opacity: .6; text-decoration: none; }
 
-.desktop-nav { display: flex; gap: 6px; align-items: center; }
+/* ---------- 标识 ---------- */
+.logo { display: inline-flex; align-items: center; gap: 9px; text-decoration: none; }
+.logo:hover { opacity: 1; text-decoration: none; }
+.logo-mark {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-content: center;
+  border-radius: 8px;
+  background: var(--c-gradient);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -.02em;
+  box-shadow: var(--shadow-primary);
+}
+.logo-text {
+  font-size: var(--fs-md);
+  font-weight: 700;
+  letter-spacing: var(--tracking-title);
+  color: var(--c-text);
+}
+
+/* ---------- 导航 ---------- */
+.desktop-nav { display: flex; align-items: center; gap: var(--space-1); }
 .desktop-nav a {
   position: relative;
-  font-size: 13px; font-weight: 500; color: var(--c-text-secondary);
+  padding: 7px 12px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--c-text-secondary);
   text-decoration: none;
-  padding: 6px 10px;
-  transition: color .2s ease;
+  transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
 }
 .desktop-nav a:hover {
   color: var(--c-text);
-  text-decoration: none;
+  background: var(--c-surface-2);
   opacity: 1;
+  text-decoration: none;
 }
-.desktop-nav a.nav-active {
-  color: var(--c-primary);
-}
+.desktop-nav a.nav-active { color: var(--c-primary); font-weight: 600; }
 .desktop-nav a.nav-active::after {
   content: '';
-  position: absolute; left: 10px; right: 10px; bottom: 0;
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 1px;
   height: 2px;
-  border-radius: 1px;
+  border-radius: 2px;
   background: var(--c-primary);
 }
 .logout-link { color: var(--c-danger) !important; }
+
+/* ---------- 右侧动作 ---------- */
+.topbar-actions { display: flex; align-items: center; gap: var(--space-2); }
+
 .topbar-role-badge {
-  font-size: 11px; font-weight: 600; padding: 4px 11px; border-radius: var(--radius-pill);
-  letter-spacing: .04em; white-space: nowrap;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
   background: var(--c-primary-bg);
   color: var(--c-primary);
-  border: 1px solid var(--c-border-light);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: .02em;
+  white-space: nowrap;
 }
-
-.topbar-actions { display: flex; align-items: center; gap: 2px; }
 
 .theme-toggle {
-  display: flex; align-items: center; justify-content: center;
-  width: 36px; height: 36px; padding: 0;
-  background: none; border: none; cursor: pointer;
-  border-radius: 10px;
+  display: grid;
+  place-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--c-border-light);
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--c-text-secondary);
-  transition: background-color .2s var(--ease), color .2s var(--ease), transform .2s var(--ease);
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+              border-color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
 }
-.theme-toggle:hover { background: var(--c-surface-3); color: var(--c-text); }
+.theme-toggle:hover { background: var(--c-surface); color: var(--c-text); border-color: var(--c-border); }
 .theme-toggle:active { transform: scale(.94); }
 
+/* ---------- 汉堡菜单 ---------- */
 .hamburger {
   display: none;
-  background: none; border: none; cursor: pointer;
-  width: 40px; height: 40px; position: relative;
-  flex-direction: column; justify-content: center; align-items: center; gap: 5px;
-  padding: 6px; border-radius: 10px;
-  transition: background-color .2s cubic-bezier(.32,.72,.35,1);
+  width: 36px;
+  height: 36px;
+  padding: 7px;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--c-border-light);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
 }
-.hamburger:active { background: var(--c-surface-3); transform: scale(.96); }
 .hamburger span {
-  display: block; width: 20px; height: 1.5px;
-  background: var(--c-text); border-radius: 2px;
-  transition: all .28s cubic-bezier(.32,.72,.35,1);
+  display: block;
+  width: 16px;
+  height: 1.5px;
+  border-radius: 2px;
+  background: var(--c-text);
+  transition: transform var(--t) var(--ease), opacity var(--t) var(--ease);
 }
-.hamburger.open span:nth-child(1) { transform: translateY(6.5px) rotate(45deg); }
+.hamburger.open span:nth-child(1) { transform: translateY(5.5px) rotate(45deg); }
 .hamburger.open span:nth-child(2) { opacity: 0; }
-.hamburger.open span:nth-child(3) { transform: translateY(-6.5px) rotate(-45deg); }
+.hamburger.open span:nth-child(3) { transform: translateY(-5.5px) rotate(-45deg); }
 
+/* ---------- 移动端菜单 ---------- */
 .mobile-nav {
   display: none;
   flex-direction: column;
-  padding: 8px 16px 16px;
+  padding: var(--space-2) var(--space-4) var(--space-4);
   background: var(--c-surface);
   border-bottom: 1px solid var(--c-border-light);
+  box-shadow: var(--shadow-sm);
 }
 .mn-item {
-  display: block;
-  padding: 12px 16px;
-  font-size: 14px; font-weight: 500;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  font-size: var(--fs-base);
+  font-weight: 500;
   color: var(--c-text-secondary);
   text-decoration: none;
-  border-radius: 12px;
-  transition: all .2s cubic-bezier(.32,.72,.35,1);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 .mn-item:hover, .mn-item.router-link-active {
   color: var(--c-text);
   background: var(--c-surface-2);
   text-decoration: none;
+  opacity: 1;
 }
 .mn-badge {
-  display: inline-block;
-  margin: 8px 16px;
-  font-size: 11px; font-weight: 600;
-  padding: 4px 11px; border-radius: var(--radius-pill);
+  align-self: flex-start;
+  margin: var(--space-2) 14px 0;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
   background: var(--c-primary-bg);
   color: var(--c-primary);
-  border: 1px solid var(--c-border-light);
+  font-size: var(--fs-xs);
+  font-weight: 600;
 }
 
 .slide-down-enter-active, .slide-down-leave-active {
-  transition: opacity .28s cubic-bezier(.32,.72,.35,1), transform .28s cubic-bezier(.32,.72,.35,1);
+  transition: opacity var(--t) var(--ease), transform var(--t) var(--ease-out);
 }
 .slide-down-enter-from, .slide-down-leave-to { opacity: 0; transform: translateY(-8px); }
 
 @media (max-width: 768px) {
+  .topbar-inner { padding: 0 var(--space-4); }
   .desktop-nav { display: none; }
   .hamburger { display: flex; }
   .mobile-nav { display: flex; }

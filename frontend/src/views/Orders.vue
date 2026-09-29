@@ -359,28 +359,36 @@ function closeDetail() { detailOrder.value = null }
     <AppTopbar :show-role-badge="true" />
 
     <div class="content-wrapper">
-      <div class="page-header">
-        <div class="ph-left">
-          <h1>我的订单</h1>
-          <div class="ph-sub">
+      <!-- 页头：眉标 + 标题 + 实时状态 -->
+      <header class="page-head anim-rise">
+        <span class="eyebrow">订单中心</span>
+        <div class="ph-row">
+          <h1 class="ph-title">我的订单</h1>
+          <span class="ph-live">
             <span class="live-dot"></span>
-            <span>订单状态实时更新</span>
-          </div>
+            订单状态实时更新
+          </span>
         </div>
-        <button v-if="orders.length" class="btn-clear-history" @click="clearHistory">
-          清空历史
-        </button>
+      </header>
+
+      <!-- 概览 -->
+      <div v-if="orders.length" class="stat-row anim-rise">
+        <div class="stat">
+          <span class="stat-val mono">{{ orders.length }}</span>
+          <span class="stat-label">全部订单</span>
+        </div>
+        <div class="stat">
+          <span class="stat-val mono">{{ activeCount }}</span>
+          <span class="stat-label">进行中</span>
+        </div>
+        <div class="stat">
+          <span class="stat-val mono">{{ doneCount }}</span>
+          <span class="stat-label">已完成</span>
+        </div>
       </div>
 
-      <div v-if="orders.length" class="order-stats">
-        <div class="os-item"><b>{{ orders.length }}</b><span>全部订单</span></div>
-        <div class="os-divider"></div>
-        <div class="os-item"><b>{{ activeCount }}</b><span>进行中</span></div>
-        <div class="os-divider"></div>
-        <div class="os-item"><b>{{ doneCount }}</b><span>已完成</span></div>
-      </div>
-
-      <div v-if="orders.length || searchQuery" class="search-bar">
+      <!-- 搜索 -->
+      <div v-if="orders.length || searchQuery" class="search-bar anim-rise">
         <input
           v-model="searchQuery"
           type="text"
@@ -388,109 +396,113 @@ function closeDetail() { detailOrder.value = null }
           class="search-input"
           @keyup.enter="onSearch"
         />
-        <button class="btn btn-primary" @click="onSearch">
-          搜索
-        </button>
+        <button class="btn btn-primary" @click="onSearch">搜索</button>
       </div>
 
-      <div v-if="orders.length || statusFilter" class="filter-bar">
-        <button :class="['chip', { active: statusFilter === '' }]" @click="statusFilter = ''; load()">
-          全部
-        </button>
-        <button :class="['chip', { active: statusFilter === 'pending' }]" @click="statusFilter = 'pending'; load()">
-          待处理
-        </button>
-        <button :class="['chip', { active: statusFilter === 'running' }]" @click="statusFilter = 'running'; load()">
-          执行中
-        </button>
-        <button :class="['chip', { active: statusFilter === 'completed' }]" @click="statusFilter = 'completed'; load()">
-          已完成
-        </button>
-        <button :class="['chip', { active: statusFilter === 'failed' }]" @click="statusFilter = 'failed'; load()">
-          失败
-        </button>
-        <button :class="['chip', { active: statusFilter === 'waiting' }]" @click="statusFilter = 'waiting'; load()">
-          等待明天
-        </button>
+      <!-- 筛选 + 结果计数 + 清空历史：左右对称 -->
+      <div v-if="orders.length || statusFilter" class="section-actions filter-section anim-rise">
+        <div class="filter-bar">
+          <button :class="['chip', { active: statusFilter === '' }]" @click="statusFilter = ''; load()">
+            全部
+          </button>
+          <button :class="['chip', { active: statusFilter === 'pending' }]" @click="statusFilter = 'pending'; load()">
+            待处理
+          </button>
+          <button :class="['chip', { active: statusFilter === 'running' }]" @click="statusFilter = 'running'; load()">
+            执行中
+          </button>
+          <button :class="['chip', { active: statusFilter === 'completed' }]" @click="statusFilter = 'completed'; load()">
+            已完成
+          </button>
+          <button :class="['chip', { active: statusFilter === 'failed' }]" @click="statusFilter = 'failed'; load()">
+            失败
+          </button>
+          <button :class="['chip', { active: statusFilter === 'waiting' }]" @click="statusFilter = 'waiting'; load()">
+            等待明天
+          </button>
+        </div>
+        <div class="filter-right">
+          <span class="result-count"><span class="mono">{{ totalOrders }}</span> 条结果</span>
+          <button v-if="orders.length" class="btn btn-ghost btn-sm" @click="clearHistory">清空历史</button>
+        </div>
       </div>
 
-      <div v-if="!orders.length" class="empty">
+      <!-- 空状态 -->
+      <div v-if="!orders.length" class="empty anim-rise">
         <div class="empty-icon">
-          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
-            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/>
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
           </svg>
         </div>
         <p class="empty-title">暂无订单</p>
-        <p class="empty-sub">提交任务后，可在这里查看进度</p>
-        <router-link to="/" class="btn btn-primary">
-          去下单
-        </router-link>
+        <p class="empty-sub">提交任务后，可在这里实时查看处理进度</p>
+        <router-link to="/" class="btn btn-primary">去下单</router-link>
       </div>
 
+      <!-- 订单列表：三段式卡片 -->
       <div v-else class="order-list">
-        <div
+        <article
           v-for="(o, i) in filteredOrders"
           :key="o.order_id"
-          class="order-card"
+          class="order-card anim-rise"
           :class="{
-            completed: o.status === 'completed',
-            failed: o.status === 'failed',
-            cancelled: o.status === 'cancelled',
+            'is-completed': o.status === 'completed',
+            'is-failed': o.status === 'failed',
+            'is-cancelled': o.status === 'cancelled',
           }"
           :style="{ animationDelay: Math.min(i, 8) * 45 + 'ms' }"
           @click="showDetail(o)"
         >
-          <div class="oc-top">
-            <div class="oc-left">
-              <span class="oc-id">{{ o.order_id }}</span>
-              <span class="oc-status" :class="o.status">{{ statusLabel(o.status) }}</span>
-              <span v-if="changedIds.has(o.order_id)" class="oc-changed">已更新</span>
+          <!-- 顶部：订单号 + 状态 -->
+          <header class="oc-head">
+            <div class="oc-head-left">
+              <span class="oc-id code-tag mono">{{ o.order_id }}</span>
+              <span v-if="changedIds.has(o.order_id)" class="badge">已更新</span>
             </div>
-            <div v-if="o.status === 'pending'" class="oc-actions">
-              <a
-                v-if="!o.paid"
-                class="oc-link pay-link"
-                @click.stop="repay([o.order_id])"
-              >去支付</a>
-              <a
-                class="oc-link cancel-link"
-                @click.stop="cancel(o.order_id)"
-              >取消</a>
+            <span class="status-tag" :class="statusClass[o.status] || 'primary'">{{ statusLabel(o.status) }}</span>
+          </header>
+
+          <!-- 中部：字段组 -->
+          <div class="oc-fields">
+            <div class="oc-field">
+              <span class="ocf-l">平台</span>
+              <span class="ocf-v">{{ getPlatformName(o.website_id) }}</span>
             </div>
-          </div>
-          <div class="oc-info">
-            <div class="oci">
-              <span class="oci-l">平台</span>
-              <span class="oci-v">{{ getPlatformName(o.website_id) }}</span>
+            <div class="oc-field">
+              <span class="ocf-l">类型</span>
+              <span class="ocf-v">{{ taskTypeNames[o.task_type] || o.task_type }}</span>
             </div>
-            <div class="oci">
-              <span class="oci-l">类型</span>
-              <span class="oci-v">{{ taskTypeNames[o.task_type] || o.task_type }}</span>
+            <div v-if="o.website_id !== 4" class="oc-field">
+              <span class="ocf-l">节奏</span>
+              <span class="ocf-v">{{ speedModeLabel(o.speed_mode) }}</span>
             </div>
-            <div v-if="o.website_id !== 4" class="oci">
-              <span class="oci-l">节奏</span>
-              <span class="oci-v">{{ speedModeLabel(o.speed_mode) }}</span>
-            </div>
-            <div class="oci">
-              <span class="oci-l">金额</span>
-              <span class="oci-v price">¥{{ o.price.toFixed(2) }}</span>
-            </div>
-            <div class="oci">
-              <span class="oci-l">创建</span>
-              <span class="oci-v">{{ fmtTime(o.created_at) }}</span>
-            </div>
-            <div class="oci">
-              <span class="oci-l">更新</span>
-              <span class="oci-v">{{ fmtTime(o.updated_at || '') }}</span>
+            <div class="oc-field">
+              <span class="ocf-l">金额</span>
+              <span class="ocf-v amount mono">¥{{ o.price.toFixed(2) }}</span>
             </div>
           </div>
+
+          <!-- 进行中：进度条 -->
           <div v-if="activeStatuses.includes(o.status) && pct(o) > 0" class="oc-progress">
             <div class="ocp-bar">
               <div class="ocp-fill" :style="{ width: pct(o) + '%' }"></div>
             </div>
-            <span class="ocp-pct">{{ pct(o) }}%</span>
+            <span class="ocp-pct mono">{{ pct(o) }}%</span>
           </div>
-        </div>
+
+          <!-- 底部：时间 + 待处理操作 -->
+          <footer class="oc-foot">
+            <div class="oc-times">
+              <span class="oct"><em>创建</em><span class="mono">{{ fmtTime(o.created_at) }}</span></span>
+              <span class="oct"><em>更新</em><span class="mono">{{ fmtTime(o.updated_at || '') }}</span></span>
+            </div>
+            <div v-if="o.status === 'pending'" class="oc-actions">
+              <button v-if="!o.paid" type="button" class="btn btn-primary btn-xs" @click.stop="repay([o.order_id])">去支付</button>
+              <button type="button" class="btn btn-ghost btn-xs" @click.stop="cancel(o.order_id)">取消</button>
+            </div>
+          </footer>
+        </article>
       </div>
 
       <div v-if="totalPages > 1" class="pagination">
@@ -503,7 +515,7 @@ function closeDetail() { detailOrder.value = null }
         <button :disabled="currentPage >= totalPages" @click="goPage(currentPage + 1)">
           下一页
         </button>
-        <span class="pg-info">共 {{ totalOrders }} 条</span>
+        <span class="pg-info">共 <span class="mono">{{ totalOrders }}</span> 条</span>
       </div>
     </div>
 
@@ -511,368 +523,617 @@ function closeDetail() { detailOrder.value = null }
       <span>Fuk 文理网课</span>
     </footer>
 
-    <div v-if="detailOrder" class="modal-overlay" @click.self="closeDetail">
-      <div class="detail-modal">
-        <div class="dm-header">
-          <h2>订单详情</h2>
-          <button class="dm-close" @click="closeDetail">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
+    <div v-if="detailOrder" class="modal-overlay show" @click.self="closeDetail">
+      <div class="modal-box detail-modal">
+        <div class="modal-header">
+          <span>订单详情</span>
+          <button class="modal-close" aria-label="关闭" @click="closeDetail">&times;</button>
         </div>
-        <div class="dm-body">
-          <div class="dm-row">
-            <span class="dm-label">订单编号</span>
-            <span class="dm-value mono">{{ detailOrder.order_id }}</span>
+        <div class="modal-body">
+          <div class="dm-grid">
+            <div class="dm-row">
+              <span class="dm-label">订单编号</span>
+              <span class="dm-value mono">{{ detailOrder.order_id }}</span>
+            </div>
+            <div class="dm-row">
+              <span class="dm-label">学号</span>
+              <span class="dm-value">{{ detailOrder.username }}</span>
+            </div>
+            <div class="dm-row">
+              <span class="dm-label">平台</span>
+              <span class="dm-value">{{ getPlatformName(detailOrder.website_id) }}</span>
+            </div>
+            <div class="dm-row">
+              <span class="dm-label">任务类型</span>
+              <span class="dm-value">{{ taskTypeNames[detailOrder.task_type] || detailOrder.task_type }}</span>
+            </div>
+            <div v-if="detailOrder.website_id !== 4" class="dm-row">
+              <span class="dm-label">刷课节奏</span>
+              <span class="dm-value">{{ speedModeLabel(detailOrder.speed_mode) }}</span>
+            </div>
+            <div class="dm-row">
+              <span class="dm-label">课程数量</span>
+              <span class="dm-value"><span class="mono">{{ detailOrder.course_ids?.length || 0 }}</span> 门</span>
+            </div>
+            <div class="dm-row">
+              <span class="dm-label">视频数量</span>
+              <span class="dm-value"><span class="mono">{{ detailOrder.video_count }}</span> 个</span>
+            </div>
+            <div class="dm-row">
+              <span class="dm-label">订单金额</span>
+              <span class="dm-value money mono">{{ fmtMoney(detailOrder.price) }}</span>
+            </div>
+            <div class="dm-row">
+              <span class="dm-label">支付状态</span>
+              <span class="dm-value">
+                <span class="status-tag" :class="detailOrder.paid ? 'ok' : 'warn'">{{ detailOrder.paid ? '已支付' : '未支付' }}</span>
+              </span>
+            </div>
+            <div class="dm-row">
+              <span class="dm-label">当前状态</span>
+              <span class="dm-value">
+                <span class="status-tag" :class="statusClass[detailOrder.status] || 'muted'">{{ statusLabel(detailOrder.status) }}</span>
+              </span>
+            </div>
+            <div class="dm-row">
+              <span class="dm-label">创建时间</span>
+              <span class="dm-value mono">{{ fmtDate(detailOrder.created_at) }}</span>
+            </div>
+            <div v-if="detailOrder.accepted_at" class="dm-row">
+              <span class="dm-label">接单时间</span>
+              <span class="dm-value mono">{{ fmtDate(detailOrder.accepted_at) }}</span>
+            </div>
+            <div v-if="detailOrder.started_at" class="dm-row">
+              <span class="dm-label">开始时间</span>
+              <span class="dm-value mono">{{ fmtDate(detailOrder.started_at) }}</span>
+            </div>
+            <div v-if="detailOrder.updated_at" class="dm-row">
+              <span class="dm-label">更新时间</span>
+              <span class="dm-value mono">{{ fmtDate(detailOrder.updated_at) }}</span>
+            </div>
+            <div v-if="detailOrder.finished_at" class="dm-row">
+              <span class="dm-label">完成时间</span>
+              <span class="dm-value mono">{{ fmtDate(detailOrder.finished_at) }}</span>
+            </div>
+            <div v-if="detailOrder.status === 'failed' && detailOrder.admin_note" class="dm-row">
+              <span class="dm-label">失败原因</span>
+              <span class="dm-value err">{{ detailOrder.admin_note }}</span>
+            </div>
           </div>
-          <div class="dm-row">
-            <span class="dm-label">学号</span>
-            <span class="dm-value">{{ detailOrder.username }}</span>
-          </div>
-          <div class="dm-row">
-            <span class="dm-label">平台</span>
-            <span class="dm-value">{{ getPlatformName(detailOrder.website_id) }}</span>
-          </div>
-          <div class="dm-row">
-            <span class="dm-label">任务类型</span>
-            <span class="dm-value">{{ taskTypeNames[detailOrder.task_type] || detailOrder.task_type }}</span>
-          </div>
-          <div v-if="detailOrder.website_id !== 4" class="dm-row">
-            <span class="dm-label">刷课节奏</span>
-            <span class="dm-value">{{ speedModeLabel(detailOrder.speed_mode) }}</span>
-          </div>
-          <div class="dm-row">
-            <span class="dm-label">课程数量</span>
-            <span class="dm-value">{{ detailOrder.course_ids?.length || 0 }} 门</span>
-          </div>
-          <div class="dm-row">
-            <span class="dm-label">视频数量</span>
-            <span class="dm-value">{{ detailOrder.video_count }} 个</span>
-          </div>
-          <div class="dm-row">
-            <span class="dm-label">订单金额</span>
-            <span class="dm-value money">{{ fmtMoney(detailOrder.price) }}</span>
-          </div>
-          <div class="dm-row">
-            <span class="dm-label">支付状态</span>
-            <span class="dm-value">
-              <span :class="['status-tag', detailOrder.paid ? 'ok' : 'warn']">{{ detailOrder.paid ? '已支付' : '未支付' }}</span>
-            </span>
-          </div>
-          <div class="dm-row">
-            <span class="dm-label">当前状态</span>
-            <span class="dm-value">
-              <span :class="['status-tag', statusClass[detailOrder.status]]">{{ statusLabel(detailOrder.status) }}</span>
-            </span>
-          </div>
-          <div class="dm-row">
-            <span class="dm-label">创建时间</span>
-            <span class="dm-value">{{ fmtDate(detailOrder.created_at) }}</span>
-          </div>
-          <div v-if="detailOrder.accepted_at" class="dm-row">
-            <span class="dm-label">接单时间</span>
-            <span class="dm-value">{{ fmtDate(detailOrder.accepted_at) }}</span>
-          </div>
-          <div v-if="detailOrder.started_at" class="dm-row">
-            <span class="dm-label">开始时间</span>
-            <span class="dm-value">{{ fmtDate(detailOrder.started_at) }}</span>
-          </div>
-          <div v-if="detailOrder.updated_at" class="dm-row">
-            <span class="dm-label">更新时间</span>
-            <span class="dm-value">{{ fmtDate(detailOrder.updated_at) }}</span>
-          </div>
-          <div v-if="detailOrder.finished_at" class="dm-row">
-            <span class="dm-label">完成时间</span>
-            <span class="dm-value">{{ fmtDate(detailOrder.finished_at) }}</span>
-          </div>
-          <div v-if="detailOrder.status === 'failed' && detailOrder.admin_note" class="dm-row">
-            <span class="dm-label">失败原因</span>
-            <span class="dm-value" style="color: var(--c-danger);">{{ detailOrder.admin_note }}</span>
-          </div>
-        </div>
-        <div v-if="auditLogs.length" class="dm-audit">
-          <h3>操作日志</h3>
-          <div v-for="log in auditLogs" :key="log.created_at" class="audit-item">
-            <span class="audit-time">{{ fmtDate(log.created_at) }}</span>
-            <span class="audit-event">{{ log.event }}</span>
-            <span v-if="log.detail" class="audit-detail">{{ log.detail }}</span>
+
+          <!-- 审计日志：竖向时间线 -->
+          <div v-if="auditLogs.length" class="dm-audit">
+            <span class="eyebrow">操作日志</span>
+            <div class="timeline">
+              <div v-for="log in auditLogs" :key="log.created_at" class="tl-item">
+                <span class="tl-dot"></span>
+                <div class="tl-main">
+                  <div class="tl-top">
+                    <span class="tl-event">{{ log.event }}</span>
+                    <span class="tl-time mono">{{ fmtDate(log.created_at) }}</span>
+                  </div>
+                  <p v-if="log.detail" class="tl-detail">{{ log.detail }}</p>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
     </div>
 
     <!-- 支付弹窗 -->
-    <div v-if="showPayModal" class="modal-overlay" @click.self="closePayModal">
-      <div class="pay-modal">
-        <template v-if="payTimedOut">
-          <h3 class="pm-title">支付超时</h3>
-          <p class="pm-desc">支付查询已超时，请到订单页查看支付状态。</p>
-          <button class="btn btn-primary btn-block" @click="closePayModal">
-            关闭
-          </button>
-        </template>
-        <template v-else>
-          <h3 class="pm-title">扫码支付</h3>
-          <p class="pm-warn">请支付相同金额，否则无法自动到账</p>
-          <p class="pm-amount">¥{{ payTotal.toFixed(2) }}</p>
-          <div class="pay-method-tabs">
-            <button :class="['pm-tab', { active: payMethod === 'ypay_wxpay' }]" @click="switchPayMethod('ypay_wxpay')">
-              微信
-            </button>
-            <button :class="['pm-tab', { active: payMethod === 'ypay_alipay' }]" @click="switchPayMethod('ypay_alipay')">
-              支付宝
-            </button>
-          </div>
-          <div class="pm-qr">
-            <img v-if="payQrCode" :src="payQrCode" alt="支付二维码" class="pm-qr-img" />
-            <div v-else class="pm-qr-placeholder">
-              生成中…
+    <div v-if="showPayModal" class="modal-overlay show" @click.self="closePayModal">
+      <div class="modal-box pay-modal">
+        <div class="modal-header">
+          <span>{{ payTimedOut ? '支付超时' : '扫码支付' }}</span>
+          <button class="modal-close" aria-label="关闭" @click="closePayModal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <template v-if="payTimedOut">
+            <p class="pm-desc">支付查询已超时，请到订单页查看支付状态。</p>
+          </template>
+          <template v-else>
+            <p class="pm-warn">请支付相同金额，否则无法自动到账</p>
+            <p class="pm-amount mono">¥{{ payTotal.toFixed(2) }}</p>
+            <div class="pay-method-tabs">
+              <button :class="['pm-tab', { active: payMethod === 'ypay_wxpay' }]" @click="switchPayMethod('ypay_wxpay')">
+                微信
+              </button>
+              <button :class="['pm-tab', { active: payMethod === 'ypay_alipay' }]" @click="switchPayMethod('ypay_alipay')">
+                支付宝
+              </button>
             </div>
-          </div>
-          <p class="pm-hint">
-            保存二维码后使用{{ payMethod === 'ypay_wxpay' ? '微信' : '支付宝' }}扫一扫支付
-          </p>
-          <button v-if="payQrCode" class="btn btn-primary btn-block pm-save" :class="{ wechat: payMethod === 'ypay_wxpay' }" @click="savePayQr">
-            保存二维码
-          </button>
-          <button class="btn btn-ghost btn-block pm-cancel" @click="closePayModal">
-            取消支付
-          </button>
-        </template>
+            <div class="pm-qr">
+              <img v-if="payQrCode" :src="payQrCode" alt="支付二维码" class="pm-qr-img" />
+              <div v-else class="pm-qr-placeholder">生成中…</div>
+            </div>
+            <p class="pm-hint">保存二维码后使用{{ payMethod === 'ypay_wxpay' ? '微信' : '支付宝' }}扫一扫支付</p>
+          </template>
+        </div>
+        <div class="modal-footer col">
+          <template v-if="payTimedOut">
+            <button class="btn btn-primary btn-block" @click="closePayModal">关闭</button>
+          </template>
+          <template v-else>
+            <button v-if="payQrCode" class="btn btn-primary btn-block" @click="savePayQr">保存二维码</button>
+            <button class="btn btn-ghost btn-block" @click="closePayModal">取消支付</button>
+          </template>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.page { min-height: 100vh; display: flex; flex-direction: column; }
+/* ============================================================
+   Paper & Signal — 订单页
+   约定：编号 / 金额 / 百分比 / 时间一律等宽数字；
+   结构靠 1px 发丝描边，阴影只表达"浮起"
+   ============================================================ */
 
-.content-wrapper { flex: 1; max-width: 860px; width: 100%; margin: 0 auto; padding: 0 24px; }
-
-.page-header {
+.page {
+  min-height: 100vh;
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 44px 0 26px;
-  animation: fadeUp .32s cubic-bezier(.32, .72, .35, 1) both;
+  flex-direction: column;
 }
-.order-stats {
+
+.content-wrapper {
+  flex: 1;
+  max-width: 900px;
+  padding-top: var(--space-10);
+  padding-bottom: var(--space-12);
+}
+
+/* ==================== 页头 ==================== */
+.page-head { margin-bottom: var(--space-5); }
+
+.ph-row {
   display: flex;
   align-items: center;
-  gap: 28px;
-  padding: 20px 24px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border-light);
-  border-radius: 14px;
-  margin-bottom: 20px;
-  animation: fadeUp .32s cubic-bezier(.32, .72, .35, 1) .05s both;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-top: var(--space-3);
 }
-.os-item b {
-  display: block;
-  font-size: 22px;
+
+.ph-title {
+  font-size: var(--fs-h);
+  font-weight: 700;
+  letter-spacing: var(--tracking-title);
+}
+
+.ph-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+}
+
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--c-success);
+  animation: pulse-dot 2.2s var(--ease) infinite;
+}
+
+/* ==================== 概览 ==================== */
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-4) var(--space-5);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs), var(--hairline-top);
+}
+
+.stat-val {
+  font-size: var(--fs-h);
   font-weight: 700;
   letter-spacing: -.02em;
-  font-variant-numeric: tabular-nums;
-  color: var(--c-text);
-  line-height: 1.3;
+  line-height: 1.15;
 }
-.os-item span { font-size: 12px; color: var(--c-text-muted); }
-.os-divider { width: 1px; height: 32px; background: var(--c-border-light); }
-.page-header h1 {
-  font-size: 28px;
-  font-weight: 800;
-  letter-spacing: -.02em;
-  color: var(--c-text);
+
+.stat-label {
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
 }
-.ph-sub { display: flex; align-items: center; gap: 7px; margin-top: 8px; font-size: 12.5px; color: var(--c-text-secondary); }
-.live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c-success); box-shadow: 0 0 0 3px rgba(21, 128, 61, .18); animation: live-pulse 2.4s ease infinite; }
-@keyframes live-pulse {
-  0%, 100% { box-shadow: 0 0 0 3px rgba(21, 128, 61, .18); }
-  50% { box-shadow: 0 0 0 5px rgba(21, 128, 61, .08); }
+
+/* ==================== 搜索 ==================== */
+.search-bar {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
 }
-.btn-clear-history { background: none; border: none; font-size: 12.5px; color: var(--c-text-muted); cursor: pointer; padding: 2px 8px; border-radius: 6px; margin-left: 6px; transition: color .2s, background .2s; }
-.btn-clear-history:hover { color: var(--c-danger); background: rgba(220, 38, 38, .08); }
 
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 20px; border: none; border-radius: 11px; font-weight: 600; font-size: 13.5px; cursor: pointer; white-space: nowrap; transition: transform .22s cubic-bezier(.32, .72, .35, 1), box-shadow .22s, background .22s, color .22s; }
-.btn:active { transform: scale(.97); }
-.btn-primary { background: var(--c-gradient); color: #fff; box-shadow: var(--shadow-primary); }
-.btn-primary:hover { filter: brightness(1.12); box-shadow: var(--shadow-primary-lg); transform: translateY(-1px); }
-.btn-primary:active { transform: scale(.97); box-shadow: 0 1px 4px rgba(0, 113, 227, .24); }
-.btn-ghost { background: transparent; color: var(--c-text-secondary); }
-.btn-ghost:hover { color: var(--c-primary); background: var(--c-primary-bg); }
-.btn-block { width: 100%; }
+.search-bar .search-input { flex: 1; max-width: none; }
 
-.search-bar { display: flex; gap: 10px; margin-bottom: 12px; animation: fadeUp .32s cubic-bezier(.32, .72, .35, 1) .05s both; }
-.search-input { flex: 1; height: 42px; padding: 0 14px; border: 1px solid var(--c-border); border-radius: 10px; background: var(--c-surface); color: var(--c-text); font-size: 14px; outline: none; transition: border-color .22s, box-shadow .22s; }
-.search-input:focus { border-color: var(--c-primary); box-shadow: 0 0 0 3px var(--c-primary-bg); }
-.search-input::placeholder { color: var(--c-text-muted); }
+/* ==================== 筛选 ==================== */
+.filter-section { margin-bottom: var(--space-5); }
 
-.filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; animation: fadeUp .32s cubic-bezier(.32, .72, .35, 1) .1s both; }
-.chip { padding: 6px 14px; border-radius: 999px; background: var(--c-surface); border: 1px solid var(--c-border); font-size: 12.5px; cursor: pointer; color: var(--c-text-secondary); font-weight: 500; transition: all .22s cubic-bezier(.32, .72, .35, 1); }
-.chip:hover { border-color: var(--c-primary); color: var(--c-primary); transform: translateY(-1px); }
-.chip:active { transform: scale(.97); }
-.chip.active { background: var(--c-primary); color: #fff; border-color: var(--c-primary); box-shadow: none; }
+.filter-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
 
-.empty { text-align: center; padding: 80px 20px; animation: fadeUp .32s cubic-bezier(.32, .72, .35, 1) both; }
-.empty-icon { display: flex; justify-content: center; color: var(--c-text-muted); margin-bottom: 14px; }
-.empty-title { font-size: 16px; font-weight: 700; color: var(--c-text); margin-bottom: 4px; }
-.empty-sub { font-size: 13px; color: var(--c-text-secondary); margin-bottom: 20px; }
+.result-count {
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+  white-space: nowrap;
+}
 
-.order-list { display: flex; flex-direction: column; }
+/* ==================== 订单卡片 ==================== */
+.order-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
 .order-card {
+  padding: var(--space-5);
   background: var(--c-surface);
-  border: 1px solid var(--c-border-light);
-  border-radius: 16px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs), var(--hairline-top);
   cursor: pointer;
-  padding: 18px 22px;
-  margin-bottom: 12px;
-  box-shadow: 0 1px 2px rgba(20,20,24,.06);
-  animation: fadeUp .32s cubic-bezier(.32, .72, .35, 1) both;
-  transition: transform .25s cubic-bezier(.32, .72, .35, 1), box-shadow .25s, border-color .25s;
+  transition: transform var(--t) var(--ease), box-shadow var(--t) var(--ease),
+              border-color var(--t) var(--ease);
 }
-.order-card:hover { transform: translateY(-2px); box-shadow: 0 12px 32px var(--c-primary-bg); border-color: rgba(20, 20, 24, .35); }
-.order-card.completed { border-color: rgba(20, 20, 24, .35); }
-.order-card.failed { border-color: rgba(220, 38, 38, .35); }
-.order-card.cancelled { opacity: .55; }
 
-.oc-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
-.oc-left { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
-.oc-id { font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 11px; color: var(--c-text-secondary); background: var(--c-surface-3); padding: 3px 9px; border-radius: 6px; }
-.oc-status { font-size: 11.5px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
-.oc-status.pending { background: var(--c-surface-3); color: var(--c-text-secondary); }
-.oc-status.accepted { background: var(--c-primary-bg); color: var(--c-primary); }
-.oc-status.running { background: var(--c-primary-bg); color: var(--c-primary); }
-.oc-status.paid { background: var(--c-primary-bg); color: var(--c-primary); }
-.oc-status.retrying { background: var(--c-surface-3); color: var(--c-text-secondary); }
-.oc-status.queued { background: var(--c-surface-3); color: var(--c-text-secondary); }
-.oc-status.completed { background: var(--c-success); color: #fff; }
-.oc-status.failed { background: rgba(220, 38, 38, .1); color: var(--c-danger); }
-.oc-status.cancelled { background: var(--c-surface-3); color: var(--c-text-muted); }
-.oc-status.waiting { background: var(--c-surface-3); color: var(--c-text-secondary); }
-.oc-changed { font-size: 10.5px; font-weight: 600; color: var(--c-primary); background: var(--c-primary-bg); padding: 2px 8px; border-radius: 999px; }
-
-.oc-actions { display: flex; gap: 12px; align-items: center; flex-shrink: 0; }
-.oc-link { font-size: 12.5px; cursor: pointer; text-decoration: none; white-space: nowrap; transition: opacity .2s; }
-.oc-link:hover { text-decoration: underline; }
-.pay-link { color: var(--c-primary); font-weight: 600; }
-.cancel-link { color: var(--c-text-muted); }
-
-.oc-info { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 8px; }
-.oci { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.oci-l { font-size: 10.5px; color: var(--c-text-muted); }
-.oci-v { font-size: 12.5px; font-weight: 500; color: var(--c-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.oci-v.price { color: var(--c-text); font-weight: 700; }
-
-.oc-progress { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
-.ocp-bar { flex: 1; height: 6px; background: var(--c-surface-3); border-radius: 999px; overflow: hidden; }
-.ocp-fill { height: 100%; border-radius: 999px; background: var(--c-primary); transition: width .35s cubic-bezier(.32, .72, .35, 1); }
-.ocp-pct { font-size: 13px; font-weight: 700; color: var(--c-primary); min-width: 42px; text-align: right; }
-
-.pagination { display: flex; justify-content: center; align-items: center; gap: 6px; padding: 22px 0; flex-wrap: wrap; }
-.pagination button { padding: 7px 13px; border: 1px solid var(--c-border); border-radius: 9px; background: var(--c-surface); cursor: pointer; font-size: 13px; color: var(--c-text); transition: all .2s cubic-bezier(.32, .72, .35, 1); }
-.pagination button:hover:not(:disabled):not(.active) { border-color: var(--c-primary); color: var(--c-primary); }
-.pagination button:active:not(:disabled) { transform: scale(.96); }
-.pagination button.active { background: var(--c-primary); color: #fff; border-color: var(--c-primary); }
-.pagination button:disabled { opacity: .4; cursor: default; }
-.pg-info { font-size: 12px; color: var(--c-text-muted); margin-left: 12px; }
-
-.page-footer { text-align: center; padding: 24px; font-size: 12px; color: var(--c-text-muted); border-top: 1px solid var(--c-border-light); margin-top: 20px; }
-
-.modal-overlay {
-  position: fixed; inset: 0;
-  background: rgba(22,22,26,.42);
-  display: flex; align-items: center; justify-content: center; z-index: 500;
-  padding: 20px;
-  animation: overlay-in .2s ease;
+.order-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md), var(--hairline-top);
+  border-color: var(--c-border-strong);
 }
-@keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes fadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
 
-.detail-modal {
-  background: var(--c-surface); border: 1px solid var(--c-border-light); border-radius: 18px;
-  padding: 26px 28px; max-width: 500px; width: 100%;
-  box-shadow: 0 24px 64px rgba(20, 20, 24, .12), 0 8px 24px rgba(20, 20, 24, .09); max-height: 85vh; overflow-y: auto;
-  animation: modal-in .28s cubic-bezier(.32, .72, .35, 1) both;
+.order-card.is-completed { border-left: 2px solid var(--c-success); }
+.order-card.is-failed { border-left: 2px solid var(--c-danger); }
+.order-card.is-cancelled { opacity: .6; }
+
+.oc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
 }
-@keyframes modal-in { from { opacity: 0; transform: translateY(14px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
-.dm-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-.dm-header h2 { font-size: 18px; font-weight: 700; letter-spacing: -.015em; color: var(--c-text); }
-.dm-close { background: var(--c-surface-3); border: none; cursor: pointer; color: var(--c-text-secondary); width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: background .2s, color .2s, transform .2s; }
-.dm-close:hover { background: var(--c-border-light); color: var(--c-text); }
-.dm-close:active { transform: scale(.92); }
-.dm-body { display: flex; flex-direction: column; }
-.dm-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 9px 0; border-bottom: 1px solid var(--c-surface-3); }
+
+.oc-head-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.oc-id { font-size: var(--fs-xs); }
+
+.oc-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: var(--space-3) var(--space-4);
+}
+
+.oc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ocf-l {
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+}
+
+.ocf-v {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--c-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ocf-v.amount {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  letter-spacing: -.02em;
+}
+
+.oc-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.ocp-bar {
+  flex: 1;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--c-surface-3);
+  overflow: hidden;
+}
+
+.ocp-fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--c-primary);
+  transition: width var(--t-slow) var(--ease-out);
+}
+
+.ocp-pct {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--c-primary);
+  min-width: 40px;
+  text-align: right;
+}
+
+.oc-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--c-border-light);
+}
+
+.oc-times {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+}
+
+.oct { display: inline-flex; align-items: center; gap: 6px; }
+.oct em { font-style: normal; opacity: .8; }
+
+.oc-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+/* ==================== 分页 ==================== */
+.pg-info {
+  margin-left: var(--space-2);
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+}
+
+.pg-info .mono { color: var(--c-text-secondary); }
+
+/* ==================== 详情弹窗 ==================== */
+.detail-modal { max-width: 520px; }
+
+.dm-grid { display: flex; flex-direction: column; }
+
+/* 字段行：label 左 / value 右 的两列对齐网格 */
+.dm-row {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: var(--space-3);
+  align-items: baseline;
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--c-border-light);
+}
+
 .dm-row:last-child { border-bottom: none; }
-.dm-label { font-size: 13px; color: var(--c-text-muted); flex-shrink: 0; }
-.dm-value { font-size: 13px; font-weight: 500; color: var(--c-text); text-align: right; word-break: break-all; }
-.dm-value.money { color: var(--c-primary); font-weight: 700; }
-.dm-value.mono { font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 12px; }
-.status-tag { font-size: 11.5px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
-.status-tag.ok { background: var(--c-success); color: #fff; }
-.status-tag.warn { background: var(--c-surface-3); color: var(--c-text-secondary); }
-.status-tag.primary { background: var(--c-primary-bg); color: var(--c-primary); }
-.status-tag.bad { background: rgba(220, 38, 38, .1); color: var(--c-danger); }
-.status-tag.muted { background: var(--c-surface-3); color: var(--c-text-muted); }
 
-.dm-audit { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--c-border-light); }
-.dm-audit h3 { font-size: 14px; font-weight: 700; color: var(--c-text); margin-bottom: 10px; }
-.audit-item { display: flex; gap: 8px; padding: 6px 0; font-size: 12px; border-bottom: 1px solid var(--c-surface-3); }
-.audit-item:last-child { border-bottom: none; }
-.audit-time { color: var(--c-text-muted); min-width: 140px; flex-shrink: 0; }
-.audit-event { color: var(--c-primary); font-weight: 500; }
-.audit-detail { color: var(--c-text-secondary); flex: 1; }
-
-.pay-modal {
-  width: 400px; max-width: 92vw; background: var(--c-surface);
-  border: 1px solid var(--c-border-light); border-radius: 18px; padding: 30px 26px; text-align: center;
-  box-shadow: 0 24px 64px rgba(20, 20, 24, .12), 0 8px 24px rgba(20, 20, 24, .09);
-  animation: modal-in .28s cubic-bezier(.32, .72, .35, 1) both;
+.dm-label {
+  font-size: var(--fs-sm);
+  color: var(--c-text-muted);
 }
-.pm-title { font-size: 18px; font-weight: 700; letter-spacing: -.015em; color: var(--c-text); margin-bottom: 6px; }
-.pm-desc { font-size: 14px; color: var(--c-text-secondary); margin: 12px 0 22px; }
-.pm-warn { font-size: 12px; color: var(--c-warning); font-weight: 600; margin: 4px 0; }
+
+.dm-value {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--c-text);
+  text-align: right;
+  word-break: break-all;
+}
+
+.dm-value.money { color: var(--c-primary); font-weight: 700; }
+.dm-value.err { color: var(--c-danger); }
+
+/* 审计日志：竖向时间线 */
+.dm-audit {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--c-border);
+}
+
+.timeline {
+  position: relative;
+  margin-top: var(--space-4);
+  padding-left: var(--space-5);
+}
+
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--c-border);
+}
+
+.tl-item {
+  position: relative;
+  padding-bottom: var(--space-4);
+}
+
+.tl-item:last-child { padding-bottom: 0; }
+
+.tl-dot {
+  position: absolute;
+  left: -19px;
+  top: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--c-primary);
+  box-shadow: 0 0 0 3px var(--c-primary-bg);
+}
+
+.tl-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tl-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.tl-event {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+.tl-time {
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+}
+
+.tl-detail {
+  font-size: var(--fs-xs);
+  color: var(--c-text-secondary);
+  line-height: 1.6;
+}
+
+/* ==================== 支付弹窗 ==================== */
+.pay-modal { max-width: 400px; }
+.pm-desc { font-size: var(--fs-sm); color: var(--c-text-secondary); line-height: 1.7; }
+
+.pm-warn {
+  font-size: var(--fs-xs);
+  color: var(--c-warning);
+  text-align: center;
+}
+
 .pm-amount {
   font-size: 34px;
   font-weight: 800;
   letter-spacing: -.02em;
-  font-variant-numeric: tabular-nums;
   color: var(--c-text);
-  margin: 10px 0 16px;
+  text-align: center;
+  margin: var(--space-2) 0 var(--space-4);
 }
-.pay-method-tabs { display: flex; gap: 0; margin-bottom: 18px; background: var(--c-surface-3); border-radius: 11px; padding: 3px; }
-.pm-tab { flex: 1; padding: 8px 0; border: none; background: transparent; border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--c-text-secondary); cursor: pointer; transition: all .22s cubic-bezier(.32, .72, .35, 1); }
-.pm-tab.active { background: var(--c-surface); color: var(--c-text); box-shadow: 0 1px 3px rgba(16, 16, 20, .12); }
-.pm-tab:hover:not(.active) { color: var(--c-text); }
-.pm-qr { display: flex; justify-content: center; margin-bottom: 14px; }
-.pm-qr-img { width: 200px; height: 200px; border-radius: 14px; border: 1px solid rgba(255, 255, 255, .1); padding: 8px; background: #fff; box-shadow: 0 0 0 6px rgba(16, 16, 20, .04), 0 12px 32px rgba(20, 20, 24, .09); }
-.pm-qr-placeholder { width: 200px; height: 200px; display: flex; align-items: center; justify-content: center; background: var(--c-surface-3); border-radius: 12px; color: var(--c-text-muted); font-size: 13px; }
-.pm-hint { font-size: 12px; color: var(--c-text-secondary); margin-bottom: 14px; }
-.pm-save.wechat { background: #07c160; box-shadow: 0 2px 10px rgba(7, 193, 96, .22); }
-.pm-save.wechat:hover { background: #06ad56; box-shadow: 0 5px 16px rgba(7, 193, 96, .28); }
-.pm-cancel { margin-top: 10px; }
 
+.pay-method-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  padding: 3px;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border-light);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-4);
+}
+
+.pm-tab {
+  padding: 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--c-text-secondary);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+
+.pm-tab.active {
+  background: var(--c-surface);
+  color: var(--c-text);
+  box-shadow: var(--shadow-xs);
+}
+
+.pm-qr { display: flex; justify-content: center; margin-bottom: var(--space-3); }
+
+/* 二维码需固定白底以保证暗色下可扫描 */
+.pm-qr-img {
+  width: 190px;
+  height: 190px;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+}
+
+.pm-qr-placeholder {
+  width: 190px;
+  height: 190px;
+  display: grid;
+  place-content: center;
+  border: 1px dashed var(--c-border);
+  border-radius: var(--radius-md);
+  color: var(--c-text-muted);
+  font-size: var(--fs-sm);
+}
+
+.pm-hint {
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+  text-align: center;
+}
+
+.modal-footer.col { flex-direction: column; gap: var(--space-2); }
+
+/* ==================== 页脚 ==================== */
+.page-footer {
+  padding: var(--space-8) var(--space-6) var(--space-6);
+  text-align: center;
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+}
+
+/* ==================== 响应式 ==================== */
 @media (max-width: 768px) {
-  .content-wrapper { padding: 0 14px; }
-  .page-header { padding: 26px 0 16px; }
-  .page-header h1 { font-size: 22px; }
-  .order-stats { gap: 20px; padding: 16px 18px; }
+  .content-wrapper { padding-top: var(--space-6); padding-bottom: var(--space-10); }
+  .ph-title { font-size: var(--fs-title); }
+
+  .stat-row { gap: var(--space-2); }
+  .stat { padding: var(--space-3); }
+  .stat-val { font-size: var(--fs-title); }
 
   .search-bar { flex-wrap: wrap; }
-  .search-input { font-size: 13px; height: 40px; }
 
-  .filter-bar { gap: 6px; }
-  .chip { padding: 5px 11px; font-size: 11.5px; }
+  .filter-right { width: 100%; justify-content: space-between; }
 
-  .order-card { padding: 14px 16px; margin-bottom: 10px; border-radius: 14px; }
-  .oc-info { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .order-card { padding: var(--space-4); }
+  /* 字段组：窄屏改单列紧凑排布 */
+  .oc-fields { grid-template-columns: 1fr; gap: 6px; }
+  .oc-field { flex-direction: row; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
+  .ocf-v.amount { font-size: var(--fs-md); }
 
-  .pagination { gap: 4px; padding: 16px 0; }
-  .pagination button { padding: 6px 10px; font-size: 12px; }
-  .pg-info { width: 100%; text-align: center; margin: 6px 0 0; }
+  .oc-foot { align-items: flex-start; }
+  .oc-actions { margin-left: 0; }
 
-  .detail-modal { padding: 20px; max-height: 90vh; }
-  .audit-item { flex-wrap: wrap; gap: 4px; }
-  .audit-time { min-width: auto; }
-  .audit-detail { width: 100%; }
+  .dm-row { grid-template-columns: 80px 1fr; }
+  .detail-modal, .pay-modal { max-width: 100%; }
 }
 </style>

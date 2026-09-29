@@ -41,6 +41,24 @@ const speedModeDesc = computed(() => ({
   gentle: '课程依次进行，课程之间自动拉长间隔，节奏最接近真人。',
 }[speedMode.value]))
 
+// 场景说明（原来铺三张静态卡片，改成一条紧凑提示，减少视觉噪声）
+const SCENARIO_NOTES: Record<string, { tag: string; text: string }> = {
+  onlyVideos: { tag: '仅视频', text: '所选课程考试已通过，只需刷视频。' },
+  onlyExams: { tag: '仅考试', text: '所选课程视频已刷完，只需处理考试。' },
+  both: { tag: '视频 + 考试', text: '视频与考试均有未完成，按基础单价打包计费。' },
+}
+const scenarioNote = computed(() => SCENARIO_NOTES[scenario.value] ?? null)
+
+// 全屏状态屏（完成 / 进行中 / 失败）的色调
+const stateTone = computed(() => {
+  if (allDone.value) return 'tone-ok'
+  if (allInProgress.value) return 'tone-live'
+  return 'tone-bad'
+})
+
+// 已选课程的价格（后端逐课定价回显）
+const coursePrice = (c: CourseItem) => backendPrices.value[c.course_id]?.price ?? 0
+
 // 所有任务进行中时，3秒后自动跳转订单页
 const autoRedirectCountdown = ref(3)
 let autoRedirectTimer: ReturnType<typeof setInterval> | null = null
@@ -82,9 +100,6 @@ onMounted(async () => {
       }
     }
   } catch {}
-  if (scanDone.value && username.value.trim()) {
-    try { const r = await api.orders.activeCourses(username.value.trim()); const activeIds: string[] = r?.data || []; for (const cid of activeIds) submittedCourseIds.value.add(cid) } catch {}
-  }
 })
 </script>
 
@@ -92,424 +107,398 @@ onMounted(async () => {
   <div class="page">
     <AppTopbar title="Fuk 文理网课" :show-role-badge="true" />
 
-    <div class="content-wrapper">
-      <div v-if="allDone" class="all-done-wrapper">
-        <div :class="['done-card', isLeaving ? 'fade-out-leave-active' : 'fade-in-enter-active']">
-          <div class="done-icon">
-            <svg width="72" height="72" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="11" stroke="#15803d" stroke-width="2" fill="rgba(21,128,61,.08)"/>
-              <path d="M7 13l3 3 7-7" stroke="#15803d" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <main class="content-wrapper">
+      <!-- ==================== 全屏状态屏 ==================== -->
+      <section
+        v-if="allDone || allInProgress || loginError === 'all'"
+        class="state-screen"
+      >
+        <div :class="['state-card', stateTone, isLeaving ? 'is-leaving' : 'anim-rise']">
+          <div class="state-mark">
+            <svg v-if="allDone" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 6L9 17l-5-5" />
+            </svg>
+            <svg v-else-if="allInProgress" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.5 2" />
+            </svg>
+            <svg v-else width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 6L6 18M6 6l12 12" />
             </svg>
           </div>
-          <h1>任务已完成</h1>
-          <p>所有课程均已 100% 完成</p>
-          <div class="countdown">{{ countdown }} 秒后返回登录页</div>
-        </div>
-      </div>
 
-      <div v-else-if="allInProgress" class="all-done-wrapper">
-        <div :class="['done-card', 'inprogress-card', isLeaving ? 'fade-out-leave-active' : 'fade-in-enter-active']">
-          <div class="done-icon inprogress-icon">
-            <svg width="72" height="72" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="11" stroke="#0071e3" stroke-width="2" fill="rgba(0,113,227,.08)"/>
-              <path d="M12 6v6l4 2" stroke="#0071e3" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </div>
-          <h1>所有任务正在进行中</h1>
-          <p>所有课程已提交下单，系统正在自动刷课处理中，请耐心等待</p>
-          <div class="countdown">{{ autoRedirectCountdown }} 秒后自动跳转到订单页面</div>
-        </div>
-      </div>
+          <span class="eyebrow">
+            {{ allDone ? '全部完成' : allInProgress ? '处理中' : '登录未通过' }}
+          </span>
+          <h1 class="state-title">
+            {{ allDone ? '所有课程已完成' : allInProgress ? '任务正在进行中' : '平台登录失败' }}
+          </h1>
+          <p class="state-desc">
+            <template v-if="allDone">扫描到的所有课程均已 100% 完成，无需下单。</template>
+            <template v-else-if="allInProgress">所有课程已提交，系统正在自动处理，进度可在订单页实时查看。</template>
+            <template v-else-if="activeTab === 'chaoxing'">学习通登录失败，请检查账号与密码是否正确。</template>
+            <template v-else>所有平台均登录失败，请检查学号与密码是否正确。</template>
+          </p>
 
-      <div v-else-if="loginError === 'all'" class="all-done-wrapper">
-        <div :class="['done-card', 'error-card', isLeaving ? 'fade-out-leave-active' : 'fade-in-enter-active']">
-          <div class="done-icon error-icon">
-            <svg width="72" height="72" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="11" stroke="#dc2626" stroke-width="2" fill="rgba(220,38,38,.06)"/>
-              <path d="M15 9l-6 6M9 9l6 6" stroke="#dc2626" stroke-width="2.5" stroke-linecap="round"/>
-            </svg>
+          <div class="state-countdown">
+            <span class="mono">{{ allDone ? countdown : allInProgress ? autoRedirectCountdown : loginErrorCountdown }}</span>
+            秒后{{ allInProgress ? '自动跳转到订单页' : '返回登录页' }}
           </div>
-          <h1>登录失败</h1>
-          <p v-if="activeTab === 'chaoxing'">学习通登录失败，请检查账号密码是否正确</p>
-          <p v-else>所有平台均登录失败，请检查学号密码是否正确</p>
-          <div class="countdown error-countdown">{{ loginErrorCountdown }} 秒后自动返回</div>
+
+          <div v-if="failedPlatforms.length > 0" class="state-fails">
+            <div v-for="fp in failedPlatforms" :key="fp.website_id" class="state-fail-item">
+              <span class="sf-name">{{ fp.name }}</span>
+              <span class="sf-err">{{ fp.error }}</span>
+              <button class="btn btn-ghost btn-xs" @click="openReloginDialog(fp.website_id, fp.name)">重新登录</button>
+            </div>
+          </div>
         </div>
-      </div>
+      </section>
 
       <template v-else>
-        <div v-if="!scanDone" class="landing">
-          <div class="login-head">
-            <h1>登录平台账号</h1>
-            <p>输入账号密码，系统自动扫描未完成课程并生成任务。</p>
-          </div>
+        <!-- ==================== 阶段一 · 登录 ==================== -->
+        <section v-if="!scanDone" class="login-stage">
+          <div class="login-stack">
+            <header class="hero">
+              <span class="hero-eyebrow">课程进度自动化</span>
+              <h1 class="hero-title">登录平台账号</h1>
+              <p class="hero-sub">系统自动扫描各平台未完成课程，并生成可直接提交的任务。</p>
+            </header>
 
-          <div class="login-card">
-            <div class="tab-switcher minimal">
-              <button :class="['tab-btn', { active: activeTab === 'school' }]" @click="activeTab = 'school'">
-                学校平台
-              </button>
-              <button :class="['tab-btn', { active: activeTab === 'chaoxing' }]" @click="activeTab = 'chaoxing'">
-                学习通
-              </button>
-            </div>
-
-            <template v-if="activeTab === 'school'">
-              <div class="field minimal">
-                <label>学号</label>
-                <input v-model="username" placeholder="请输入学号" :disabled="scanning" />
+            <div class="login-card">
+              <div class="seg">
+                <button :class="['seg-btn', { active: activeTab === 'school' }]" @click="activeTab = 'school'">
+                  学校平台
+                </button>
+                <button :class="['seg-btn', { active: activeTab === 'chaoxing' }]" @click="activeTab = 'chaoxing'">
+                  学习通
+                </button>
               </div>
-              <div class="field minimal">
-                <label>密码</label>
-                <input v-model="password" type="password" placeholder="请输入平台密码" :disabled="scanning" @keyup.enter="startScan" />
-              </div>
-              <button class="btn btn-primary btn-block" :disabled="scanning" @click="startScan">
-                <span v-if="!scanning">登录</span>
-                <span v-else class="btn-loading">
-                  <span class="spinner"></span>
-                  扫描中...
-                </span>
-              </button>
-            </template>
 
-            <template v-if="activeTab === 'chaoxing'">
-              <div class="field minimal">
-                <label>账号</label>
-                <input v-model="chaoxingUsername" placeholder="请输入手机号" :disabled="scanning" />
-              </div>
-              <div class="field minimal">
-                <label>密码</label>
-                <input v-model="chaoxingPassword" type="password" placeholder="请输入密码" :disabled="scanning" @keyup.enter="startChaoxingScan" />
-              </div>
-              <button class="btn btn-primary btn-block" :disabled="scanning" @click="startChaoxingScan">
-                <span v-if="!scanning">登录</span>
-                <span v-else class="btn-loading">
-                  <span class="spinner"></span>
-                  扫描中...
-                </span>
-              </button>
-            </template>
-          </div>
-
-          <p class="login-foot">支持粟湾、劳动教育、中嘉鑫盛、学习通等平台。</p>
-        </div>
-
-        <div v-if="scanDone" class="results">
-        <div v-if="rescanning" class="rescan-overlay">
-          <span class="spinner-lg"></span>
-          <p>正在刷新数据...</p>
-        </div>
-        <div v-if="submittedCourseIds.size > 0" class="submitted-banner">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
-          </svg>
-          <span>已成功提交 <strong>{{ submittedCourseIds.size }}</strong> 门课程，任务处理中</span>
-        </div>
-        <div class="results-head">
-          <div class="rh-left">
-            <h2 class="rh-title">选择需要代刷的课程</h2>
-            <div class="rh-meta">
-              <span v-if="studentName" class="rh-student">{{ studentName }}</span>
-              <template v-if="activeTab === 'chaoxing' && chaoxingInfo">
-                <span v-if="chaoxingInfo.school" class="rh-meta-item">{{ chaoxingInfo.school }}</span>
-                <span v-if="chaoxingInfo.workPending > 0" class="rh-meta-item">{{ chaoxingInfo.workPending }} 个待完成作业</span>
-                <span class="rh-meta-item">{{ chaoxingInfo.pendingCount }} 门待处理</span>
-              </template>
-              <template v-else>
-                <span class="rh-meta-item">{{ visiblePlatforms.filter(p => p.status === 'ok').length }} 个平台已登录</span>
-                <span class="rh-meta-item">{{ visiblePlatforms.reduce((s,p) => s + p.courses.length, 0) }} 门课程</span>
-                <span class="rh-meta-item">{{ visiblePlatforms.reduce((s,p) => s + p.courses.filter(c => !isCourseDoneOrSubmitted(c)).length, 0) }} 门待处理</span>
-              </template>
-            </div>
-          </div>
-          <div class="rt-actions">
-            <button class="btn btn-ghost" @click="rescan">重新扫描</button>
-            <button class="btn btn-outline btn-back-home" @click="resetScan">返回主页</button>
-          </div>
-        </div>
-
-        <!-- ========== onlyVideos ========== -->
-        <template v-if="activeTab !== 'chaoxing'">
-        <div v-if="scenario === 'onlyVideos'" class="plan-select">
-          <div class="scenario-banner video-banner">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-            <div class="sb-body">
-              <strong>仅剩视频未完成</strong>
-              <span>所选课程考试已全部通过，只需刷视频。</span>
-            </div>
-          </div>
-          <div class="plan-card single active">
-            <div class="plan-card-top"><span class="plan-tag tag-green">推荐</span></div>
-            <div class="plan-icon" style="color:#0071e3">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="23 7 16 12 7 7 11 3 23 3 23 7"/><polygon points="12 7 5 12 1 9 1 13 5 16 12 13"/><polygon points="12 13 5 16 1 13 1 17 5 20 12 17"/><polygon points="22 10 17 13 17 17 22 20 23 16"/><polygon points="23 4 19 6 19 10 23 8"/></svg>
-            </div>
-            <div class="plan-name">视频刷课</div>
-            <div class="plan-desc">仅刷视频课程</div>
-            <div class="plan-short-desc">所选课程考试已完成，仅需刷视频</div>
-          </div>
-        </div>
-
-        <!-- ========== onlyExams ========== -->
-        <div v-if="scenario === 'onlyExams'" class="plan-select">
-          <div class="scenario-banner exam-banner">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            <div class="sb-body">
-              <strong>仅剩考试未完成</strong>
-              <span>所选课程视频已全部刷完，仅需处理考试。</span>
-            </div>
-          </div>
-          <div class="plan-card single active">
-            <div class="plan-card-top"><span class="plan-tag tag-green">推荐</span></div>
-            <div class="plan-icon" style="color:#0071e3">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
-            </div>
-            <div class="plan-name">考试答题</div>
-            <div class="plan-desc">AI智能答题考试</div>
-            <div class="plan-short-desc">所选课程视频已完成，仅需答题</div>
-          </div>
-        </div>
-
-        <!-- ========== both ========== -->
-        <div v-if="scenario === 'both'" class="plan-select">
-          <div class="scenario-banner both-banner">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            <div class="sb-body">
-              <strong>视频和考试均有未完成</strong>
-              <span>需要同时处理视频和考试，按基础单价计费。</span>
-            </div>
-          </div>
-          <div class="plan-card single active">
-            <div class="plan-card-top"><span class="plan-tag tag-blue">标准计费</span></div>
-            <div class="plan-icon" style="color:#0071e3">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-            </div>
-            <div class="plan-name">视频 + 考试</div>
-            <div class="plan-desc">视频刷课 + 考试答题</div>
-            <div class="plan-short-desc">视频和考试打包计费</div>
-          </div>
-        </div>
-        </template>
-
-        <div
-          v-for="(p, pi) in visiblePlatforms"
-          :key="p.website_id"
-          class="platform-block"
-          :style="{ animationDelay: Math.min(pi, 8) * 60 + 'ms' }"
-        >
-          <div class="pb-header">
-            <label class="pb-check">
-              <input
-                type="checkbox"
-                :checked="isPlatformAllChecked(p)"
-                :indeterminate="!isPlatformAllChecked(p) && p.courses.some(c => !isCourseDoneOrSubmitted(c) && checkedCourseIds.has(c.course_id))"
-                @change="togglePlatform(p.website_id, ($event.target as HTMLInputElement).checked)"
-              />
-            </label>
-            <span class="pb-badge" :class="p.status === 'ok' ? 'ok' : 'fail'">{{ p.name }}</span>
-            <span class="pb-count">{{ p.courses.filter(c => !isCourseDoneOrSubmitted(c)).length }} 门待处理</span>
-          </div>
-          <div class="course-list">
-            <div
-              v-for="c in p.courses.filter(c => !submittedCourseIds.has(c.course_id))"
-              :key="c.course_id"
-              class="course-row"
-              :class="{ done: isCourseDone(c) }"
-            >
-              <label class="cr-check">
-                <input
-                  type="checkbox"
-                  :checked="checkedCourseIds.has(c.course_id)"
-                  :disabled="isCourseDone(c)"
-                  @change="toggleCourse(c.course_id)"
-                />
-              </label>
-              <span class="cr-name">{{ c.course_name }}</span>
-              <div class="cr-meta">
-                <template v-if="p.website_id === 4">
-                  <span v-if="c.has_points_system" class="cr-pill exam">{{ c.points_total ?? 0 }}/{{ chaoxingInfo?.pointsTarget ?? 200 }} 积分</span>
-                  <span v-if="(c.points_remaining ?? 0) > 0" class="cr-pill warn">还需 {{ c.days_needed ?? 4 }} 天</span>
-                  <span v-else-if="c.has_points_system" class="cr-pill ok">积分达标</span>
-                  <span v-if="(c.work_pending ?? 0) > 0" class="cr-pill warn">{{ c.work_pending }} 个待完成作业</span>
-                  <span v-else-if="(c.work_total ?? 0) > 0" class="cr-pill ok">作业已完成</span>
+              <form class="login-form" @submit.prevent>
+                <template v-if="activeTab === 'school'">
+                  <div class="field">
+                    <label class="field-label">学号</label>
+                    <input v-model="username" placeholder="请输入学号" :disabled="scanning" autocomplete="username" />
+                  </div>
+                  <div class="field">
+                    <label class="field-label">密码</label>
+                    <input v-model="password" type="password" placeholder="请输入平台密码" :disabled="scanning" autocomplete="current-password" @keyup.enter="startScan" />
+                  </div>
                 </template>
                 <template v-else>
-                  <div class="cr-bar">
-                    <div class="cr-bar-fill" :class="pctClass(c)" :style="{ width: pct(c) + '%' }"></div>
+                  <div class="field">
+                    <label class="field-label">手机号</label>
+                    <input v-model="chaoxingUsername" placeholder="请输入手机号" :disabled="scanning" autocomplete="username" />
                   </div>
-                  <span class="cr-pct">{{ pct(c) }}%</span>
-                  <span class="cr-pill" :class="c.video_pending > 0 ? 'warn' : 'ok'">{{ c.video_pending }} 剩余</span>
-                  <span v-if="c.records_loaded" class="cr-pill exam">{{ c.exam_done }}/{{ c.exam_total }} 已通过</span>
-                  <span v-if="c.exam_deleted > 0" class="cr-pill deleted">{{ c.exam_deleted }} 已删除</span>
+                  <div class="field">
+                    <label class="field-label">密码</label>
+                    <input v-model="chaoxingPassword" type="password" placeholder="请输入密码" :disabled="scanning" autocomplete="current-password" @keyup.enter="startChaoxingScan" />
+                  </div>
+                </template>
+
+                <button
+                  class="login-cta"
+                  :disabled="scanning"
+                  @click="activeTab === 'chaoxing' ? startChaoxingScan() : startScan()"
+                >
+                  <span v-if="!scanning">登录并扫描</span>
+                  <span v-else class="login-cta-loading"><span class="spinner"></span>扫描中…</span>
+                </button>
+              </form>
+
+              <p class="login-foot">支持粟湾、劳动教育、中嘉鑫盛、学习通等平台</p>
+            </div>
+
+            <ul class="assure-row">
+              <li>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 6L9 17l-5-5" /></svg>
+                自动扫描未完成课程
+              </li>
+              <li>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.5 2" /></svg>
+                处理进度实时同步
+              </li>
+              <li>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3l8 4v5c0 4.4-3 8.4-8 9.5-5-1.1-8-5.1-8-9.5V7z" /></svg>
+                凭据加密存储
+              </li>
+            </ul>
+          </div>
+        </section>
+
+        <!-- ==================== 阶段二 · 选课下单 ==================== -->
+        <section v-else class="results">
+          <div v-if="rescanning" class="rescan-overlay">
+            <span class="spinner-lg"></span>
+            <p>正在刷新数据…</p>
+          </div>
+
+          <!-- 页头 -->
+          <header class="results-head">
+            <div class="rh-left">
+              <span class="eyebrow">扫描结果</span>
+              <h1 class="rh-title">选择需要处理的课程</h1>
+              <div class="rh-meta">
+                <span v-if="studentName" class="rh-student">{{ studentName }}</span>
+                <template v-if="activeTab === 'chaoxing' && chaoxingInfo">
+                  <span v-if="chaoxingInfo.school" class="rh-meta-item">{{ chaoxingInfo.school }}</span>
+                  <span v-if="chaoxingInfo.workPending > 0" class="rh-meta-item">{{ chaoxingInfo.workPending }} 个待完成作业</span>
+                  <span class="rh-meta-item">{{ chaoxingInfo.pendingCount }} 门待处理</span>
+                </template>
+                <template v-else>
+                  <span class="rh-meta-item">{{ visiblePlatforms.filter(p => p.status === 'ok').length }} 个平台已登录</span>
+                  <span class="rh-meta-item">{{ visiblePlatforms.reduce((s, p) => s + p.courses.length, 0) }} 门课程</span>
+                  <span class="rh-meta-item">{{ visiblePlatforms.reduce((s, p) => s + p.courses.filter(c => !isCourseDoneOrSubmitted(c)).length, 0) }} 门待处理</span>
                 </template>
               </div>
             </div>
-          </div>
-        </div>
+            <div class="rt-actions">
+              <button class="btn btn-ghost" @click="rescan">重新扫描</button>
+              <button class="btn btn-outline" @click="resetScan">返回主页</button>
+            </div>
+          </header>
 
-        <div class="speed-picker">
-          <div class="sp-head">
-            <span class="sp-title">刷课节奏</span>
-            <span class="sp-desc">{{ speedModeDesc }}</span>
+          <div v-if="submittedCourseIds.size > 0" class="submitted-banner">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.5 2" /></svg>
+            <span>已提交 <strong class="mono">{{ submittedCourseIds.size }}</strong> 门课程，任务处理中</span>
           </div>
-          <div class="sp-opts">
-            <button
-              v-for="opt in speedOptions"
-              :key="opt.key"
-              type="button"
-              class="sp-opt"
-              :class="{ active: speedMode === opt.key }"
-              @click="setSpeedMode(opt.key)"
-            >
-              <span class="sp-opt-name">{{ opt.name }}</span>
-              <span class="sp-opt-sub">{{ opt.sub }}</span>
-            </button>
-          </div>
-          <p v-if="speedMode === 'turbo'" class="sp-warn">
-            急速模式并发最高（已控制在平台检测安全线内），建议仅在需要当天见效时使用。
-          </p>
-        </div>
 
-        <div class="summary-bar">
-          <template v-if="activeTab === 'chaoxing'">
-            <div class="sb-left">
-              <span v-if="chaoxingServiceType === 'points'" class="sb-item">刷积分服务</span>
-              <span v-else-if="chaoxingServiceType === 'work'" class="sb-item">作业代做服务</span>
-              <span v-else-if="chaoxingServiceType === 'both'" class="sb-item">刷积分 + 作业代做</span>
-              <span v-else class="sb-item">全部完成</span>
-              <span class="sb-item">已选 <strong>{{ summary.courses }}</strong> 门课程</span>
+          <!-- 场景提示：一条紧凑说明，替代原来的三张静态卡片 -->
+          <div v-if="scenarioNote" class="scenario-strip">
+            <span class="ss-tag">{{ scenarioNote.tag }}</span>
+            <span class="ss-text">{{ scenarioNote.text }}</span>
+          </div>
+
+          <!-- 平台 + 课程 -->
+          <div
+            v-for="(p, pi) in visiblePlatforms"
+            :key="p.website_id"
+            class="platform-block"
+            :style="{ animationDelay: Math.min(pi, 8) * 55 + 'ms' }"
+          >
+            <div class="pb-header">
+              <label class="pb-check">
+                <input
+                  type="checkbox"
+                  :checked="isPlatformAllChecked(p)"
+                  :indeterminate="!isPlatformAllChecked(p) && p.courses.some(c => !isCourseDoneOrSubmitted(c) && checkedCourseIds.has(c.course_id))"
+                  @change="togglePlatform(p.website_id, ($event.target as HTMLInputElement).checked)"
+                />
+              </label>
+              <span class="pb-name">{{ p.name }}</span>
+              <span class="pb-badge" :class="p.status === 'ok' ? 'ok' : 'fail'">
+                {{ p.status === 'ok' ? '已登录' : '未登录' }}
+              </span>
+              <span class="pb-count mono">{{ p.courses.filter(c => !isCourseDoneOrSubmitted(c)).length }} 门待处理</span>
             </div>
-            <div class="sb-right">
-              <template v-if="isPrivileged">
-                <button class="btn btn-primary btn-lg" :disabled="paying || summary.courses === 0" @click="submitAndPay">
-                  <span v-if="!paying">加入队列</span>
-                  <span v-else class="btn-loading"><span class="spinner"></span>提交中</span>
-                </button>
-              </template>
-              <template v-else>
-                <span class="sb-price">¥{{ summary.total.toFixed(2) }}</span>
-                <button class="btn btn-primary btn-lg" :disabled="paying || summary.courses === 0" @click="submitAndPay">
-                  <span v-if="!paying">提交并支付</span>
-                  <span v-else class="btn-loading"><span class="spinner"></span>提交中</span>
-                </button>
-              </template>
-            </div>
-          </template>
-          <template v-else>
-            <div class="sb-left">
-              <span class="sb-item">已选 <strong>{{ summary.courses }}</strong> 门课程</span>
-              <span class="sb-item"><strong>{{ summary.videos }}</strong> 个视频</span>
-              <span v-if="summary.exams > 0" class="sb-item"><strong>{{ summary.exams }}</strong> 场考试</span>
-            </div>
-            <div class="sb-right">
-              <template v-if="isPrivileged">
-                <button class="btn btn-primary btn-lg" :disabled="paying || summary.courses === 0" @click="submitAndPay">
-                  <span v-if="!paying">加入队列</span>
-                  <span v-else class="btn-loading"><span class="spinner"></span>提交中</span>
-                </button>
-              </template>
-              <template v-else>
-                <div class="sb-detail">
-                  <template v-if="summary.breakdown.length > 0">
-                    <span v-for="(b, i) in summary.breakdown.slice(0, 3)" :key="i" class="sb-detail-item">
-                      {{ b.name.length > 10 ? b.name.slice(0, 10) + '...' : b.name }} ({{ b.videos }}节) ¥{{ b.price.toFixed(2) }}
-                    </span>
-                    <span v-if="summary.breakdown.length > 3" class="sb-detail-item">...共 {{ summary.breakdown.length }} 门课</span>
-                  </template>
-                  <span class="sb-price">¥{{ summary.total.toFixed(2) }}</span>
+
+            <div class="course-list">
+              <div
+                v-for="c in p.courses.filter(x => !submittedCourseIds.has(x.course_id))"
+                :key="c.course_id"
+                class="course-row"
+                :class="{ 'is-done': isCourseDone(c), 'is-checked': checkedCourseIds.has(c.course_id) }"
+              >
+                <label class="cr-check">
+                  <input
+                    type="checkbox"
+                    :checked="checkedCourseIds.has(c.course_id)"
+                    :disabled="isCourseDone(c)"
+                    @change="toggleCourse(c.course_id)"
+                  />
+                </label>
+
+                <div class="cr-main">
+                  <div class="cr-top">
+                    <span class="cr-name">{{ c.course_name }}</span>
+                    <template v-if="p.website_id === 4">
+                      <span v-if="c.has_points_system" class="cr-pill">{{ c.points_total ?? 0 }}/{{ chaoxingInfo?.pointsTarget ?? 200 }} 积分</span>
+                      <span v-if="(c.points_remaining ?? 0) > 0" class="cr-pill warn">还需 {{ c.days_needed ?? 4 }} 天</span>
+                      <span v-else-if="c.has_points_system" class="cr-pill ok">积分达标</span>
+                      <span v-if="(c.work_pending ?? 0) > 0" class="cr-pill warn">{{ c.work_pending }} 个待完成作业</span>
+                      <span v-else-if="(c.work_total ?? 0) > 0" class="cr-pill ok">作业已完成</span>
+                    </template>
+                    <template v-else>
+                      <span class="cr-pill" :class="c.video_pending > 0 ? 'warn' : 'ok'">{{ c.video_pending }} 剩余</span>
+                      <span v-if="c.records_loaded && c.exam_total > 0" class="cr-pill">{{ c.exam_done }}/{{ c.exam_total }} 已通过</span>
+                      <span v-if="c.exam_deleted > 0" class="cr-pill deleted">{{ c.exam_deleted }} 已删除</span>
+                    </template>
+                  </div>
+
+                  <!-- 进度条：数据用等宽数字，读起来像仪表 -->
+                  <div v-if="p.website_id !== 4" class="cr-meter">
+                    <div class="cr-meter-track">
+                      <div class="cr-meter-fill" :class="pctClass(c)" :style="{ width: pct(c) + '%' }"></div>
+                    </div>
+                    <span class="cr-pct mono">{{ pct(c) }}%</span>
+                  </div>
                 </div>
-                <button class="btn btn-primary btn-lg" :disabled="paying || summary.courses === 0" @click="submitAndPay">
-                  <span v-if="!paying">提交并支付</span>
-                  <span v-else class="btn-loading"><span class="spinner"></span>提交中</span>
-                </button>
-              </template>
+
+                <div class="cr-side">
+                  <span v-if="coursePrice(c) > 0" class="cr-price mono">¥{{ coursePrice(c).toFixed(2) }}</span>
+                  <span v-else-if="isCourseDone(c)" class="cr-done-tag">已完成</span>
+                </div>
+              </div>
             </div>
-          </template>
-        </div>
-      </div>
-      </template>
-    </div>
-
-    <div class="modal-overlay" :class="{ show: showPayModal && !showPaySuccess }" @click.self="closePay">
-      <div class="modal-box pay-modal">
-        <template v-if="payTimedOut">
-          <h3>订单已提交</h3>
-          <p class="pm-timeout-note">支付查询已超时，但订单已创建成功。请到订单页查看支付状态。</p>
-          <button class="btn btn-primary btn-block" @click="goToOrders(); closePay()">查看订单</button>
-        </template>
-        <template v-else>
-        <h3>确认支付</h3>
-        <div class="modal-amount">¥{{ payTotal.toFixed(2) }}</div>
-        <p class="pay-amount-warn">请务必支付相同金额，多一分少一分都无法检测到</p>
-        <div v-if="payError" class="pay-error">{{ payError }}</div>
-
-        <div class="pay-method-tabs">
-          <button :class="['pm-tab', { active: selectedPayMethod === 'ypay_wxpay' }]" @click="switchPayMethod('ypay_wxpay')">微信</button>
-          <button :class="['pm-tab', { active: selectedPayMethod === 'ypay_alipay' }]" @click="switchPayMethod('ypay_alipay')">支付宝</button>
-        </div>
-
-        <!-- QR code section -->
-        <div class="qr-section">
-          <img v-if="payQrCode" :src="payQrCode" alt="支付二维码" class="pay-qr-img" />
-          <div v-else class="pay-qr-placeholder">生成二维码中...</div>
-          <p class="qr-label">保存二维码后使用{{ { ypay_alipay: '支付宝', ypay_wxpay: '微信' }[selectedPayMethod] || '扫码' }}扫一扫支付</p>
-        </div>
-        <button
-          v-if="payQrCode"
-          class="btn btn-primary btn-block pay-save-btn"
-          :class="{ wechat: selectedPayMethod === 'ypay_wxpay' }"
-          @click="savePayQr"
-        >保存二维码</button>
-
-        <button class="btn btn-ghost btn-block pay-cancel-btn" @click="closePay">取消支付</button>
-        </template>
-      </div>
-    </div>
-
-    <PaymentSuccess :visible="showPaySuccess" :amount="paySuccessAmount" subtitle="订单已提交" @done="onPaySuccessDone" />
-
-    <!-- 系统公告弹窗 -->
-    <Teleport to="body">
-      <div v-if="showAnnouncement" class="announcement-overlay" @click.self="dismissAnnouncement">
-        <div class="announcement-box">
-          <div class="announcement-header">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
-            <h3>系统公告</h3>
           </div>
-          <div class="announcement-body">{{ announcementContent }}</div>
-          <button class="btn btn-primary btn-block announcement-confirm" @click="dismissAnnouncement">我知道了</button>
-        </div>
-      </div>
-    </Teleport>
+
+          <!-- 刷课节奏 -->
+          <div class="speed-picker">
+            <div class="sp-head">
+              <span class="eyebrow">刷课节奏</span>
+              <span class="sp-desc">{{ speedModeDesc }}</span>
+            </div>
+            <div class="sp-opts">
+              <button
+                v-for="opt in speedOptions"
+                :key="opt.key"
+                type="button"
+                class="sp-opt"
+                :class="{ active: speedMode === opt.key }"
+                @click="setSpeedMode(opt.key)"
+              >
+                <span class="sp-opt-name">{{ opt.name }}</span>
+                <span class="sp-opt-sub">{{ opt.sub }}</span>
+              </button>
+            </div>
+            <p v-if="speedMode === 'turbo'" class="sp-warn">
+              急速模式并发最高（已控制在平台检测安全线内），建议仅在需要当天见效时使用。
+            </p>
+          </div>
+
+          <!-- 结算条 -->
+          <div class="checkout">
+            <div class="co-info">
+              <div class="co-stats">
+                <span class="co-stat"><b class="mono">{{ summary.courses }}</b> 门课程</span>
+                <span class="co-sep">·</span>
+                <span class="co-stat"><b class="mono">{{ summary.videos }}</b> 个视频</span>
+                <template v-if="summary.exams > 0">
+                  <span class="co-sep">·</span>
+                  <span class="co-stat"><b class="mono">{{ summary.exams }}</b> 场考试</span>
+                </template>
+              </div>
+              <div v-if="!isPrivileged && summary.breakdown.length > 0" class="co-breakdown">
+                <span v-for="(b, i) in summary.breakdown.slice(0, 3)" :key="i" class="co-bd-item">
+                  {{ b.name.length > 10 ? b.name.slice(0, 10) + '…' : b.name }} <span class="mono">{{ b.videos }}</span>节 <span class="mono">¥{{ b.price.toFixed(2) }}</span>
+                </span>
+                <span v-if="summary.breakdown.length > 3" class="co-bd-item">…共 <span class="mono">{{ summary.breakdown.length }}</span> 门课</span>
+              </div>
+            </div>
+
+            <div class="co-action">
+              <div v-if="!isPrivileged" class="co-total">
+                <span class="co-total-label">合计</span>
+                <span class="co-total-val mono">¥{{ summary.total.toFixed(2) }}</span>
+              </div>
+              <button
+                class="btn btn-primary btn-lg"
+                :disabled="paying || summary.courses === 0"
+                @click="submitAndPay"
+              >
+                <span v-if="!paying">{{ isPrivileged ? '加入队列' : '提交并支付' }}</span>
+                <span v-else class="btn-loading"><span class="spinner"></span>提交中</span>
+              </button>
+            </div>
+          </div>
+        </section>
+      </template>
+    </main>
 
     <footer class="page-footer" :class="{ 'hide-on-mobile-results': scanDone }">
       <div class="footer-brand">Fuk 文理网课</div>
     </footer>
   </div>
 
-  <!-- 重新输入密码弹窗 -->
+  <!-- ==================== 支付弹窗 ==================== -->
+  <div class="modal-overlay" :class="{ show: showPayModal && !showPaySuccess }" @click.self="closePay">
+    <div class="modal-box pay-modal">
+      <template v-if="payTimedOut">
+        <div class="modal-header"><span>订单已提交</span></div>
+        <div class="modal-body">
+          <p class="pm-note">支付查询已超时，但订单已创建成功。请到订单页查看支付状态。</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-primary btn-block" @click="goToOrders(); closePay()">查看订单</button>
+        </div>
+      </template>
+
+      <template v-else>
+        <div class="modal-header">
+          <span>确认支付</span>
+          <button class="modal-close" @click="closePay">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="pay-hero">
+            <span class="eyebrow">应付金额</span>
+            <div class="modal-amount mono">¥{{ payTotal.toFixed(2) }}</div>
+            <p class="pay-warn">请务必支付相同金额，多一分少一分都无法检测到</p>
+          </div>
+
+          <div v-if="payError" class="pay-error">{{ payError }}</div>
+
+          <div class="pay-methods">
+            <button :class="['pm-tab', { active: selectedPayMethod === 'ypay_wxpay' }]" @click="switchPayMethod('ypay_wxpay')">微信</button>
+            <button :class="['pm-tab', { active: selectedPayMethod === 'ypay_alipay' }]" @click="switchPayMethod('ypay_alipay')">支付宝</button>
+          </div>
+
+          <div class="qr-section">
+            <img v-if="payQrCode" :src="payQrCode" alt="支付二维码" class="pay-qr-img" />
+            <div v-else class="pay-qr-placeholder">
+              <span class="spinner"></span>
+              生成二维码中…
+            </div>
+            <p class="qr-label">保存二维码后使用{{ { ypay_alipay: '支付宝', ypay_wxpay: '微信' }[selectedPayMethod] || '扫码' }}扫一扫支付</p>
+          </div>
+        </div>
+        <div class="modal-footer col">
+          <button v-if="payQrCode" class="btn btn-primary btn-block" @click="savePayQr">保存二维码</button>
+          <button class="btn btn-ghost btn-block" @click="closePay">取消支付</button>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <PaymentSuccess :visible="showPaySuccess" :amount="paySuccessAmount" subtitle="订单已提交" @done="onPaySuccessDone" />
+
+  <!-- ==================== 系统公告 ==================== -->
+  <Teleport to="body">
+    <div v-if="showAnnouncement" class="announcement-overlay" @click.self="dismissAnnouncement">
+      <div class="announcement-box">
+        <div class="announcement-header">
+          <span class="eyebrow">系统公告</span>
+        </div>
+        <div class="announcement-body">{{ announcementContent }}</div>
+        <div class="announcement-foot">
+          <button class="btn btn-primary btn-block" @click="dismissAnnouncement">我知道了</button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- ==================== 重新输入密码 ==================== -->
   <Teleport to="body">
     <div v-if="reloginDialog.visible" class="relogin-overlay" @click.self="closeReloginDialog">
       <div class="relogin-box">
-        <div class="relogin-header">
-          <h3>重新输入密码</h3>
-          <span class="relogin-sub">{{ reloginDialog.name }}</span>
-          <button class="relogin-close" @click="closeReloginDialog">&times;</button>
+        <div class="relogin-head">
+          <span class="eyebrow">重新登录</span>
+          <h3 class="relogin-title">{{ reloginDialog.name }}</h3>
+          <p class="relogin-sub">该平台登录失败，请输入正确密码重试。</p>
         </div>
         <div class="relogin-body">
-          <label class="relogin-label">请输入该平台的正确密码</label>
           <input
             v-model="reloginPassword"
             type="password"
-            class="relogin-input"
             placeholder="输入密码"
-            autofocus
+            autocomplete="current-password"
             @keydown.enter="submitRelogin"
           />
         </div>
-        <div class="relogin-footer">
+        <div class="relogin-foot">
           <button class="btn btn-ghost" @click="closeReloginDialog">取消</button>
           <button class="btn btn-primary" :disabled="reloginLoading" @click="submitRelogin">
-            <span v-if="reloginLoading" class="spinner" style="width:14px;height:14px"></span>
-            {{ reloginLoading ? '登录中...' : '确认登录' }}
+            <span v-if="reloginLoading" class="spinner"></span>
+            {{ reloginLoading ? '登录中…' : '确认登录' }}
           </button>
         </div>
       </div>
@@ -519,8 +508,11 @@ onMounted(async () => {
 
 <style scoped>
 /* ============================================================
-   Aurora Glass · 深色高级质感 / 极光渐变 / 玻璃拟态
+   Paper & Signal — 下单页
+   结构：登录（hero + 单一卡片） → 选课（平台分组 + 结算条）
+   细节约定：编号/金额/百分比一律等宽数字；层次靠发丝描边而非阴影
    ============================================================ */
+
 .page {
   min-height: 100vh;
   display: flex;
@@ -529,833 +521,733 @@ onMounted(async () => {
 
 .content-wrapper {
   flex: 1;
-  width: 100%;
-  margin: 0 auto;
-  padding: 0 24px;
+  max-width: 960px;
+  padding-top: var(--space-10);
+  padding-bottom: var(--space-16);
 }
 
-/* ---------- 全屏状态卡（完成 / 进行中 / 失败） ---------- */
-.all-done-wrapper {
-  min-height: calc(100vh - 56px - 64px);
+/* ==================== 全屏状态屏 ==================== */
+.state-screen {
   display: flex;
-  justify-content: center;
   align-items: center;
-  padding: 40px 20px;
+  justify-content: center;
+  min-height: 62vh;
+  padding: var(--space-8) 0;
 }
-.done-card {
-  background: var(--c-surface);
-  border: 1px solid var(--c-border-light);
-  border-radius: 20px;
-  padding: 48px 40px;
-  text-align: center;
-  max-width: 460px;
-  width: 100%;
-  box-shadow: 0 2px 8px rgba(20,20,24,.07), 0 24px 64px rgba(20,20,24,.12);
-}
-.fade-in-enter-active {
-  animation: fadeInUp .5s cubic-bezier(.32,.72,.35,1);
-}
-.fade-out-leave-active {
-  animation: fadeOutDown .4s cubic-bezier(.32,.72,.35,1) forwards;
-}
-.done-icon {
-  margin-bottom: 20px;
-  animation: scaleIn .6s cubic-bezier(.32,.72,.35,1) .1s backwards;
-}
-@keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(16px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-@keyframes fadeOutDown {
-  from { opacity: 1; transform: translateY(0); }
-  to { opacity: 0; transform: translateY(20px); }
-}
-@keyframes scaleIn {
-  from { opacity: 0; transform: scale(.7); }
-  to { opacity: 1; transform: scale(1); }
-}
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-@keyframes slideUp {
-  from { opacity: 0; transform: translateY(14px) scale(.98); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
-.done-card h1 {
-  font-size: 26px;
-  font-weight: 800;
-  letter-spacing: -.01em;
-  color: var(--c-text);
-  margin-bottom: 8px;
-}
-.done-card p {
-  font-size: 14px;
-  color: var(--c-text-secondary);
-  margin-bottom: 24px;
-}
-.countdown {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--c-primary);
-}
-.error-card .countdown.error-countdown { color: var(--c-danger); }
-.inprogress-card h1 { color: var(--c-primary); }
 
-/* ---------- 落地页 ---------- */
-.landing {
+.state-card {
   width: 100%;
-  max-width: 420px;
+  max-width: 460px;
+  padding: var(--space-10) var(--space-8);
+  text-align: center;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md), var(--hairline-top);
+}
+.state-card.is-leaving { opacity: 0; transform: translateY(-8px); transition: all var(--t-slow) var(--ease); }
+
+.state-mark {
+  width: 68px;
+  height: 68px;
+  margin: 0 auto var(--space-5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+}
+.state-card.tone-ok .state-mark { color: var(--c-success); background: var(--c-success-bg); }
+.state-card.tone-live .state-mark { color: var(--c-primary); background: var(--c-primary-bg); }
+.state-card.tone-bad .state-mark { color: var(--c-danger); background: var(--c-danger-bg); }
+
+.state-card .eyebrow { margin-bottom: var(--space-3); }
+.state-title {
+  font-size: var(--fs-h);
+  letter-spacing: var(--tracking-title);
+  margin-bottom: var(--space-2);
+}
+.state-desc {
+  font-size: var(--fs-sm);
+  color: var(--c-text-secondary);
+  line-height: 1.7;
+  max-width: 34ch;
   margin: 0 auto;
-  padding: 56px 20px 72px;
 }
-.login-head {
-  margin-bottom: 28px;
+.state-countdown {
+  margin-top: var(--space-6);
+  font-size: var(--fs-sm);
+  color: var(--c-text-muted);
 }
-.login-head h1 {
-  font-size: 22px;
+.state-countdown .mono { font-size: var(--fs-md); font-weight: 700; color: var(--c-text); }
+
+.state-fails {
+  margin-top: var(--space-6);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--c-border-light);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  text-align: left;
+}
+.state-fail-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--fs-sm);
+}
+.sf-name { font-weight: 600; }
+.sf-err { flex: 1; color: var(--c-text-muted); font-size: var(--fs-xs); }
+
+/* ==================== 阶段一 · 登录 ====================
+   目标是"高级大气"：整屏留白 + 大字号标题 + 悬浮玻璃卡 + 渐变主按钮。
+   氛围只用平滑径向光晕（**不使用任何点阵/纹理**，避免像素风观感）。 */
+.login-stage {
+  position: relative;
+  z-index: 1;
+  min-height: calc(100vh - var(--topbar-h) - 104px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8) 0;
+}
+
+/* 三层平滑光晕：顶部主光 + 右上辅光 + 左下补光 */
+.login-stage::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(820px 540px at 50% -14%, rgba(0, 113, 227, .17), transparent 62%),
+    radial-gradient(680px 480px at 92% 2%, rgba(92, 170, 255, .13), transparent 64%),
+    radial-gradient(760px 560px at 4% 102%, rgba(0, 113, 227, .07), transparent 66%);
+}
+[data-theme="dark"] .login-stage::before {
+  background:
+    radial-gradient(820px 540px at 50% -14%, rgba(76, 157, 240, .24), transparent 62%),
+    radial-gradient(680px 480px at 92% 2%, rgba(76, 157, 240, .15), transparent 64%),
+    radial-gradient(760px 560px at 4% 102%, rgba(76, 157, 240, .10), transparent 66%);
+}
+
+.login-stack {
+  width: 100%;
+  max-width: 440px;
+  margin: 0 auto;
+}
+
+/* ---------- 标题区 ---------- */
+.hero { text-align: center; margin-bottom: var(--space-8); }
+.hero-eyebrow {
+  display: inline-block;
+  margin-bottom: var(--space-5);
+  padding: 5px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--c-primary-bg);
+  color: var(--c-primary);
+  font-size: var(--fs-xs);
   font-weight: 600;
-  color: var(--c-text);
-  margin-bottom: 6px;
+  letter-spacing: .07em;
 }
-.login-head p {
-  font-size: 13.5px;
-  line-height: 1.6;
+.hero-title {
+  font-size: clamp(30px, 4.4vw, 44px);
+  font-weight: 700;
+  letter-spacing: -.032em;
+  line-height: 1.1;
+  margin-bottom: var(--space-4);
+}
+.hero-sub {
+  font-size: var(--fs-md);
+  line-height: 1.72;
+  color: var(--c-text-secondary);
+  max-width: 30ch;
+  margin: 0 auto;
+}
+
+/* ---------- 悬浮玻璃卡 ---------- */
+.login-card {
+  padding: var(--space-7);
+  border-radius: 26px;
+  border: 1px solid var(--c-border);
+  background: color-mix(in srgb, var(--c-surface) 86%, transparent);
+  backdrop-filter: blur(22px) saturate(165%);
+  -webkit-backdrop-filter: blur(22px) saturate(165%);
+  box-shadow: var(--shadow-lg), var(--hairline-top);
+  animation: rise .55s var(--ease-out) both;
+  animation-delay: .06s;
+}
+
+/* ---------- 平台切换 ---------- */
+.seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 15px;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border-light);
+}
+.seg-btn {
+  padding: 11px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--c-text-secondary);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease),
+              box-shadow var(--t) var(--ease);
+}
+.seg-btn:hover { color: var(--c-text); }
+.seg-btn.active {
+  background: var(--c-surface);
+  color: var(--c-text);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---------- 表单 ---------- */
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-6);
+}
+.field-label {
+  font-size: var(--fs-sm);
+  font-weight: 600;
   color: var(--c-text-secondary);
 }
+.login-form input {
+  height: 50px;
+  padding: 0 16px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: var(--c-surface-2);
+  font-size: var(--fs-md);
+  transition: background var(--t) var(--ease), border-color var(--t) var(--ease),
+              box-shadow var(--t) var(--ease);
+}
+.login-form input:hover:not(:disabled) { background: var(--c-surface-3); }
+.login-form input:focus {
+  background: var(--c-surface);
+  border-color: var(--c-primary);
+  box-shadow: 0 0 0 4px var(--c-primary-ring);
+}
+
+/* 主按钮：渐变 + 光晕，是整页唯一的强视觉锚点 */
+.login-cta {
+  height: 52px;
+  margin-top: var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: none;
+  border-radius: 14px;
+  background: var(--c-gradient);
+  color: #fff;
+  font-family: inherit;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: .01em;
+  cursor: pointer;
+  box-shadow: var(--shadow-primary-lg);
+  transition: transform var(--t) var(--ease), box-shadow var(--t) var(--ease),
+              filter var(--t) var(--ease);
+}
+.login-cta:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow: 0 14px 34px -8px rgba(0, 113, 227, .48);
+}
+.login-cta:active:not(:disabled) { transform: translateY(0) scale(.99); }
+.login-cta:disabled { opacity: .55; cursor: not-allowed; box-shadow: none; }
+.login-cta-loading { display: inline-flex; align-items: center; gap: 8px; }
+.login-cta .spinner { border-color: rgba(255, 255, 255, .35); border-top-color: #fff; }
+
 .login-foot {
-  margin-top: 18px;
-  font-size: 12px;
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--c-border-light);
+  font-size: var(--fs-xs);
   color: var(--c-text-muted);
   text-align: center;
 }
 
-/* ---------- 登录卡片 ---------- */
-.login-card {
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: 8px;
-  padding: 24px;
-}
-
-.tab-switcher.minimal {
+/* ---------- 信任说明 ---------- */
+.assure-row {
+  list-style: none;
   display: flex;
-  gap: 0;
-  margin-bottom: 22px;
-  border-bottom: 1px solid var(--c-border-light);
-  background: transparent;
-  padding: 0;
-  border-radius: 0;
-}
-.tab-switcher.minimal .tab-btn {
-  flex: 1;
-  padding: 10px 0 12px;
-  border: none;
-  background: transparent;
-  border-radius: 0;
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--c-text-secondary);
-  cursor: pointer;
-  position: relative;
-  transition: color .2s ease;
-}
-.tab-switcher.minimal .tab-btn:hover:not(.active) { color: var(--c-text); }
-.tab-switcher.minimal .tab-btn.active {
-  color: var(--c-primary);
-  background: transparent;
-  box-shadow: none;
-}
-.tab-switcher.minimal .tab-btn.active::after {
-  content: '';
-  position: absolute; left: 0; right: 0; bottom: -1px;
-  height: 2px;
-  border-radius: 1px;
-  background: var(--c-primary);
-}
-
-.field.minimal {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  margin-bottom: 16px;
-}
-.field.minimal label {
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--c-text-secondary);
-}
-.field.minimal input {
-  height: 42px;
-  padding: 0 12px;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  background: var(--c-surface);
-  color: var(--c-text);
-  font-size: 14px;
-  outline: none;
-  transition: border-color .15s ease, background-color .15s ease;
-}
-.field.minimal input:hover { border-color: #bdbdc2; }
-.field.minimal input:focus {
-  border-color: var(--c-primary);
-  background: var(--c-surface);
-}
-.field.minimal input::placeholder { color: var(--c-text-muted); }
-.field.minimal input:disabled { background: var(--c-surface-2); color: var(--c-text-muted); cursor: not-allowed; }
-
-/* ---------- 按钮 ---------- */
-.btn {
-  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 9px 18px;
-  border: none;
-  border-radius: 6px;
-  font-weight: 500;
-  font-size: 13.5px;
-  cursor: pointer;
-  transition: background-color .15s ease, opacity .15s ease;
-  white-space: nowrap;
+  gap: var(--space-6);
+  flex-wrap: wrap;
+  margin-top: var(--space-8);
 }
-.btn-primary {
-  background: var(--c-primary);
-  color: #fff;
+.assure-row li {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
 }
-.btn-primary:hover:not(:disabled) { background: var(--c-primary-hover); }
-.btn-primary:active:not(:disabled) { background: var(--c-primary-active); }
-.btn-primary:disabled { opacity: .5; cursor: not-allowed; }
-.btn-ghost {
-  background: transparent;
-  color: var(--c-text-secondary);
-  padding: 8px 14px;
-}
-.btn-ghost:hover { color: var(--c-text); background: var(--c-surface-2); }
-.btn-outline {
-  background: transparent;
-  border: 1px solid var(--c-border);
-  color: var(--c-text-secondary);
-}
-.btn-outline:hover {
-  border-color: var(--c-primary);
-  color: var(--c-primary);
-  background: transparent;
-}
-.btn-lg { padding: 11px 24px; font-size: 14px; border-radius: 6px; }
-.btn-block { width: 100%; }
-.btn-loading { display: flex; align-items: center; gap: 8px; }
+.assure-row svg { flex: 0 0 auto; opacity: .8; }
 
-.spinner, .spinner-lg {
-  border: 2px solid var(--c-border);
-  border-top-color: var(--c-primary);
-  border-radius: 50%;
-  animation: spin .65s linear infinite;
-}
-.spinner { width: 15px; height: 15px; }
-.spinner-lg { width: 36px; height: 36px; margin: 0 auto 12px; }
-.btn-primary .spinner { border-color: rgba(255,255,255,.25); border-top-color: #fff; }
+/* ==================== 阶段二 · 页头 ==================== */
+.results { position: relative; }
 
-/* ---------- 结果区 ---------- */
-.results {
-  padding: 24px 0 40px;
-  position: relative;
-  animation: fadeInUp .4s cubic-bezier(.32,.72,.35,1);
-}
 .rescan-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(255,255,255,.88);
+  z-index: 20;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  z-index: 10;
-  border-radius: 14px;
-  gap: 12px;
-}
-.rescan-overlay p {
-  font-size: 14px;
+  gap: var(--space-3);
+  background: color-mix(in srgb, var(--c-bg) 78%, transparent);
+  backdrop-filter: blur(3px);
+  border-radius: var(--radius-lg);
   color: var(--c-text-secondary);
-  font-weight: 500;
+  font-size: var(--fs-sm);
 }
-
-.submitted-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 18px;
-  background: var(--c-primary-bg);
-  border: 1px solid rgba(20,20,24,.25);
-  border-radius: 12px;
-  margin-bottom: 16px;
-  font-size: 13px;
-  color: var(--c-primary);
-  font-weight: 500;
-  animation: fadeInUp .4s cubic-bezier(.32,.72,.35,1) backwards;
-}
-.submitted-banner strong { font-weight: 700; }
 
 .results-head {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
+  gap: var(--space-5);
   flex-wrap: wrap;
-  gap: 16px;
-  margin-bottom: 24px;
-  padding-bottom: 18px;
-  border-bottom: 1px solid var(--c-border-light);
+  margin-bottom: var(--space-6);
 }
 .rh-title {
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: -.015em;
-  color: var(--c-text);
+  font-size: var(--fs-h);
+  letter-spacing: var(--tracking-title);
+  margin: var(--space-3) 0 var(--space-2);
 }
-.rh-meta {
+.rh-meta { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.rh-student { font-size: var(--fs-md); font-weight: 600; }
+.rh-meta-item {
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--c-border);
+}
+.rt-actions { display: flex; gap: var(--space-2); }
+
+.submitted-banner {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 14px;
-  margin-top: 8px;
-  font-size: 13px;
+  gap: 9px;
+  padding: 11px 16px;
+  margin-bottom: var(--space-5);
+  border-radius: var(--radius-md);
+  background: var(--c-primary-soft);
+  border: 1px solid var(--c-primary-ring);
+  color: var(--c-primary);
+  font-size: var(--fs-sm);
+}
+
+.scenario-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 11px 16px;
+  margin-bottom: var(--space-5);
+  border-radius: var(--radius-md);
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border-light);
+  font-size: var(--fs-sm);
   color: var(--c-text-secondary);
 }
-.rh-meta-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 14px;
-}
-.rh-meta-item + .rh-meta-item::before {
-  content: '·';
-  color: var(--c-text-muted);
-  margin-right: 14px;
-}
-.rh-student {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 12px;
-  background: var(--c-primary);
-  color: #fff;
-  border-radius: 980px;
-  font-size: 12px;
-  font-weight: 600;
-}
-.rt-actions { display: flex; gap: 10px; align-items: center; flex-shrink: 0; }
-.btn-back-home { font-size: 12.5px; padding: 6px 14px; }
-.rt-pill {
-  padding: 3px 12px;
-  border-radius: 980px;
-  font-size: 12px;
-  font-weight: 600;
-}
-.rt-pill.ok { background: var(--c-surface-3); color: var(--c-text); }
-.rt-pill.total { background: var(--c-surface-3); color: var(--c-text); }
-.rt-pill.pending { background: var(--c-surface-3); color: var(--c-text-secondary); }
-
-/* ---------- 场景横幅 & 套餐卡 ---------- */
-.plan-select { margin-bottom: 24px; }
-.scenario-banner {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 14px 18px;
-  border-radius: 14px;
-  margin-bottom: 18px;
-}
-.scenario-banner svg { flex-shrink: 0; margin-top: 1px; }
-.sb-body { display: flex; flex-direction: column; gap: 3px; }
-.sb-body strong { font-size: 13px; font-weight: 700; }
-.sb-body span { font-size: 12.5px; line-height: 1.5; }
-.video-banner { background: var(--c-surface-2); color: var(--c-text); border: 1px solid var(--c-border-light); }
-.exam-banner { background: var(--c-surface-2); color: var(--c-text); border: 1px solid var(--c-border-light); }
-.both-banner { background: var(--c-surface-2); color: var(--c-text); border: 1px solid var(--c-border-light); }
-
-.plan-card {
+.ss-tag {
+  flex: 0 0 auto;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
   background: var(--c-surface);
-  border: 1.5px solid var(--c-border-light);
-  border-radius: 14px;
-  padding: 22px 16px;
-  text-align: center;
-  transition: all .25s cubic-bezier(.32,.72,.35,1);
-  position: relative;
-  box-shadow: 0 1px 2px rgba(20,20,24,.06);
-  animation: fadeInUp .45s cubic-bezier(.32,.72,.35,1) backwards;
+  border: 1px solid var(--c-border);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--c-text);
 }
-.plan-card.single {
-  max-width: 340px;
-  margin: 0 auto;
-  cursor: default;
-}
-.plan-card.single.active {
-  border-color: var(--c-primary);
-  box-shadow: 0 0 0 3px rgba(20,20,24,.1), 0 4px 16px rgba(20,20,24,.08);
-}
-.plan-card-top {
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 4px;
-}
-.plan-tag {
-  padding: 3px 10px;
-  border-radius: 980px;
-  font-size: 10.5px;
-  font-weight: 700;
-}
-.tag-green { background: var(--c-primary); color: #fff; }
-.tag-blue { background: var(--c-primary); color: #fff; }
-.plan-icon {
-  margin-bottom: 10px;
-  display: flex;
-  justify-content: center;
-}
-.plan-name { font-size: 15px; font-weight: 700; color: var(--c-text); margin-bottom: 2px; }
-.plan-desc { font-size: 12.5px; color: var(--c-text-secondary); font-weight: 600; margin-bottom: 10px; }
-.plan-short-desc { font-size: 11px; color: var(--c-text-muted); line-height: 1.4; }
 
-/* ---------- 平台块 & 课程行 ---------- */
+/* ==================== 平台分组 ==================== */
 .platform-block {
+  margin-bottom: var(--space-5);
   background: var(--c-surface);
-  border: 1px solid var(--c-border-light);
-  border-radius: 14px;
-  padding: 18px 20px;
-  margin-bottom: 14px;
-  box-shadow: 0 1px 2px rgba(20,20,24,.06);
-  transition: box-shadow .25s cubic-bezier(.32,.72,.35,1);
-  animation: fadeInUp .45s cubic-bezier(.32,.72,.35,1) backwards;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs), var(--hairline-top);
+  overflow: hidden;
+  animation: rise .45s var(--ease-out) both;
 }
-.platform-block:hover {
-  box-shadow: 0 4px 16px rgba(20,20,24,.08);
-}
+
 .pb-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
+  gap: var(--space-3);
+  padding: 13px var(--space-5);
+  background: var(--c-surface-2);
+  border-bottom: 1px solid var(--c-border);
 }
-.pb-check input { cursor: pointer; accent-color: var(--c-primary); width: 16px; height: 16px; }
+.pb-name { font-size: var(--fs-base); font-weight: 600; }
 .pb-badge {
-  padding: 3px 10px;
-  border-radius: 980px;
-  font-size: 11.5px;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
   font-weight: 600;
 }
 .pb-badge.ok { background: var(--c-success-bg); color: var(--c-success); }
 .pb-badge.fail { background: var(--c-danger-bg); color: var(--c-danger); }
-.pb-count { font-size: 12px; color: var(--c-text-muted); margin-left: auto; }
+.pb-count { margin-left: auto; font-size: var(--fs-xs); color: var(--c-text-muted); }
 
+/* 自定义勾选：统一两处复选框观感 */
+.pb-check input,
+.cr-check input {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--c-border-strong);
+  border-radius: 5px;
+  background: var(--c-surface);
+  cursor: pointer;
+  display: grid;
+  place-content: center;
+  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+  flex: 0 0 auto;
+}
+.pb-check input::after,
+.cr-check input::after {
+  content: '';
+  width: 10px;
+  height: 10px;
+  transform: scale(0);
+  transition: transform var(--t-fast) var(--ease-spring);
+  background: #fff;
+  clip-path: polygon(14% 44%, 0 65%, 40% 100%, 100% 16%, 85% 0, 39% 68%);
+}
+.pb-check input:hover:not(:disabled),
+.cr-check input:hover:not(:disabled) { border-color: var(--c-primary); }
+.pb-check input:checked,
+.cr-check input:checked { background: var(--c-primary); border-color: var(--c-primary); }
+.pb-check input:checked::after,
+.cr-check input:checked::after { transform: scale(1); }
+.pb-check input:indeterminate,
+.cr-check input:indeterminate { background: var(--c-primary); border-color: var(--c-primary); }
+.pb-check input:indeterminate::after,
+.cr-check input:indeterminate::after {
+  transform: scale(1);
+  clip-path: none;
+  width: 9px;
+  height: 2px;
+  border-radius: 1px;
+}
+.pb-check input:disabled,
+.cr-check input:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ==================== 课程行 ==================== */
 .course-list { display: flex; flex-direction: column; }
 .course-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 0;
-  border-top: 1px solid var(--c-surface-3);
-  transition: opacity .2s;
+  gap: var(--space-4);
+  padding: 13px var(--space-5);
+  border-bottom: 1px solid var(--c-border-light);
+  transition: background var(--t-fast) var(--ease);
 }
-.course-row.done { opacity: .5; }
-.cr-check input { cursor: pointer; accent-color: var(--c-primary); width: 16px; height: 16px; }
-.cr-check input:disabled { cursor: not-allowed; }
+.course-row:last-child { border-bottom: none; }
+.course-row:hover { background: var(--c-surface-2); }
+.course-row.is-checked { background: var(--c-primary-soft); }
+.course-row.is-done { opacity: .55; }
+
+.cr-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.cr-top { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .cr-name {
-  flex: 1;
-  font-size: 13.5px;
-  color: var(--c-text);
-  min-width: 0;
+  font-size: var(--fs-base);
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 46ch;
 }
-.cr-meta { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-.cr-bar {
-  width: 70px;
-  height: 5px;
-  background: var(--c-surface-3);
-  border-radius: 3px;
-  overflow: hidden;
-}
-.cr-bar-fill {
-  height: 100%;
-  border-radius: 3px;
-  background: var(--c-primary);
-  transition: width .3s cubic-bezier(.32,.72,.35,1);
-}
-.cr-bar-fill.done { background: var(--c-primary); }
-.cr-bar-fill.low { background: #b6b6bc; }
-.cr-pct { font-size: 11px; color: var(--c-text-muted); min-width: 34px; text-align: right; }
 .cr-pill {
   padding: 2px 8px;
-  border-radius: 980px;
-  font-size: 11px;
+  border-radius: var(--radius-pill);
+  background: var(--c-surface-3);
+  color: var(--c-text-secondary);
+  font-size: var(--fs-xs);
   font-weight: 600;
+  white-space: nowrap;
 }
-.cr-pill.warn { background: var(--c-surface-3); color: var(--c-text-secondary); }
-.cr-pill.ok { background: var(--c-surface-3); color: var(--c-text); }
-.cr-pill.exam { background: var(--c-surface-3); color: var(--c-text); font-size: 10px; }
-.cr-pill.deleted { background: var(--c-surface-3); color: var(--c-text-muted); font-size: 10px; text-decoration: line-through; }
+.cr-pill.warn { background: var(--c-warning-bg); color: var(--c-warning); }
+.cr-pill.ok { background: var(--c-success-bg); color: var(--c-success); }
+.cr-pill.deleted { text-decoration: line-through; opacity: .7; }
 
-/* ---------- 刷课节奏选择器 ---------- */
-.speed-picker {
-  margin-bottom: 12px;
-  padding: 14px 18px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border-light);
-  border-radius: 14px;
+.cr-meter { display: flex; align-items: center; gap: 10px; }
+.cr-meter-track {
+  flex: 1;
+  max-width: 320px;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--c-surface-3);
+  overflow: hidden;
 }
-.sp-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
-.sp-title { font-size: 13px; font-weight: 700; color: var(--c-text); }
-.sp-desc { font-size: 12px; color: var(--c-text-muted); }
-.sp-opts { display: flex; gap: 8px; flex-wrap: wrap; }
+.cr-meter-fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--c-primary);
+  transition: width var(--t-slow) var(--ease-out);
+}
+.cr-meter-fill.done { background: var(--c-success); }
+.cr-meter-fill.low { background: var(--c-warning); }
+.cr-pct { font-size: var(--fs-xs); color: var(--c-text-muted); min-width: 34px; }
+
+.cr-side { flex: 0 0 auto; text-align: right; min-width: 62px; }
+.cr-price { font-size: var(--fs-base); font-weight: 600; }
+.cr-done-tag { font-size: var(--fs-xs); color: var(--c-text-muted); }
+
+/* ==================== 刷课节奏 ==================== */
+.speed-picker {
+  margin: var(--space-6) 0 var(--space-5);
+  padding: var(--space-5);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs), var(--hairline-top);
+}
+.sp-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+.sp-desc { font-size: var(--fs-sm); color: var(--c-text-muted); }
+.sp-opts { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .sp-opt {
   flex: 1 1 0;
-  min-width: 130px;
+  min-width: 140px;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  padding: 9px 14px;
-  border: 1px solid var(--c-border-light);
-  border-radius: 10px;
-  background: transparent;
+  padding: 11px 16px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  font-family: inherit;
   cursor: pointer;
-  transition: border-color .18s, background .18s, transform .18s;
   text-align: left;
+  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease),
+              transform var(--t-fast) var(--ease);
 }
 .sp-opt:hover { border-color: var(--c-primary); transform: translateY(-1px); }
 .sp-opt.active {
   border-color: var(--c-primary);
-  background: color-mix(in srgb, var(--c-primary) 8%, transparent);
+  background: var(--c-primary-soft);
+  box-shadow: inset 0 0 0 1px var(--c-primary);
 }
-.sp-opt-name { font-size: 13.5px; font-weight: 700; color: var(--c-text); }
+.sp-opt-name { font-size: var(--fs-base); font-weight: 700; }
 .sp-opt.active .sp-opt-name { color: var(--c-primary); }
-.sp-opt-sub { font-size: 11.5px; color: var(--c-text-muted); }
+.sp-opt-sub { font-size: var(--fs-xs); color: var(--c-text-muted); }
 .sp-warn {
-  margin: 10px 0 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--c-warning, #b26a00);
+  margin-top: var(--space-3);
+  padding: 9px 13px;
+  border-radius: var(--radius-sm);
+  background: var(--c-warning-bg);
+  color: var(--c-warning);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
 }
 
-/* ---------- 底部汇总栏 ---------- */
-.summary-bar {
+/* ==================== 结算条 ==================== */
+.checkout {
   position: sticky;
-  bottom: 12px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border-light);
-  border: 1px solid var(--c-border-light);
-  border-radius: 16px;
-  padding: 16px 24px;
+  bottom: var(--space-4);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  box-shadow: 0 8px 24px rgba(20,20,24,.1), 0 24px 64px rgba(20,20,24,.12), inset 0 1px 0 rgba(16,16,20,.03);
-  margin-bottom: 24px;
-  animation: fadeInUp .5s cubic-bezier(.32,.72,.35,1) backwards;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+  padding: var(--space-5);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md), var(--hairline-top);
 }
-.sb-left { display: flex; gap: 20px; flex-wrap: wrap; }
-.sb-item { font-size: 13px; color: var(--c-text-secondary); }
-.sb-item strong { color: var(--c-text); }
-.sb-right { display: flex; align-items: center; gap: 18px; }
-.sb-detail { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-.sb-detail-item { font-size: 11.5px; color: var(--c-text-muted); white-space: nowrap; }
-.sb-price {
-  font-size: 26px;
-  font-weight: 800;
-  letter-spacing: -.01em;
-  font-variant-numeric: tabular-nums;
-  color: var(--c-text);
+.co-info { min-width: 0; }
+.co-stats { display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap; font-size: var(--fs-sm); color: var(--c-text-secondary); }
+.co-stat b { font-size: var(--fs-md); color: var(--c-text); }
+.co-sep { color: var(--c-text-muted); }
+.co-breakdown {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-top: 5px;
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+}
+.co-action { display: flex; align-items: center; gap: var(--space-5); margin-left: auto; }
+.co-total { display: flex; flex-direction: column; align-items: flex-end; }
+.co-total-label { font-size: var(--fs-xs); color: var(--c-text-muted); }
+.co-total-val {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -.02em;
+  line-height: 1.15;
 }
 
-/* ---------- 支付弹窗 ---------- */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(22,22,26,.42);
-  display: none;
-  align-items: center;
-  justify-content: center;
-  z-index: 500;
+/* ==================== 支付弹窗 ==================== */
+.pay-modal { max-width: 420px; }
+.pay-hero { text-align: center; margin-bottom: var(--space-5); }
+.pay-hero .modal-amount { margin: var(--space-2) 0 6px; }
+.pay-warn {
+  font-size: var(--fs-xs);
+  color: var(--c-warning);
+  line-height: 1.6;
 }
-.modal-overlay.show {
-  display: flex;
-  animation: fadeIn .2s ease;
-}
-.modal-box {
-  background: var(--c-surface);
-  border: 1px solid var(--c-border-light);
-  border-radius: 20px;
-  padding: 32px;
-  width: 400px;
-  max-width: calc(100vw - 48px);
-  text-align: center;
-  box-shadow: 0 8px 20px rgba(20,20,24,.09), 0 32px 80px rgba(20,20,24,.14);
-  animation: slideUp .25s cubic-bezier(.32,.72,.35,1);
-}
-.modal-box h3 {
-  font-size: 18px;
-  font-weight: 700;
-  letter-spacing: -.01em;
-  color: var(--c-text);
-  margin-bottom: 4px;
-}
-.pm-timeout-note {
-  font-size: 14px;
-  color: var(--c-text-secondary);
-  margin: 16px 0 24px;
-}
-.modal-amount {
-  font-size: 42px;
-  font-weight: 800;
-  letter-spacing: -.02em;
-  font-variant-numeric: tabular-nums;
-  background: var(--c-gradient);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  margin: 16px 0 4px;
-}
-.pay-amount-warn {
-  text-align: center;
-  font-size: 12px;
-  color: var(--c-danger);
-  margin: 0 0 16px;
-  font-weight: 500;
-}
+.pm-note { font-size: var(--fs-sm); color: var(--c-text-secondary); line-height: 1.7; }
+
 .pay-error {
+  padding: 10px 13px;
+  margin-bottom: var(--space-4);
+  border-radius: var(--radius-sm);
   background: var(--c-danger-bg);
   color: var(--c-danger);
-  border-radius: 10px;
-  padding: 10px 14px;
-  font-size: 12.5px;
-  margin-bottom: 16px;
-  text-align: left;
+  font-size: var(--fs-xs);
 }
-.pay-method-tabs {
-  display: flex;
-  gap: 0;
-  margin-bottom: 20px;
+
+.pay-methods {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+  padding: 3px;
   background: var(--c-surface-2);
   border: 1px solid var(--c-border-light);
-  border-radius: 12px;
-  padding: 3px;
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-5);
 }
 .pm-tab {
-  flex: 1;
-  padding: 8px 0;
+  padding: 9px;
   border: none;
+  border-radius: var(--radius-sm);
   background: transparent;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
   color: var(--c-text-secondary);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
   cursor: pointer;
-  transition: all .2s cubic-bezier(.32,.72,.35,1);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
-.pm-tab.active {
-  background: var(--c-surface);
-  color: var(--c-text);
-  box-shadow: 0 1px 3px rgba(16, 16, 20, .12);
-}
-.pm-tab:hover:not(.active) { color: var(--c-text); }
+.pm-tab.active { background: var(--c-surface); color: var(--c-text); box-shadow: var(--shadow-xs); }
 
-.qr-section { margin: 16px 0; }
+.qr-section { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); }
 .pay-qr-img {
   width: 200px;
   height: 200px;
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, .1);
+  object-fit: contain;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
   background: #fff;
-  padding: 8px;
-  box-shadow: 0 0 0 6px rgba(16, 16, 20, .04), 0 12px 32px rgba(20,20,24,.09);
+  padding: 6px;
 }
 .pay-qr-placeholder {
   width: 200px;
   height: 200px;
-  margin: 0 auto;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: var(--c-surface-3);
-  border-radius: 12px;
-  border: 2px dashed var(--c-border);
-  font-size: 13px;
+  gap: var(--space-3);
+  border: 1px dashed var(--c-border);
+  border-radius: var(--radius-md);
   color: var(--c-text-muted);
+  font-size: var(--fs-sm);
 }
-.qr-label { font-size: 12px; color: var(--c-text-muted); margin-top: 10px; }
+.qr-label { font-size: var(--fs-xs); color: var(--c-text-muted); }
+.modal-footer.col { flex-direction: column; gap: var(--space-2); }
 
-.pay-save-btn { margin-top: 8px; }
-.pay-save-btn.wechat {
-  background: #07c160;
-  box-shadow: 0 2px 8px rgba(7,193,96,.25);
-}
-.pay-save-btn.wechat:hover:not(:disabled) {
-  background: #06ad56;
-  box-shadow: 0 4px 14px rgba(7,193,96,.3);
-}
-.pay-cancel-btn { margin-top: 10px; }
-
-/* ---------- 页脚 ---------- */
-.page-footer {
-  text-align: center;
-  padding: 0 20px 24px;
-  margin-top: auto;
-}
-.footer-brand {
-  font-size: 12px;
-  color: var(--c-text-muted);
-}
-
-/* ---------- 重新输入密码弹窗 ---------- */
+/* ==================== 公告 ==================== */
+.announcement-overlay,
 .relogin-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9999;
-  background: rgba(22,22,26,.42);
+  z-index: 300;
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: fadeIn .2s ease;
+  padding: var(--space-5);
+  background: rgba(16, 14, 10, .45);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
+.announcement-box,
 .relogin-box {
-  background: var(--c-surface);
-  border: 1px solid var(--c-border-light);
-  border-radius: 18px;
-  width: 380px;
-  max-width: 92vw;
-  box-shadow: 0 8px 20px rgba(20,20,24,.09), 0 32px 80px rgba(20,20,24,.14);
-  overflow: hidden;
-  animation: slideUp .25s cubic-bezier(.32,.72,.35,1);
-}
-.relogin-header {
-  padding: 20px 24px 0;
-  position: relative;
-}
-.relogin-header h3 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: -.01em;
-  color: var(--c-text);
-}
-.relogin-sub {
-  display: block;
-  font-size: 12px;
-  color: var(--c-text-muted);
-  margin-top: 4px;
-}
-.relogin-close {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  background: none;
-  border: none;
-  font-size: 22px;
-  color: var(--c-text-muted);
-  cursor: pointer;
-  line-height: 1;
-  padding: 0;
-  transition: color .2s;
-}
-.relogin-close:hover { color: var(--c-text); }
-.relogin-body { padding: 16px 24px; }
-.relogin-label {
-  display: block;
-  font-size: 13px;
-  color: var(--c-text-secondary);
-  margin-bottom: 8px;
-}
-.relogin-input {
   width: 100%;
-  padding: 10px 14px;
-  border: 1px solid var(--c-border);
-  border-radius: 12px;
-  font-size: 14px;
-  color: var(--c-text);
-  background: var(--c-surface-2);
-  outline: none;
-  transition: border-color .2s cubic-bezier(.32,.72,.35,1), box-shadow .2s cubic-bezier(.32,.72,.35,1);
-  box-sizing: border-box;
-}
-.relogin-input:focus {
-  border-color: var(--c-primary);
-  box-shadow: 0 0 0 4px rgba(20,20,24,.12);
-}
-.relogin-footer {
-  padding: 12px 24px 20px;
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-}
-
-/* ---------- 系统公告弹窗 ---------- */
-.announcement-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 9998;
-  background: rgba(22,22,26,.42);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  animation: fadeIn .2s ease;
-}
-.announcement-box {
+  max-width: 460px;
   background: var(--c-surface);
-  border: 1px solid var(--c-border-light);
-  border-radius: 18px;
-  width: 420px;
-  max-width: 90vw;
-  box-shadow: 0 8px 20px rgba(20,20,24,.09), 0 32px 80px rgba(20,20,24,.14);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  animation: modal-in var(--t-slow) var(--ease-out) both;
   overflow: hidden;
-  animation: slideUp .25s cubic-bezier(.32,.72,.35,1);
 }
 .announcement-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 24px 24px 0;
-  color: var(--c-primary);
+  padding: var(--space-5) var(--space-6) var(--space-3);
+  border-bottom: 1px solid var(--c-border-light);
 }
-.announcement-header h3 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 700;
-  letter-spacing: -.01em;
-  color: var(--c-text);
-}
-.announcement-header svg { flex-shrink: 0; }
 .announcement-body {
-  padding: 16px 24px 24px;
-  white-space: pre-line;
-  font-size: 14px;
+  padding: var(--space-5) var(--space-6);
+  font-size: var(--fs-base);
+  line-height: 1.75;
   color: var(--c-text-secondary);
-  line-height: 1.7;
-  max-height: 50vh;
+  white-space: pre-wrap;
+  max-height: 52vh;
   overflow-y: auto;
-  word-break: break-word;
 }
-.announcement-confirm {
-  margin: 0 24px 24px;
-  width: calc(100% - 48px);
+.announcement-foot { padding: 0 var(--space-6) var(--space-6); }
+
+/* ==================== 重新登录 ==================== */
+.relogin-head { padding: var(--space-6) var(--space-6) 0; }
+.relogin-title { font-size: var(--fs-lg); letter-spacing: var(--tracking-title); margin: var(--space-2) 0 4px; }
+.relogin-sub { font-size: var(--fs-sm); color: var(--c-text-muted); }
+.relogin-body { padding: var(--space-5) var(--space-6); }
+.relogin-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: 0 var(--space-6) var(--space-6);
 }
 
-/* ---------- 响应式 ---------- */
-@media (max-width: 768px) {
-  .summary-bar { flex-direction: column; gap: 12px; }
-  .sb-left, .sb-right { width: 100%; justify-content: center; }
-  .login-card { padding: 22px; }
-  .announcement-box { width: 92vw; }
-  .announcement-header { padding: 18px 18px 0; }
-  .announcement-body { padding: 12px 18px 18px; }
-  .announcement-confirm { margin: 0 18px 18px; width: calc(100% - 36px); }
-  .hide-on-mobile-results { display: none; }
+/* ==================== 页脚 ==================== */
+.page-footer {
+  padding: var(--space-8) var(--space-6) var(--space-6);
+  text-align: center;
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
 }
-@media (max-width: 480px) {
-  .content-wrapper { padding: 0 16px; }
-  .landing { padding-top: 40px; }
-  .login-head h1 { font-size: 20px; }
-  .done-card { padding: 36px 24px; }
-  .cr-bar { display: none; }
-  .modal-box { padding: 26px 20px; }
+
+/* ==================== 响应式 ==================== */
+@media (max-width: 768px) {
+  .content-wrapper { padding-top: var(--space-6); padding-bottom: var(--space-12); }
+  .results-head { align-items: flex-start; }
+  .rh-title { font-size: var(--fs-title); }
+  .cr-name { max-width: 100%; white-space: normal; }
+  .course-row { padding: 12px var(--space-4); gap: var(--space-3); }
+  .pb-header { padding: 11px var(--space-4); }
+  .checkout {
+    position: static;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-4);
+  }
+  .co-action { margin-left: 0; justify-content: space-between; width: 100%; }
+  .co-action .btn { flex: 1; }
+  .cr-meter-track { max-width: none; }
+  .hide-on-mobile-results { display: none; }
 }
 </style>
