@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS orders (
     accepted_at VARCHAR(255),
     started_at VARCHAR(255),
     finished_at VARCHAR(255),
-    deleted_at VARCHAR(255)
+    deleted_at VARCHAR(255),
+    speed_mode VARCHAR(255) DEFAULT 'balanced'
 );
 
 CREATE TABLE IF NOT EXISTS credentials (
@@ -173,7 +174,8 @@ CREATE TABLE IF NOT EXISTS queue_jobs_school (
     created_at VARCHAR(255) NOT NULL,
     started_at VARCHAR(255),
     finished_at VARCHAR(255),
-    deleted_at VARCHAR(255)
+    deleted_at VARCHAR(255),
+    speed_mode VARCHAR(255) DEFAULT 'balanced'
 );
 CREATE TABLE IF NOT EXISTS queue_jobs_chaoxing (
     job_id VARCHAR(255) PRIMARY KEY,
@@ -198,7 +200,8 @@ CREATE TABLE IF NOT EXISTS queue_jobs_chaoxing (
     created_at VARCHAR(255) NOT NULL,
     started_at VARCHAR(255),
     finished_at VARCHAR(255),
-    deleted_at VARCHAR(255)
+    deleted_at VARCHAR(255),
+    speed_mode VARCHAR(255) DEFAULT 'balanced'
 );
 "#;
 
@@ -241,23 +244,39 @@ const YPAY_ACCOUNT_EXTRA_COLUMNS: &[(&str, &str)] = &[
     ("alipay_root_cert", "TEXT"),
 ];
 
+/// 老库（DDL 早于该列）缺失的列：orders / queue_jobs_school 的刷课档位
+const SPEED_MODE_COLUMN: &[(&str, &str)] = &[("speed_mode", "VARCHAR(255) DEFAULT 'balanced'")];
+
+/// 幂等补列：表里缺失的列用 ALTER TABLE ADD COLUMN 补上（已存在的跳过）
+fn add_missing_columns(
+    conn: &rusqlite::Connection,
+    table: &str,
+    cols: &[(&str, &str)],
+) -> Result<()> {
+    let existing: std::collections::HashSet<String> = {
+        let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+        rows.collect::<std::result::Result<_, _>>()?
+    };
+    for (col, def) in cols {
+        if !existing.contains(*col) {
+            conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} {def}"))
+                .with_context(|| format!("迁移失败: {table} 添加列 {col}"))?;
+        }
+    }
+    Ok(())
+}
+
 /// 保证 schema 存在：建表 + 幂等轻量迁移。每次启动调用，可重复执行。
 pub fn ensure_schema(pool: &Pool<SqliteConnectionManager>) -> Result<()> {
     let conn = pool.get().context("获取连接失败")?;
     conn.execute_batch(DDL).context("建表失败")?;
 
-    // ypay_account 缺失列补齐（老库兼容，幂等）
-    let existing: std::collections::HashSet<String> = {
-        let mut stmt = conn.prepare("PRAGMA table_info(ypay_account)")?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
-        rows.collect::<std::result::Result<_, _>>()?
-    };
-    for (col, def) in YPAY_ACCOUNT_EXTRA_COLUMNS {
-        if !existing.contains(*col) {
-            conn.execute_batch(&format!("ALTER TABLE ypay_account ADD COLUMN {col} {def}"))
-                .with_context(|| format!("迁移失败: ypay_account 添加列 {col}"))?;
-        }
-    }
+    // 缺失列补齐（老库兼容，幂等）
+    add_missing_columns(&conn, "ypay_account", YPAY_ACCOUNT_EXTRA_COLUMNS)?;
+    add_missing_columns(&conn, "orders", SPEED_MODE_COLUMN)?;
+    add_missing_columns(&conn, "queue_jobs_school", SPEED_MODE_COLUMN)?;
+    add_missing_columns(&conn, "queue_jobs_chaoxing", SPEED_MODE_COLUMN)?;
 
     conn.execute_batch(INDEX_DDL).context("建索引失败")?;
 

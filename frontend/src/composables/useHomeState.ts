@@ -104,6 +104,20 @@ export function useHomeState() {
   }
   loadPackagePricing()
 
+  // ── 刷课节奏档位（急速 / 均衡 / 温柔）──
+  // 与后端 speed.rs 的 SpeedMode 一一对应；默认均衡，选择结果本地记住
+  const SPEED_LS_KEY = 'course_speed_mode'
+  type SpeedMode = 'turbo' | 'balanced' | 'gentle'
+  const speedMode = ref<SpeedMode>(
+    (['turbo', 'balanced', 'gentle'] as const).includes(localStorage.getItem(SPEED_LS_KEY) as SpeedMode)
+      ? (localStorage.getItem(SPEED_LS_KEY) as SpeedMode)
+      : 'balanced'
+  )
+  function setSpeedMode(mode: SpeedMode) {
+    speedMode.value = mode
+    try { localStorage.setItem(SPEED_LS_KEY, mode) } catch {}
+  }
+
   const submittedCourseIds = ref(new Set<string>())
   const allInProgress = ref(false)
   const pendingOrderedCourseIds = ref<string[]>([])
@@ -439,7 +453,7 @@ export function useHomeState() {
           price = backendTotal
           price = free ? 0 : parseFloat(price.toFixed(2))
         }
-        return { website_id: wid, task_type: taskType, course_ids: g.ids, video_count: g.v, exam_count: g.e, price, course_details: g.details }
+        return { website_id: wid, task_type: taskType, course_ids: g.ids, video_count: g.v, exam_count: g.e, price, course_details: g.details, speed_mode: speedMode.value }
       })
       payTotal.value = orders.reduce((s, o) => s + o.price, 0)
       const orderUsername = isChaoxing ? chaoxingUsername.value.trim() : username.value.trim()
@@ -555,6 +569,8 @@ export function useHomeState() {
     loginError, failedPlatforms, reloginDialog, reloginPassword, reloginLoading, loginErrorCountdown,
     packagePricing, submittedCourseIds, allInProgress, pendingOrderedCourseIds, checkedCourseIds,
     savedData, loadingPrices, backendPrices,
+    // Speed mode
+    speedMode, setSpeedMode,
     isCourseDone, isCourseDoneOrSubmitted, visiblePlatforms, togglePlatform, toggleCourse, isPlatformAllChecked,
     summary, scenario, currentPrices, studentName, chaoxingInfo, chaoxingServiceType,
     startScan, resetScan, rescan, openReloginDialog, closeReloginDialog, submitRelogin,

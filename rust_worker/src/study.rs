@@ -11,16 +11,14 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 
+use crate::speed::{SpeedMode, SpeedProfile};
+
 /// 全局请求间隔：跨所有任务共享，任意两个 HTTP 请求间隔 ≥ 0.5s
 /// （实现集中在 platform_client::wait_rate_limit，与登录/扫描链路共用同一道闸）
 
-/// 墙钟/时长安全比率：studyTime 报满后仍须等 2.1×时长（防 beginTime/finalTime 重叠检测）
+/// 墙钟/时长安全比率：studyTime 报满后仍须等 2.1×时长（防 beginTime/finalTime 重叠检测）。
+/// 三档均不改动该比率 —— 提速来自并发与错峰，而不是压缩单个视频的安全等待。
 const MIN_RATIO: f64 = 2.1;
-
-/// 全局请求间隔门（原 _wait_rate_limit：所有线程共享 _next_request_time）
-async fn wait_spacing() {
-    crate::platform_client::wait_rate_limit().await;
-}
 
 fn make_client() -> Client {
     crate::platform_client::build_client_with_ua(
@@ -54,6 +52,9 @@ pub struct TaskInput {
     pub concurrency: usize,
     #[serde(default)]
     pub push_ws: bool,
+    /// 刷课节奏档位（turbo/balanced/gentle；缺省/未知 → 均衡）
+    #[serde(default)]
+    pub speed_mode: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -72,6 +73,8 @@ struct Shared {
     push_ws: bool,
     /// 随推送一起上报：服务端据此把消息投到 order:{id} topic
     order_id: String,
+    /// 本任务的节奏档位参数（并发/错峰/请求间隔）
+    profile: SpeedProfile,
     progress: Mutex<Progress>,
 }
 
@@ -115,7 +118,7 @@ async fn report_once(
     study_time: i64,
     force: bool,
 ) -> Result<ReportResp> {
-    wait_spacing().await;
+    crate::speed::pace(&shared.profile).await;
     let mut params: HashMap<String, String> = HashMap::new();
     params.insert("nodeId".to_string(), node_id.to_string());
     params.insert("studyId".to_string(), study_id.to_string());
@@ -156,7 +159,7 @@ async fn handle_captcha(shared: &Shared, node_id: &str, need_code: i64, verify_t
     // 获取验证码图片
     let r: u8 = rand::rng().random();
     let cap_url = format!("{}/service/code?r={}", shared.base_url, r);
-    wait_spacing().await;
+    crate::speed::pace(&shared.profile).await;
     let img = shared.client.get(&cap_url)
         .header("Cookie", shared.cookie_str.lock().await.clone())
         .send().await?.bytes().await?;
@@ -220,7 +223,7 @@ async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
                             match handle_captcha(shared, &video.node_id, resp.need_code, &resp.verifyToken).await {
                                 Ok((code, verify)) => {
                                     // 带验证码重报
-                                    wait_spacing().await;
+                                    crate::speed::pace(&shared.profile).await;
                                     let mut params: HashMap<String, String> = HashMap::new();
                                     params.insert("nodeId".to_string(), video.node_id.clone());
                                     params.insert("studyId".to_string(), study_id.to_string());
@@ -298,7 +301,7 @@ async fn heartbeat_loop(shared: Arc<Shared>) {
     loop {
         let secs = rand::rng().random_range(90..=150);
         tokio::time::sleep(Duration::from_secs(secs)).await;
-        wait_spacing().await;
+        crate::speed::pace(&shared.profile).await;
         let _ = shared.client
             .post(format!("{}/user/online", shared.base_url))
             .header("X-Requested-With", "XMLHttpRequest")
@@ -313,7 +316,7 @@ async fn cookie_refresh_loop(shared: Arc<Shared>) {
         if shared.username.is_empty() {
             continue;
         }
-        wait_spacing().await;
+        crate::speed::pace(&shared.profile).await;
         let resp = shared.client
             .get(format!("{}/user/index", shared.base_url))
             .send().await;
@@ -371,6 +374,7 @@ async fn push_ws(shared: &Shared, mut data: serde_json::Value, push_url: &str, p
 
 pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Result<()> {
     let base_url = task.base_url.trim_end_matches('/').to_string();
+    let profile = SpeedMode::parse(&task.speed_mode).profile();
     let client = make_client();
     let cookie_str = task.cookies.iter()
         .map(|c| format!("{}={}", c.name, c.value))
@@ -386,6 +390,7 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
         status_file: task.status_file.clone(),
         push_ws: task.push_ws,
         order_id: task.order_id.clone(),
+        profile,
         progress: Mutex::new(Progress { total: task.videos.len() as u64, total_duration, ..Default::default() }),
     });
 
@@ -421,12 +426,24 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
     let done_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let failed_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
+    // 课程并发闸：档位决定同时在刷的课程数（急速 8 / 均衡 4 / 温柔 1），
+    // 课程内部仍是逐节串行 —— 与平台「并发重叠数」检测口径一致。
+    let course_sem = Arc::new(tokio::sync::Semaphore::new(profile.course_concurrency.max(1)));
+    eprintln!("[rust_worker] 刷课档位 {}：课程并发 {} / 错峰 {}ms",
+              profile.mode.label(), profile.course_concurrency, profile.course_stagger_ms);
+
     let mut set = JoinSet::new();
     for (cid, videos) in groups {
         let shared = shared.clone();
         let done_counter = done_counter.clone();
         let failed_counter = failed_counter.clone();
+        let course_sem = course_sem.clone();
         set.spawn(async move {
+            // 超出并发的课程在此排队等待（不额外打请求）
+            let _permit = match course_sem.acquire_owned().await {
+                Ok(p) => p,
+                Err(_) => return,
+            };
             eprintln!("[rust_worker] [course-{cid}] 开始处理 {} 个视频", videos.len());
             for v in &videos {
                 match study_video(&shared, v).await {
@@ -447,8 +464,8 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
             }
             eprintln!("[rust_worker] [course-{cid}] 课程处理完毕");
         });
-        // 课程间启动间隔 0.5s
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        // 课程间启动错峰：急速档零等待，温柔档拉长到几十秒（含随机抖动）
+        profile.sleep_course_stagger().await;
     }
     while set.join_next().await.is_some() {}
 
@@ -485,7 +502,7 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
 }
 
 async fn verify_platform_progress(shared: &Shared) -> Option<u64> {
-    wait_spacing().await;
+    crate::speed::pace(&shared.profile).await;
     let resp = shared.client
         .get(format!("{}/user/study_record/video.json", shared.base_url))
         .header("X-Requested-With", "XMLHttpRequest")

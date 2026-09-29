@@ -68,6 +68,8 @@ export interface OrderItem {
   website_id: number; task_type: string; course_ids: string[];
   video_count: number; price: number; status: string; paid?: boolean;
   progress?: number; task_id?: string; admin_note?: string; exam_count?: number;
+  /** 刷课节奏档位：turbo 急速 / balanced 均衡 / gentle 温柔 */
+  speed_mode?: string;
   created_at: string; updated_at?: string; accepted_at?: string; started_at?: string; finished_at?: string;
 }
 export interface DashboardStats {

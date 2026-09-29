@@ -202,12 +202,16 @@ async fn create_order(db: &Db, username: &str, password: &str, item: &Value,
     let video_count = item["video_count"].as_i64().unwrap_or(0);
     let exam_count = item["exam_count"].as_i64().unwrap_or(0);
     let price = item["price"].as_f64().unwrap_or(0.0);
+    // 刷课节奏档位：未知/缺省一律落「均衡」，保证老前端与历史数据行为不变
+    let speed_mode = crate::speed::SpeedMode::parse(
+        item["speed_mode"].as_str().unwrap_or("")).as_str().to_string();
     let user_id = user_id.to_string();
 
     // 响应用的副本（闭包 move 后仍可用）
     let r_username = username.clone();
     let r_task_type = task_type.clone();
     let r_now = now.clone();
+    let r_speed_mode = speed_mode.clone();
 
     tokio::task::spawn_blocking(move || -> Result<()> {
         let conn = pool.get()?;
@@ -217,12 +221,12 @@ async fn create_order(db: &Db, username: &str, password: &str, item: &Value,
                                  paid_processed, user_id, customer_name, customer_contact,
                                  username, password, website_id, task_type, course_ids,
                                  video_count, exam_count, price, notes, status, paid,
-                                 admin_note, created_at, updated_at)
+                                 admin_note, created_at, updated_at, speed_mode)
              VALUES (?1,'','','','unprocessed',?2,'','',?3,'',?4,?5,?6,?7,?8,?9,'',
-                     'pending',0,'',?10,?10)",
+                     'pending',0,'',?10,?10,?11)",
             rusqlite::params![
                 order_id2, user_id, username, website_id, task_type,
-                course_ids, video_count, exam_count, price, now,
+                course_ids, video_count, exam_count, price, now, speed_mode,
             ],
         )?;
         crate::crypto::store(&conn, &order_id2, &username, &password)?;
@@ -238,6 +242,7 @@ async fn create_order(db: &Db, username: &str, password: &str, item: &Value,
         "video_count": video_count,
         "exam_count": exam_count,
         "price": price,
+        "speed_mode": r_speed_mode,
         "status": "pending",
         "paid": 0,
         "created_at": r_now,

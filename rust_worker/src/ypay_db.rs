@@ -126,6 +126,8 @@ fn order_row_to_json(r: &rusqlite::Row) -> rusqlite::Result<Value> {
         "accepted_at": r.get::<_, Option<String>>(24)?,
         "started_at": r.get::<_, Option<String>>(25)?,
         "finished_at": r.get::<_, Option<String>>(26)?,
+        // 刷课节奏档位：历史订单该列为空 → 显示回退均衡
+        "speed_mode": r.get::<_, Option<String>>(27)?.unwrap_or_else(|| "balanced".into()),
     }))
 }
 
@@ -133,7 +135,7 @@ const ORDER_COLS: &str = "order_id, out_trade_no, ezfpy_trade_no, payment_channe
      paid_processed, user_id, customer_name, customer_contact, username, password,
      website_id, task_type, course_ids, video_count, exam_count, price, notes,
      status, paid, task_id, admin_note, created_at, updated_at, accepted_at,
-     started_at, finished_at";
+     started_at, finished_at, speed_mode";
 
 impl Db {
     // ── ypay_settings（对齐 ypay_setting_get/set）──────────────────────────
@@ -666,17 +668,20 @@ impl Db {
             return Ok(false);
         }
         let job_id = format!("JOB-{}", uuid_hex_upper(10));
+        // 刷课档位随订单带入队列任务（老订单该列为空 → 均衡）
+        let speed_mode =
+            crate::speed::SpeedMode::parse(order["speed_mode"].as_str().unwrap_or("")).as_str();
         tx.execute(
             &format!(
                 "INSERT INTO {table}
                  (job_id, username, password, website_id, job_type, course_ids, status,
                   priority, progress, total_steps, completed_steps, current_step_name,
                   error_message, retry_count, max_retries, task_id, order_id, result_data,
-                  verified, created_at, started_at, finished_at, deleted_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,'pending',0,0,0,0,'','',0,3,NULL,?7,'{{}}',0,?8,NULL,NULL,NULL)"
+                  verified, created_at, started_at, finished_at, deleted_at, speed_mode)
+                 VALUES (?1,?2,?3,?4,?5,?6,'pending',0,0,0,0,'','',0,3,NULL,?7,'{{}}',0,?8,NULL,NULL,NULL,?9)"
             ),
             params![job_id, username, password, website_id, task_type, course_ids, order_id,
-                    crate::queue::now_str()],
+                    crate::queue::now_str(), speed_mode],
         )?;
         tx.commit()?;
         tracing::info!(job_id, order_id, task_type, table, "支付订单入队");

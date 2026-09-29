@@ -45,6 +45,9 @@ pub struct ScanTaskInput {
     pub status_file: String,
     #[serde(default)]
     pub push_ws: bool,
+    /// 刷课节奏档位（turbo/balanced/gentle；缺省/未知 → 均衡）
+    #[serde(default)]
+    pub speed_mode: String,
 }
 
 /// 课程条目（从 /user/index HTML 解析）
@@ -305,23 +308,36 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
                       &format!("获取到 {} 门课程", selected.len()), None, None,
                       &[]).await;
 
-    // 并发扫描各课程视频（每课程一个 tokio task，加随机启动抖动错峰）
+    // 并发扫描各课程视频（每课程一个 tokio task）。
+    // 并发度与错峰由档位决定：急速档全量并行，温柔档一次只扫 1~2 门并长间隔错开。
+    let profile = crate::speed::SpeedMode::parse(&task.speed_mode).profile();
     let shared_client = Arc::new(client);
     let cookie = Arc::new(task.cookie_str.clone());
+    let scan_sem = Arc::new(tokio::sync::Semaphore::new(profile.scan_concurrency.max(1)));
     let mut handles = Vec::new();
     for course in selected {
+        // 先取扫描许可再派发：超出并发的课程会在此等待，天然形成分批扫描
+        let permit = match scan_sem.clone().acquire_owned().await {
+            Ok(p) => p,
+            Err(_) => break,
+        };
         let c = shared_client.clone();
         let ck = cookie.clone();
         let b = base_url.clone();
         let cid = course.course_id.clone();
         let cname = course.name.clone();
+        let jitter = profile.scan_jitter();
         handles.push(tokio::spawn(async move {
-            // 启动抖动：把 N 门课程的首请求错开，避免瞬间并发突发打到平台
-            let ms = rand::rng().random_range(0..=800u64);
-            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+            let _permit = permit;
+            // 启动抖动：把同批课程的首请求错开，避免瞬间并发突发打到平台
+            if !jitter.is_zero() {
+                tokio::time::sleep(jitter).await;
+            }
             let videos = fetch_course_videos(&c, &ck, &b, &cid, &cname).await;
             (cname, cid, videos)
         }));
+        // 课程之间错峰：温柔档拉长到几十秒，急速档为零
+        profile.sleep_course_stagger().await;
     }
     let mut all_videos: Vec<Video> = Vec::new();
     let mut scan_failed = 0u64;
@@ -370,6 +386,7 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
         status_file: task.status_file.clone(),
         concurrency: 0,
         push_ws: task.push_ws,
+        speed_mode: task.speed_mode.clone(),
     };
     run_study(&study_task, push_url, push_token).await
 }

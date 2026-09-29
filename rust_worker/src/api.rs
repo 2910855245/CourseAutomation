@@ -369,6 +369,8 @@ fn order_row_to_json(r: &rusqlite::Row, course_ids: &str) -> rusqlite::Result<Va
         "accepted_at": r.get::<_, Option<String>>(23)?,
         "started_at": r.get::<_, Option<String>>(24)?,
         "finished_at": r.get::<_, Option<String>>(25)?,
+        // 刷课节奏档位：历史订单该列为空 → 显示回退均衡
+        "speed_mode": r.get::<_, Option<String>>(26)?.unwrap_or_else(|| "balanced".into()),
     }))
 }
 
@@ -416,7 +418,7 @@ async fn orders_list(
                             paid_processed, user_id, customer_name, customer_contact, username,
                             website_id, task_type, course_ids, video_count, exam_count, price,
                             notes, status, paid, task_id, admin_note, created_at, updated_at,
-                            accepted_at, started_at, finished_at
+                            accepted_at, started_at, finished_at, speed_mode
                      FROM orders WHERE status=?1 AND deleted_at IS NULL
                      ORDER BY created_at DESC LIMIT ?2")?;
                 let mut rows: Vec<Value> = stmt.query_map(rusqlite::params![st, limit], |r| {
@@ -434,7 +436,7 @@ async fn orders_list(
                             paid_processed, user_id, customer_name, customer_contact, username,
                             website_id, task_type, course_ids, video_count, exam_count, price,
                             notes, status, paid, task_id, admin_note, created_at, updated_at,
-                            accepted_at, started_at, finished_at
+                            accepted_at, started_at, finished_at, speed_mode
                      FROM orders WHERE deleted_at IS NULL
                      ORDER BY created_at DESC LIMIT ?1")?;
                 let mut rows: Vec<Value> = stmt.query_map(rusqlite::params![limit], |r| {
@@ -480,7 +482,7 @@ async fn order_get(
                     paid_processed, user_id, customer_name, customer_contact, username,
                     website_id, task_type, course_ids, video_count, exam_count, price,
                     notes, status, paid, task_id, admin_note, created_at, updated_at,
-                    accepted_at, started_at, finished_at
+                    accepted_at, started_at, finished_at, speed_mode
              FROM orders WHERE order_id=?1 AND deleted_at IS NULL",
             rusqlite::params![order_id],
             |r| {
@@ -960,7 +962,7 @@ fn fetch_order(conn: &rusqlite::Connection, order_id: &str) -> rusqlite::Result<
                 paid_processed, user_id, customer_name, customer_contact, username,
                 website_id, task_type, course_ids, video_count, exam_count, price,
                 notes, status, paid, task_id, admin_note, created_at, updated_at,
-                accepted_at, started_at, finished_at
+                accepted_at, started_at, finished_at, speed_mode
          FROM orders WHERE order_id=?1 AND deleted_at IS NULL",
         rusqlite::params![order_id],
         |r| {
@@ -1007,7 +1009,7 @@ async fn admin_orders_list(
                     paid_processed, user_id, customer_name, customer_contact, username,
                     website_id, task_type, course_ids, video_count, exam_count, price,
                     notes, status, paid, task_id, admin_note, created_at, updated_at,
-                    accepted_at, started_at, finished_at
+                    accepted_at, started_at, finished_at, speed_mode
              FROM orders WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         ))?;
         let page_args: Vec<String> = args.iter().cloned()
@@ -1136,14 +1138,16 @@ async fn enqueue_order_impl(state: &AppState, order_id: &str) -> anyhow::Result<
              (job_id, username, password, website_id, job_type, course_ids, status, priority,
               progress, total_steps, completed_steps, current_step_name, error_message,
               retry_count, max_retries, task_id, order_id, result_data, verified,
-              created_at, started_at, finished_at, deleted_at)
-             VALUES (?1,?2,?3,?4,?5,?6,'pending',0,0,0,0,'','',0,3,NULL,?7,'{}',0,?8,NULL,NULL,NULL)",
+              created_at, started_at, finished_at, deleted_at, speed_mode)
+             VALUES (?1,?2,?3,?4,?5,?6,'pending',0,0,0,0,'','',0,3,NULL,?7,'{}',0,?8,NULL,NULL,NULL,?9)",
             rusqlite::params![
                 job_id, username, password,
                 order["website_id"].as_i64().unwrap_or(1),
                 order["task_type"].as_str().unwrap_or("video"),
                 serde_json::to_string(&order["course_ids"])?,
                 oid, crate::queue::now_str(),
+                crate::speed::SpeedMode::parse(
+                    order["speed_mode"].as_str().unwrap_or("")).as_str(),
             ],
         )?;
         conn.execute(
@@ -1198,6 +1202,10 @@ async fn admin_order_execute(State(state): State<AppState>, Path(order_id): Path
         .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
 
+    // 手动执行同样遵循订单所选档位
+    let speed_mode = crate::speed::SpeedMode::parse(
+        order["speed_mode"].as_str().unwrap_or("")).as_str().to_string();
+
     let push_url = state.push_url.clone();
     let push_token = state.push_token.clone();
     let tasks = state.tasks.clone();
@@ -1224,6 +1232,7 @@ async fn admin_order_execute(State(state): State<AppState>, Path(order_id): Path
             course_ids,
             status_file: tmpdir.join("status.json").to_string_lossy().to_string(),
             push_ws: true,
+            speed_mode,
         };
         if let Err(e) = crate::scan::run_scan_and_study(&task, &push_url, &push_token).await {
             tracing::warn!(order_id = %oid_task, error = %e, "手动执行任务失败");

@@ -37,6 +37,9 @@ pub struct QueueJob {
     pub max_retries: i64,
     #[serde(default)]
     pub retry_count: i64,
+    /// 刷课节奏档位（turbo/balanced/gentle；老任务为空 → 均衡）
+    #[serde(default)]
+    pub speed_mode: String,
 }
 
 pub(crate) fn now_str() -> String {
@@ -79,7 +82,7 @@ async fn claim_next_job(state: &AppState) -> Result<Option<QueueJob>> {
         let tx = conn.transaction()?;
         let job = tx.query_row(
             &format!(
-                "SELECT job_id, username, password, website_id, job_type, course_ids, order_id, max_retries, retry_count
+                "SELECT job_id, username, password, website_id, job_type, course_ids, order_id, max_retries, retry_count, speed_mode
                  FROM {SCHOOL_TABLE}
                  WHERE status IN ('pending','retrying')
                  ORDER BY priority ASC, created_at ASC LIMIT 1"
@@ -96,6 +99,7 @@ async fn claim_next_job(state: &AppState) -> Result<Option<QueueJob>> {
                     order_id: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
                     max_retries: r.get::<_, i64>(7)?,
                     retry_count: r.get::<_, i64>(8)?,
+                    speed_mode: r.get::<_, Option<String>>(9)?.unwrap_or_default(),
                 })
             },
         );
@@ -213,6 +217,7 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
         status_file: status_file.clone(),
         // 队列任务同样要推进度：否则管理端只能靠手动刷新看任务跑到哪了
         push_ws: true,
+        speed_mode: job.speed_mode.clone(),
     };
 
     let result = crate::scan::run_scan_and_study(&task, &state.push_url, &state.push_token).await;

@@ -70,6 +70,9 @@ const pageSize = 50
 const detailOrder = ref<OrderItem | null>(null)
 const auditLogs = ref<{ event: string; detail: string; created_at: string }[]>([])
 const taskTypeNames: Record<string, string> = { video: '视频', exam: '考试', full: '全包', chaoxing_points: '学习通积分' }
+// 刷课节奏档位（历史订单无该字段 → 回退均衡）
+const speedModeNames: Record<string, string> = { turbo: '急速', balanced: '均衡', gentle: '温柔' }
+const speedModeLabel = (m?: string) => speedModeNames[m || 'balanced'] || '均衡'
 const guestOrderIds = ref<string[]>([])
 const guestOrderTokens: Record<string, string> = {}
 
@@ -464,6 +467,10 @@ function closeDetail() { detailOrder.value = null }
               <span class="oci-l">类型</span>
               <span class="oci-v">{{ taskTypeNames[o.task_type] || o.task_type }}</span>
             </div>
+            <div v-if="o.website_id !== 4" class="oci">
+              <span class="oci-l">节奏</span>
+              <span class="oci-v">{{ speedModeLabel(o.speed_mode) }}</span>
+            </div>
             <div class="oci">
               <span class="oci-l">金额</span>
               <span class="oci-v price">¥{{ o.price.toFixed(2) }}</span>
@@ -528,6 +535,10 @@ function closeDetail() { detailOrder.value = null }
           <div class="dm-row">
             <span class="dm-label">任务类型</span>
             <span class="dm-value">{{ taskTypeNames[detailOrder.task_type] || detailOrder.task_type }}</span>
+          </div>
+          <div v-if="detailOrder.website_id !== 4" class="dm-row">
+            <span class="dm-label">刷课节奏</span>
+            <span class="dm-value">{{ speedModeLabel(detailOrder.speed_mode) }}</span>
           </div>
           <div class="dm-row">
             <span class="dm-label">课程数量</span>

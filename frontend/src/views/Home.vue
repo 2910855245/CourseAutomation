@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { api, type CourseItem } from '@/api'
 import { usePlatformNames } from '@/composables/usePlatformNames'
@@ -16,7 +16,7 @@ const {
   activeTab, chaoxingUsername, chaoxingPassword, startChaoxingScan,
   loginError, failedPlatforms, reloginDialog, reloginPassword, reloginLoading, loginErrorCountdown,
   packagePricing, submittedCourseIds, allInProgress, pendingOrderedCourseIds, checkedCourseIds,
-  loadingPrices, backendPrices,
+  loadingPrices, backendPrices, speedMode, setSpeedMode,
   isCourseDone, isCourseDoneOrSubmitted, visiblePlatforms, togglePlatform, toggleCourse, isPlatformAllChecked,
   summary, scenario, currentPrices, studentName, chaoxingInfo, chaoxingServiceType,
   startScan, resetScan, rescan, openReloginDialog, closeReloginDialog, submitRelogin,
@@ -28,6 +28,18 @@ const {
   pct, pctClass, LS_KEY,
   showAnnouncement, announcementContent, checkAnnouncement, dismissAnnouncement,
 } = useHomeState()
+
+// 刷课节奏三档（与后端 speed.rs 的 SpeedMode 对应）
+const speedOptions = [
+  { key: 'turbo' as const, name: '急速', sub: '全量并行 · 最快' },
+  { key: 'balanced' as const, name: '均衡', sub: '推荐 · 兼顾安全' },
+  { key: 'gentle' as const, name: '温柔', sub: '长间隔 · 最像真人' },
+]
+const speedModeDesc = computed(() => ({
+  turbo: '多门课程同时开刷，一节刷完立刻推进下一节，整体完成最快。',
+  balanced: '中等并发 + 适度错峰，完成时间与账号安全的平衡点。',
+  gentle: '课程依次进行，课程之间自动拉长间隔，节奏最接近真人。',
+}[speedMode.value]))
 
 // 所有任务进行中时，3秒后自动跳转订单页
 const autoRedirectCountdown = ref(3)
@@ -331,6 +343,29 @@ onMounted(async () => {
               </div>
             </div>
           </div>
+        </div>
+
+        <div class="speed-picker">
+          <div class="sp-head">
+            <span class="sp-title">刷课节奏</span>
+            <span class="sp-desc">{{ speedModeDesc }}</span>
+          </div>
+          <div class="sp-opts">
+            <button
+              v-for="opt in speedOptions"
+              :key="opt.key"
+              type="button"
+              class="sp-opt"
+              :class="{ active: speedMode === opt.key }"
+              @click="setSpeedMode(opt.key)"
+            >
+              <span class="sp-opt-name">{{ opt.name }}</span>
+              <span class="sp-opt-sub">{{ opt.sub }}</span>
+            </button>
+          </div>
+          <p v-if="speedMode === 'turbo'" class="sp-warn">
+            急速模式并发最高（已控制在平台检测安全线内），建议仅在需要当天见效时使用。
+          </p>
         </div>
 
         <div class="summary-bar">
@@ -959,6 +994,48 @@ onMounted(async () => {
 .cr-pill.ok { background: var(--c-surface-3); color: var(--c-text); }
 .cr-pill.exam { background: var(--c-surface-3); color: var(--c-text); font-size: 10px; }
 .cr-pill.deleted { background: var(--c-surface-3); color: var(--c-text-muted); font-size: 10px; text-decoration: line-through; }
+
+/* ---------- 刷课节奏选择器 ---------- */
+.speed-picker {
+  margin-bottom: 12px;
+  padding: 14px 18px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-light);
+  border-radius: 14px;
+}
+.sp-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.sp-title { font-size: 13px; font-weight: 700; color: var(--c-text); }
+.sp-desc { font-size: 12px; color: var(--c-text-muted); }
+.sp-opts { display: flex; gap: 8px; flex-wrap: wrap; }
+.sp-opt {
+  flex: 1 1 0;
+  min-width: 130px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 9px 14px;
+  border: 1px solid var(--c-border-light);
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  transition: border-color .18s, background .18s, transform .18s;
+  text-align: left;
+}
+.sp-opt:hover { border-color: var(--c-primary); transform: translateY(-1px); }
+.sp-opt.active {
+  border-color: var(--c-primary);
+  background: color-mix(in srgb, var(--c-primary) 8%, transparent);
+}
+.sp-opt-name { font-size: 13.5px; font-weight: 700; color: var(--c-text); }
+.sp-opt.active .sp-opt-name { color: var(--c-primary); }
+.sp-opt-sub { font-size: 11.5px; color: var(--c-text-muted); }
+.sp-warn {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--c-warning, #b26a00);
+}
 
 /* ---------- 底部汇总栏 ---------- */
 .summary-bar {

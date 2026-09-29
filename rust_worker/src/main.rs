@@ -28,6 +28,7 @@ mod scan;
 mod schema;
 mod school_exam;
 mod session;
+mod speed;
 mod study;
 mod ypay_db;
 mod ypay_qr;
