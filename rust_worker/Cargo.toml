@@ -13,6 +13,8 @@ rand = "0.10"
 dashmap = "6"
 anyhow = "1"
 base64 = "0.23"
+# 二维码 PNG 生成（收银台二维码必须由后端出图，前端只渲染 qr_image）
+qrcode = { version = "0.14", default-features = false, features = ["image"] }
 axum = { version = "0.8", features = ["ws"] }
 md5 = "0.8"
 scraper = "0.27"

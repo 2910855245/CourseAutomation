@@ -29,6 +29,29 @@ const SCHOOL_TABLE: &str = "queue_jobs_school";
 /// 0 个工作线程。改为进程级原子量，由 `queue_stats` 读取。
 static ACTIVE_WORKERS: AtomicUsize = AtomicUsize::new(0);
 
+/// worker 槽位的 RAII 守卫。
+///
+/// 必须用 Drop 而不是在 `execute_school_job().await` 之后手写 `fetch_sub`：
+/// 刷课链路上任何一个 panic（数组越界、第三方库、unwrap）都会让 tokio 直接
+/// 终止那个 task，`fetch_sub` 那行永远执行不到。结果是**每 panic 一次就永久
+/// 少一个并发槽位**，累积到 queue_max_workers 之后调度器 `ACTIVE_WORKERS >= max`
+/// 恒成立，新任务永不被认领 —— 服务静默停摆，而队列监控还显示"运行中"。
+/// Drop 在 panic 展开时同样会执行，所以槽位一定会被还回来。
+struct WorkerSlot;
+
+impl WorkerSlot {
+    fn acquire() -> Self {
+        ACTIVE_WORKERS.fetch_add(1, Ordering::Relaxed);
+        WorkerSlot
+    }
+}
+
+impl Drop for WorkerSlot {
+    fn drop(&mut self) {
+        ACTIVE_WORKERS.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// 供管理端读取的实时 worker 数
 pub fn active_workers() -> usize {
     ACTIVE_WORKERS.load(Ordering::Relaxed)
@@ -401,10 +424,11 @@ pub async fn dispatcher_loop(state: Arc<AppState>) {
         match claim_next_job(&state).await {
             Ok(Some(job)) => {
                 let state2 = state.clone();
-                ACTIVE_WORKERS.fetch_add(1, Ordering::Relaxed);
+                // 槽位由 RAII 守卫持有：任务 panic 时 Drop 依然会归还槽位
+                let slot = WorkerSlot::acquire();
                 tokio::spawn(async move {
+                    let _slot = slot;
                     execute_school_job(&state2, &job).await;
-                    ACTIVE_WORKERS.fetch_sub(1, Ordering::Relaxed);
                 });
             }
             Ok(None) => tokio::time::sleep(std::time::Duration::from_secs(2)).await,

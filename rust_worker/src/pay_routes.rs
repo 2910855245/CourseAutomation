@@ -6,6 +6,7 @@
 //! - POST /api/ypay/decode-qr 与 GET /api/ypay/qrcode/{trade_no} 返回 code=-1 说明（不移植 pyzbar/qrcode PNG）。
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
@@ -176,8 +177,8 @@ async fn payment_create(State(state): State<AppState>, Json(body): Json<PaymentC
     let trade_no = result.get("trade_no").and_then(Value::as_str).unwrap_or("").to_string();
     let pay_link = result.get("qrcode").and_then(Value::as_str).unwrap_or("").to_string();
     let pay_url = crate::pay::build_pay_url(&db, &trade_no).await;
-    // qr_image：Rust 端不生成 PNG base64（对齐 Python make_qr_base64 失败时的 None）
-    let qr_image = Value::Null;
+    // 前端只渲染 qr_image，必须真的出图，否则收银台卡在「生成二维码中…」
+    let qr_image = crate::ypay_qr::render_qr_image_value(&pay_link);
 
     {
         let oid = order_id.clone();
@@ -595,7 +596,7 @@ async fn payment_batch_create(
             "total_price": total_price,
             "really_price": result.get("truemoney").cloned().unwrap_or(json!(0.0)),
             "pay_type": body.pay_type,
-            "qr_image": Value::Null,
+            "qr_image": crate::ypay_qr::render_qr_image_value(&pay_link),
             "h5_qrurl": result.get("h5_qrurl").and_then(Value::as_str).unwrap_or(""),
         },
     }))
@@ -669,7 +670,24 @@ fn payment_batch_check_sync(db: &Db, batch_id: &str, out_trade_no: &str) -> Valu
     enqueue_paid_orders_sync(db, &order_ids);
 
     if paid_count >= order_ids.len() {
-        return json!({"code": 0, "paid": true, "paid_count": paid_count, "message": "全部支付成功"});
+        // credited ≠ paid：paid 只说明钱到了，credited 说明业务侧真的走完入账
+        // （paid_processed='processed'）。前端据此把「支付成功」与「已收款未入账」
+        // 分成两种提示，避免钱收了却告诉用户成功、用户关页面后无人补账。
+        let credited = order_ids.iter().all(|oid| {
+            db.get_order_sync(oid)
+                .map(|o| {
+                    o.get("paid").and_then(Value::as_bool).unwrap_or(false)
+                        && o.get("paid_processed").and_then(Value::as_str) == Some("processed")
+                })
+                .unwrap_or(false)
+        });
+        return json!({
+            "code": 0,
+            "paid": true,
+            "credited": credited,
+            "paid_count": paid_count,
+            "message": if credited { "全部支付成功" } else { "支付已收到，正在入账" },
+        });
     }
     unpaid_json("未支付或处理中", false)
 }
@@ -724,8 +742,8 @@ async fn ypay_create(State(state): State<AppState>, Json(body): Json<PaymentCrea
         .and_then(Value::as_str)
         .unwrap_or_else(|| crate::ypay_qr::detect_qr_content_type(&qr_content))
         .to_string();
-    // qr_image：Rust 端不生成 PNG base64（对齐 Python make_qr_base64 失败时的 None）
-    let qr_image = Value::Null;
+    // 前端只渲染 qr_image，必须真的出图
+    let qr_image = crate::ypay_qr::render_qr_image_value(&qr_content);
 
     {
         let oid = order_id.clone();
@@ -791,6 +809,46 @@ fn process_paid_order_sync(db: &Db, order_id: &str, already_confirmed: bool) {
     }
 }
 
+/// 后台对账：把「通道已收款但业务未入账」的订单补齐并发货。
+///
+/// 为什么必须由后台主动做，而不能靠前端轮询：
+/// 发货只有两条有验签的入口（YPay 回调 / VMQ 推送），二者在写业务库时都可能
+/// 只完成一半 —— 通道单已 `status=1`，但业务单的 `paid` / `paid_processed`
+/// 未落、队列任务未投。此前这个补偿完全依赖用户还开着支付弹窗（轮询 check
+/// 接口会顺带修），一旦用户付完就关页面/断网，订单会永久停在「已收款但
+/// 未入账」，既没人补账也没有告警 —— 对顾客就是「钱付了，课没刷」。
+///
+/// 幂等：`enqueue_paid_orders_sync` 内部对同 order_id 的活跃任务去重，
+/// 重复扫到同样的订单不会重复投递任务。
+pub(crate) fn reconcile_paid_orders_sync(db: &Db) -> usize {
+    let ids = db.find_uncredited_paid_order_ids_sync(200);
+    if ids.is_empty() {
+        return 0;
+    }
+    for oid in &ids {
+        db.confirm_payment_sync(oid, &format!("YPAY-{oid}"), "ypay");
+        process_paid_order_sync(db, oid, true);
+    }
+    // 队列任务单独补投：上面两个只改业务单标志位，不碰队列
+    enqueue_paid_orders_sync(db, &ids);
+    tracing::warn!(count = ids.len(), "对账：已补齐未入账的已付款订单并补投队列");
+    ids.len()
+}
+
+/// 对账循环：每 60s 扫一次悬空的已付款订单
+pub async fn reconcile_loop(state: Arc<AppState>) {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        let db = state.db.clone();
+        let r = tokio::task::spawn_blocking(move || reconcile_paid_orders_sync(&db)).await;
+        if let Ok(n) = r {
+            if n > 0 {
+                tracing::info!(repaired = n, "对账完成");
+            }
+        }
+    }
+}
+
 async fn ypay_check(
     State(state): State<AppState>,
     Path(trade_no): Path<String>,
@@ -830,10 +888,27 @@ fn ypay_check_sync(db: &Db, trade_no: &str, order_id_q: &str) -> Value {
                 }
             }
         }
+        // 只回报状态浮标，不在这里决定「业务是否已入账」之外的任何事。
+        //
+        // credited 是本次新增的关键字段：区分「通道已收款」与「业务已入账」。
+        // 二者不是一回事 —— 通道单 status=1 由回调写入，业务单的
+        // paid/paid_processed 可能因进程重启等原因滞后。前端据此分出
+        // 「支付成功」与「已收款未入账」两种提示，避免钱收了却告诉用户成功、
+        // 用户关掉页面后再也没人补账。
+        let mut credited = false;
+        if !actual_order_id.is_empty() {
+            if let Some(anti) = db.get_order_sync(&actual_order_id) {
+                let paid = anti.get("paid").and_then(Value::as_bool).unwrap_or(false);
+                let processed = anti.get("paid_processed").and_then(Value::as_str) == Some("processed");
+                credited = paid && processed;
+            }
+        }
         return json!({
             "code": 0,
             "paid": true,
-            "message": "支付成功",
+            "credited": credited,
+            "order_id": actual_order_id,
+            "message": if credited { "支付成功" } else { "支付已收到，正在入账" },
             "really_price": order_data.get("truemoney").cloned().unwrap_or(json!(0)),
         });
     }
@@ -902,10 +977,10 @@ async fn ypay_order_detail(State(state): State<AppState>, Path(trade_no): Path<S
             "pay_type": g("pay_type"),
             "money": g("money"),
             "truemoney": g("truemoney"),
-            "qrcode": qr_content,
+            "qrcode": qr_content.clone(),
             "qr_content_type": qr_content_type,
             "status": status_of(&order_data),
-            "qr_image": Value::Null,
+            "qr_image": crate::ypay_qr::render_qr_image_value(&qr_content),
             "pay_url": pay_url,
         },
     }))
@@ -1010,7 +1085,7 @@ async fn ypay_batch_create(State(state): State<AppState>, Json(body): Json<Batch
             "total_price": total_price,
             "really_price": result.get("truemoney").cloned().unwrap_or(json!(0.0)),
             "pay_type": body.pay_type,
-            "qr_image": Value::Null,
+            "qr_image": crate::ypay_qr::render_qr_image_value(&pay_link),
             "h5_qrurl": result.get("h5_qrurl").and_then(Value::as_str).unwrap_or(""),
         },
     }))

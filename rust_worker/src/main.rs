@@ -163,8 +163,12 @@ async fn main() -> anyhow::Result<()> {
         ws_seq: Arc::new(std::sync::atomic::AtomicU64::new(1)),
     };
 
-    // Rust 队列调度器（RUST_QUEUE_ENABLED=true 时接管学校任务）
+    // Rust 队列调度器（默认启用；显式 RUST_QUEUE_ENABLED=false 才停用）
     tokio::spawn(queue::dispatcher_loop(std::sync::Arc::new(state.clone())));
+
+    // 支付对账：补齐「通道已收款但业务未入账」的悬空订单。
+    // 放在后台而不是查单接口里 —— 否则用户付完就关页面就再没人补账。
+    tokio::spawn(pay_routes::reconcile_loop(std::sync::Arc::new(state.clone())));
 
     // 已删除 Python 时代遗留的 daemon 端点：/status /submit /submit_cx
     // /submit_cx_full /submit_full /submit_exam /cancel/{order_id} /ocr。

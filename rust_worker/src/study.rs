@@ -519,18 +519,34 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
     let total = task.videos.len() as u64;
     let pct = if total > 0 { done * 100 / total } else { 100 };
 
-    // 平台进度验证：拉 study_record/video 重算真实进度
-    let actual_pct = verify_platform_progress(&shared).await.unwrap_or(0);
+    // 平台进度复核：拉 study_record/video 算一次账号维度的完成率。
+    //
+    // 它是**参考信号，不是失败判据**。原因：该接口不带 courseId，返回的是账号下
+    // 全部课程的汇总，而本单通常只包含其中一部分（学员自己先刷掉几门很常见）。
+    // 拿账号全量完成率当门槛，会把「只下单 3 门、其他 7 门没动」的订单判成失败 ——
+    // 任务实际做完了却告诉用户失败，还会触发无谓的重试登录（平台风控）。
+    // 单视频是否真的刷完，由 study_video 自己的判定（studyTime 报满 + 墙钟 ≥ 2.1×时长）
+    // 保证，本地的 failed/dead 计数才是硬判据。
+    let actual_pct = verify_platform_progress(&shared).await;
+    match actual_pct {
+        Some(p) if p < 95 => tracing::warn!(
+            done, total, platform_pct = p,
+            "账号整体完成率低于 95%（可能包含本单未选中的课程），不计为失败"
+        ),
+        None => tracing::warn!(done, total, "平台进度复核失败（响应异常），跳过该项检查"),
+        _ => {}
+    }
+    let actual_pct_str = actual_pct.map(|p| p.to_string()).unwrap_or_default();
 
-    if failed > 0 || actual_pct < 95 {
+    if failed > 0 {
         write_status(&shared, &[
             ("phase", "done"),
             ("done", "true"),
             ("success", "false"),
-            ("video_pct", &actual_pct.to_string()),
-            ("message", &format!("部分视频未完成 {done}/{total} 平台进度{actual_pct}%")),
+            ("video_pct", &actual_pct_str),
+            ("message", &format!("部分视频未完成 {done}/{total}")),
         ]).await;
-        anyhow::bail!("部分视频未完成 {done}/{total} 平台进度{actual_pct}%");
+        anyhow::bail!("部分视频未完成 {done}/{total}");
     }
     write_status(&shared, &[
         ("phase", "done"),
@@ -545,8 +561,14 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
 
 async fn verify_platform_progress(shared: &Shared) -> Option<u64> {
     crate::speed::pace(&shared.profile).await;
+    // Cookie 头不能漏：run_study 用的 client 是 jar=None 的（不自动带 cookie），
+    // 本模块其它请求都是手动带上。漏了它就等于发了个未登录请求 —— 平台回登录页，
+    // JSON 解析失败 → 返回 None → 调用方 unwrap_or(0) 得到 0%，
+    // 于是**每个任务收尾都被判定「部分视频未完成」而失败**（哪怕课真的刷完了）。
+    let cookie = shared.cookie_str.lock().await.clone();
     let resp = shared.client
         .get(format!("{}/user/study_record/video.json", shared.base_url))
+        .header("Cookie", cookie)
         .header("X-Requested-With", "XMLHttpRequest")
         .send().await.ok()?;
     let data: serde_json::Value = resp.json().await.ok()?;

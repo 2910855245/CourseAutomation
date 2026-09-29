@@ -480,6 +480,30 @@ impl Db {
             .unwrap_or_default()
     }
 
+    /// 找出「通道已收款、业务未入账」的订单号（后台对账用）。
+    ///
+    /// 判据是三个条件同时成立：通道单 `status=1`（钱确实到账，由验签回调写入）、
+    /// 业务单未删除、业务单尚未进入 paid_processed='processed'。这类订单正是
+    /// 「钱收了但系统没往前走」的悬空态，必须由后台主动发现并补齐 —— 不能依赖
+    /// 用户还开着支付弹窗（关页面/断网就永远不会被补）。
+    pub fn find_uncredited_paid_order_ids_sync(&self, limit: i64) -> Vec<String> {
+        let pool = self.clone_pool();
+        let Ok(conn) = pool.get() else { return vec![] };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT o.order_id FROM orders o
+             JOIN ypay_order y ON y.out_trade_no = o.out_trade_no
+             WHERE y.status = 1 AND y.deleted_at IS NULL
+               AND o.deleted_at IS NULL
+               AND (o.paid = 0 OR o.paid_processed IS NULL OR o.paid_processed != 'processed')
+             ORDER BY o.created_at DESC LIMIT ?1",
+        ) else {
+            return vec![];
+        };
+        stmt.query_map(params![limit], |r| r.get::<_, String>(0))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
     /// 更新订单 out_trade_no（对齐 update_order 的单字段用法，附 updated_at）
     pub fn update_order_out_trade_no_sync(&self, order_id: &str, out_trade_no: &str) -> bool {
         let pool = self.clone_pool();

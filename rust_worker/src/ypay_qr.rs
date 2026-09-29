@@ -10,6 +10,56 @@ use serde_json::Value;
 use std::sync::OnceLock;
 
 /// 对齐 urllib.parse.quote(s, safe='')：仅保留 A-Za-z0-9 与 "_.-~"，其余百分号编码（大写 hex）
+/// 把支付二维码内容渲染成 PNG 的 data URL。
+///
+/// 为什么必须有这个函数：前端所有收银台界面只认 `qr_image`（`<img :src>`），
+/// 而此前四个创建/查询支付单的 handler 一律返回 `qr_image: null` ——
+/// 结果支付弹窗永远停在「生成二维码中…」，用户根本无法扫码，收入链路归零。
+/// 后端出图（而不是前端用 JS 库渲染）是因为支付入口散落多处，集中在服务端
+/// 只需一个实现，且返回体形状不变、前端零改动。
+///
+/// 失败返回 None：调用方保持原有的空值兜底语义，不影响下单主流程。
+pub fn render_qr_data_url(content: &str) -> Option<String> {
+    use base64::Engine as _;
+    use image::ImageEncoder as _;
+
+    let content = content.trim();
+    if content.is_empty() {
+        return None;
+    }
+    // 内容过长时（部分渠道码带上长签名）QR 版本会暴涨，交给 QrCode::new 报错即可
+    let code = qrcode::QrCode::new(content.as_bytes()).ok()?;
+    // 用 Luma<u8> 而不是 Luminance 别名：后者在 image 关闭默认特性时不可见
+    let img = code
+        .render::<image::Luma<u8>>()
+        .min_dimensions(260, 260)
+        .quiet_zone(true)
+        .build();
+
+    let mut png = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut png)
+        .write_image(
+            img.as_raw(),
+            img.width(),
+            img.height(),
+            image::ExtendedColorType::L8,
+        )
+        .ok()?;
+
+    Some(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&png)
+    ))
+}
+
+/// 渲染失败时回落到 Null（保持与历史响应形状一致）
+pub fn render_qr_image_value(content: &str) -> serde_json::Value {
+    match render_qr_data_url(content) {
+        Some(url) => serde_json::Value::String(url),
+        None => serde_json::Value::Null,
+    }
+}
+
 pub fn quote_full(s: &str) -> String {
     percent_encode(s, false)
 }
@@ -226,6 +276,38 @@ pub async fn generate_qrcode(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
+
+    /// 回归测试：收银台二维码必须真的出图。
+    /// 此前 qr_image 恒为 null，导致支付弹窗永远停在「生成二维码中…」。
+    #[test]
+    fn test_render_qr_data_url_produces_valid_png() {
+        // 覆盖三种真实渠道码形态：微信 schema / 支付宝 schema / http 图片
+        for content in [
+            "wxp://f2f0abcdefghijklmn",
+            "https://qr.alipay.com/abc123456",
+            "https://example.com/pay.png",
+        ] {
+            let url = render_qr_data_url(content)
+                .unwrap_or_else(|| panic!("应能为 {content} 生成二维码"));
+            assert!(url.starts_with("data:image/png;base64,"), "应为 PNG data URL: {url}");
+            let b64 = url.trim_start_matches("data:image/png;base64,");
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .expect("data URL 里的 base64 应可解码");
+            // PNG magic number：确认不是空图或错误格式
+            assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "应为合法 PNG");
+            assert!(bytes.len() > 200, "PNG 体积过小，疑似未真正渲染: {} 字节", bytes.len());
+        }
+    }
+
+    #[test]
+    fn test_render_qr_empty_content_is_null() {
+        // 内容为空（渠道未返回码）时保持历史语义：回落到 null，不 panic
+        assert!(render_qr_data_url("").is_none());
+        assert!(render_qr_data_url("   ").is_none());
+        assert!(render_qr_image_value("").is_null());
+    }
 
     #[test]
     fn test_detect_qr_content_type() {

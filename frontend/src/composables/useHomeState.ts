@@ -418,6 +418,26 @@ export function useHomeState() {
   const paySuccessAmount = ref(0)
   const payTimedOut = ref(false)
 
+  // 支付会话状态机。
+  //
+  // 把「通道已收款」和「业务已入账」分开，是因为二者真会不一致：
+  // 通道单由回调写成已付，业务单的 paid/paid_processed 可能滞后。若只有
+  // paid/未付 两态，就会出现「钱收了、界面说成功、实际上任务没派发」，用户
+  // 关掉页面后无人跟进。uncredited 就是承接这个中间态的。
+  type PayPhase = 'idle' | 'pending' | 'paid' | 'uncredited' | 'expired'
+  const payPhase = ref<PayPhase>('idle')
+  const payRemaining = ref(0)          // 剩余支付秒数（弹窗里显示倒计时）
+  const payRechecking = ref(false)     // 「重新检查」进行中
+
+  const PAY_TIMEOUT_SEC = 300
+  const POLL_INTERVAL_MS = 3000
+  // 连续这么多次「已付但未入账」才定态为 uncredited（避免正常入账延迟误报）
+  const UNCREDITED_HIT_LIMIT = 8
+
+  let payCountdownTimer: ReturnType<typeof setInterval> | null = null
+  let payPollBusy = false
+  let payUncreditedHits = 0
+
   // ── Payment logic ──
   function handleOrderSuccess(orderedCourseIds: string[]) {
     for (const cid of orderedCourseIds) { submittedCourseIds.value.add(cid); checkedCourseIds.value.delete(cid) }
@@ -502,22 +522,98 @@ export function useHomeState() {
     finally { paying.value = false }
   }
 
-  function startPollPayment() {
+  /// 停止支付会话（清掉轮询与倒计时，避免定时器泄漏）
+  function stopPaySession() {
     if (payPollTimer.value) { clearTimeout(payPollTimer.value); payPollTimer.value = null }
+    if (payCountdownTimer) { clearInterval(payCountdownTimer); payCountdownTimer = null }
+    payPollBusy = false
+  }
+
+  /** 进入支付会话：立刻查一次，然后按固定间隔轮询；同时跑 300s 倒计时 */
+  function startPollPayment() {
+    stopPaySession()
     if (!payBatchId.value) return
-    let pollCount = 0; let stopped = false; const maxPolls = 120
-    async function tick() {
-      if (stopped) return
-      try {
-        pollCount++
-        const r = await api.payment.batchCheck(payBatchId.value, payBatchOutTradeNo.value) as any
-        if (r?.expired) { stopped = true; payPollTimer.value = null; payTimedOut.value = true; store.toast('订单已过期，请重新下单', 'warning'); return }
-        if (pollCount >= maxPolls) { stopped = true; payPollTimer.value = null; payTimedOut.value = true; store.toast('支付超时，订单已提交，请到订单页查询', 'warning'); return }
-        if (r?.paid) { stopped = true; payPollTimer.value = null; paySuccessAmount.value = payTotal.value; showPaySuccess.value = true; return }
-      } catch { }
-      if (!stopped) payPollTimer.value = setTimeout(tick, 3000)
+    payPhase.value = 'pending'
+    payRemaining.value = PAY_TIMEOUT_SEC
+    payUncreditedHits = 0
+
+    payCountdownTimer = setInterval(() => {
+      if (payPhase.value !== 'pending') return
+      payRemaining.value--
+      if (payRemaining.value <= 0) {
+        // 倒计时归零：本地即可判定过期，不必再等服务端确认
+        payPhase.value = 'expired'
+        payTimedOut.value = true
+        stopPaySession()
+      }
+    }, 1000)
+
+    schedulePayTick(0)
+  }
+
+  function schedulePayTick(delay: number) {
+    payPollTimer.value = setTimeout(payTick, delay)
+  }
+
+  async function payTick() {
+    if (payPhase.value !== 'pending') return
+    // in-flight 闸：弱网下上一次请求还没回来就跳过本轮，避免请求叠加
+    if (payPollBusy) { schedulePayTick(POLL_INTERVAL_MS); return }
+    // 页面在后台时不查（省电，也避免移动端被浏览器节流后堆积）；回前台会立即补查
+    if (document.visibilityState === 'hidden') { schedulePayTick(POLL_INTERVAL_MS); return }
+
+    payPollBusy = true
+    try {
+      await checkPaymentOnce()
+    } catch { /* 网络抖动不中断轮询，等下一轮 */ }
+    finally { payPollBusy = false }
+
+    if (payPhase.value === 'pending') schedulePayTick(POLL_INTERVAL_MS)
+  }
+
+  /** 查一次支付状态并按结果推进状态机（轮询与「重新检查」共用） */
+  async function checkPaymentOnce() {
+    const r = await api.payment.batchCheck(payBatchId.value, payBatchOutTradeNo.value) as any
+    if (r?.expired) { payPhase.value = 'expired'; payTimedOut.value = true; stopPaySession(); return }
+    if (!r?.paid) return
+
+    // 已付款：再看业务是否真的入账
+    if (r.credited === false) {
+      payUncreditedHits++
+      if (payUncreditedHits >= UNCREDITED_HIT_LIMIT) {
+        payPhase.value = 'uncredited'
+        stopPaySession()
+      }
+      return
     }
-    payPollTimer.value = setTimeout(tick, 3000)
+    payPhase.value = 'paid'
+    paySuccessAmount.value = payTotal.value
+    showPaySuccess.value = true
+    stopPaySession()
+  }
+
+  /** uncredited 态的「重新检查」：给入账留出时间后手动再查一次 */
+  async function recheckPayment() {
+    if (payRechecking.value) return
+    payRechecking.value = true
+    payUncreditedHits = 0
+    try {
+      await checkPaymentOnce()
+      if (payPhase.value === 'uncredited') {
+        // 仍未入账：恢复轮询再等一会儿（后台对账也在跑，可能马上就补上）
+        payPhase.value = 'pending'
+        if (payRemaining.value <= 0) payRemaining.value = 60
+        startPollPayment()
+        store.toast('仍在入账中，已为你继续查询', 'info')
+      }
+    } catch { store.toast('查询失败，请稍后重试', 'error') }
+    finally { payRechecking.value = false }
+  }
+
+  /** 过期后重新发起支付：复用原订单重新下单，不必重新选课 */
+  async function retryPayment() {
+    closePay()
+    store.toast('请重新提交订单以生成新的支付二维码', 'info')
   }
 
   function onPaySuccessDone() {
