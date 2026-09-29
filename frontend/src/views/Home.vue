@@ -34,14 +34,15 @@ const {
 } = useHomeState()
 
 // 刷课节奏三档（与后端 speed.rs 的 SpeedMode 对应）
+// "并发"指同时在推进的视频会话数（平台按 beginTime/finalTime 重叠数判定）
 const speedOptions = [
-  { key: 'turbo' as const, name: '暴力', sub: '全量并行 · 最快' },
+  { key: 'turbo' as const, name: '暴力', sub: '8 路并行 · 最快' },
   { key: 'balanced' as const, name: '适中', sub: '推荐 · 兼顾安全' },
   { key: 'gentle' as const, name: '保守', sub: '一节课一节课 · 最稳' },
 ]
 const speedModeDesc = computed(() => ({
-  turbo: '多门课程同时开刷，整体完成最快，风控风险最高。',
-  balanced: '中等并发 + 适度错峰，完成时间与账号安全的平衡点。',
+  turbo: '整单最多 8 节同时推进，整体完成最快，风控风险最高。',
+  balanced: '4 节同时推进 + 启动错峰，完成时间与账号安全的平衡点。',
   gentle: '完全串行：一节课刷完再刷下一节，课程间自动拉长间隔，最接近真人。',
 }[speedMode.value]))
 

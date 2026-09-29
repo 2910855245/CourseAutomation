@@ -2,14 +2,14 @@
 //!
 //! 设计约束（不可突破的红线）：
 //! 平台通过 `beginTime`/`finalTime` 的重叠数量识别并行刷课，历史记录显示阈值约 10 个
-//! 并发（见 CHANGELOG 2026-05-24）。因此**任何档位**的课程并发上限都不得超过 8，
+//! 并发（见 CHANGELOG 2026-05-24）。因此**任何档位**同时在推进的视频会话数都不得超过 8，
 //! 暴力档只是取到这条上界，而不是无限制并发。
 //!
 //! 三档定位：
-//!   - 暴力：课程全量并行（8）、课程间零等待 —— 最快，风控风险最高
-//!   - 适中：默认档。中等并发（4）+ 适度错峰，速度与安全的平衡点
-//!   - 保守：**完全串行**：一节课一节课来，课程并发与扫描并发都是 1，
-//!     课程之间长间隔错峰、每次上报额外随机停顿 —— 最慢，最像真人
+//!   - 暴力：同时推进 8 路视频会话、无启动等待 —— 最快，风控风险最高
+//!   - 适中：默认档。4 路会话 + 每路启动错峰，速度与安全的平衡点
+//!   - 保守：**完全串行**：一节课刷完再刷下一节，扫描并发也是 1，
+//!     每两节之间长间隔错峰、每次上报额外随机停顿 —— 最慢，最像真人
 //!
 //! 落库标识沿用 turbo/balanced/gentle（历史订单与新前端不用迁移数据）。
 
@@ -69,14 +69,14 @@ impl SpeedMode {
     /// 是否完全串行（一节课接一节课，任何环节都不并行）
     pub fn is_serial(self) -> bool {
         let p = self.profile();
-        p.course_concurrency == 1 && p.scan_concurrency == 1
+        p.video_concurrency == 1 && p.scan_concurrency == 1
     }
 
     pub fn profile(self) -> SpeedProfile {
         match self {
             SpeedMode::Turbo => SpeedProfile {
                 mode: self,
-                course_concurrency: MAX_COURSE_CONCURRENCY,
+                video_concurrency: MAX_COURSE_CONCURRENCY,
                 course_stagger_ms: 0,
                 scan_concurrency: MAX_COURSE_CONCURRENCY,
                 scan_jitter_ms: 100,
@@ -85,7 +85,7 @@ impl SpeedMode {
             },
             SpeedMode::Balanced => SpeedProfile {
                 mode: self,
-                course_concurrency: 4,
+                video_concurrency: 4,
                 course_stagger_ms: 500,
                 scan_concurrency: 6,
                 scan_jitter_ms: 800,
@@ -95,7 +95,7 @@ impl SpeedMode {
             // 保守档：并发全为 1（真串行）+ 长间隔 + 每次上报额外停顿
             SpeedMode::Gentle => SpeedProfile {
                 mode: self,
-                course_concurrency: 1,
+                video_concurrency: 1,
                 course_stagger_ms: 30_000,
                 scan_concurrency: 1,
                 scan_jitter_ms: 3_000,
@@ -110,9 +110,11 @@ impl SpeedMode {
 #[derive(Debug, Clone, Copy)]
 pub struct SpeedProfile {
     pub mode: SpeedMode,
-    /// 同时在刷的课程数上限（每课程内部仍串行）
-    pub course_concurrency: usize,
-    /// 课程任务之间的启动间隔
+    /// 同时在推进的视频会话数上限（平台重叠检测口径）。
+    /// 刷课按"整单的视频池"调度：槽位满时新视频排队，与旧版"每课程一个槽位、
+    /// 课程内部串行"相比，总时长趋近 总工作量 / 并发数，而不是被最长课程拖住。
+    pub video_concurrency: usize,
+    /// 任务启动间隔：刷课里是两条视频之间的错峰，扫描里是两门课程之间的错峰
     pub course_stagger_ms: u64,
     /// 同时扫描的课程数上限
     pub scan_concurrency: usize,
@@ -191,8 +193,8 @@ mod tests {
         let b = SpeedMode::Balanced.profile();
         let g = SpeedMode::Gentle.profile();
         // 暴力 快于 适中 快于 保守
-        assert!(t.course_concurrency >= b.course_concurrency);
-        assert!(b.course_concurrency >= g.course_concurrency);
+        assert!(t.video_concurrency >= b.video_concurrency);
+        assert!(b.video_concurrency >= g.video_concurrency);
         assert!(t.course_stagger_ms <= b.course_stagger_ms);
         assert!(b.course_stagger_ms <= g.course_stagger_ms);
         assert!(t.scan_concurrency >= g.scan_concurrency);
@@ -201,9 +203,9 @@ mod tests {
 
     #[test]
     fn test_conservative_mode_is_fully_serial() {
-        // 保守档的卖点就是"一节课一节课来"：课程与扫描都必须串行
+        // 保守档的卖点就是"一节课一节课来"：视频与扫描都必须串行
         let g = SpeedMode::Gentle.profile();
-        assert_eq!(g.course_concurrency, 1, "保守档课程并发必须为 1");
+        assert_eq!(g.video_concurrency, 1, "保守档视频并发必须为 1");
         assert_eq!(g.scan_concurrency, 1, "保守档扫描并发必须为 1");
         assert!(SpeedMode::Gentle.is_serial());
         assert!(!SpeedMode::Balanced.is_serial());
@@ -219,11 +221,11 @@ mod tests {
 
     #[test]
     fn test_never_exceed_platform_ceiling() {
-        // 红线：任何档位的课程并发都不得超过平台重叠检测安全线
+        // 红线：任何档位同时推进的视频会话都不得超过平台重叠检测安全线
         for m in [SpeedMode::Turbo, SpeedMode::Balanced, SpeedMode::Gentle] {
             let p = m.profile();
-            assert!(p.course_concurrency <= MAX_COURSE_CONCURRENCY, "{:?}", m);
-            assert!(p.course_concurrency >= 1);
+            assert!(p.video_concurrency <= MAX_COURSE_CONCURRENCY, "{:?}", m);
+            assert!(p.video_concurrency >= 1);
             assert!(p.scan_concurrency >= 1 && p.scan_concurrency <= MAX_COURSE_CONCURRENCY);
         }
     }

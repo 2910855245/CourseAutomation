@@ -441,50 +441,72 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
     let hb = tokio::spawn(heartbeat_loop(shared.clone()));
     let cr = tokio::spawn(cookie_refresh_loop(shared.clone()));
 
-    // 按课程分组：课程内串行，课程间并发
-    let mut groups: HashMap<String, Vec<Video>> = HashMap::new();
+    // 视频级调度：把整单的视频放进一个有 N 个槽位的池子里，而不是"每课程一个任务、
+    // 课程内部串行"。
+    //
+    // 为什么按视频而不是按课程切：课程长度天然极不均 —— 真实账号里同一批课程是
+    // 1 / 22 / 38 / 41 节。按课程切分时，最长那门会独占一个槽位直到最后，
+    // 整单时长被它拖成 ≈ 2.1 × 最长课程的工作量；视频级调度让所有槽位一起排空，
+    // 时长趋近 总工作量 / 并发数（同一批课实测可差 2~3 倍）。
+    //
+    // 平台可见的"beginTime/finalTime 重叠数"仍然是 ≤ 档位并发（急速 8，与旧版
+    // 课程并发同值），没有多开会话；队列按课程轮转取视频，避免整段时间集中在一门课上。
+    let mut buckets: HashMap<String, Vec<Video>> = HashMap::new();
     for v in &task.videos {
-        groups.entry(if v.course_id.is_empty() { "unknown".into() } else { v.course_id.clone() })
+        buckets.entry(if v.course_id.is_empty() { "unknown".into() } else { v.course_id.clone() })
             .or_default().push(v.clone());
     }
-    eprintln!("[rust_worker] 视频分组: {} 个课程, 共 {} 个视频", groups.len(), task.videos.len());
+    // 顺序确定（便于日志与测试复现），然后按课程轮转排队：A1 B1 C1 A2 B2 …
+    let mut groups: Vec<(String, Vec<Video>)> = buckets.into_iter().collect();
+    groups.sort_by(|a, b| a.0.cmp(&b.0));
+    let max_len = groups.iter().map(|(_, vids)| vids.len()).max().unwrap_or(0);
+    let mut queue: Vec<Video> = Vec::with_capacity(task.videos.len());
+    for i in 0..max_len {
+        for (_, vids) in &groups {
+            if let Some(v) = vids.get(i) {
+                queue.push(v.clone());
+            }
+        }
+    }
+    eprintln!("[rust_worker] 视频队列: {} 个课程 / {} 节（按课程轮转排队）",
+              groups.len(), queue.len());
 
     let done_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let failed_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
-    // 课程并发闸：档位决定同时在刷的课程数（急速 8 / 均衡 4 / 温柔 1），
-    // 课程内部仍是逐节串行 —— 与平台「并发重叠数」检测口径一致。
-    let course_sem = Arc::new(tokio::sync::Semaphore::new(profile.course_concurrency.max(1)));
-    eprintln!("[rust_worker] 刷课档位 {}：课程并发 {} / 错峰 {}ms",
-              profile.mode.label(), profile.course_concurrency, profile.course_stagger_ms);
+    // 视频并发闸：档位决定同时在跑几路会话（急速 8 / 均衡 4 / 温柔 1）。
+    // 槽位满时后面的视频在此排队（不产生任何请求）。
+    let video_sem = Arc::new(tokio::sync::Semaphore::new(profile.video_concurrency.max(1)));
+    eprintln!("[rust_worker] 刷课档位 {}：并发 {} 路会话 / 启动错峰 {}ms",
+              profile.mode.label(), profile.video_concurrency, profile.course_stagger_ms);
 
     let mut set = JoinSet::new();
-    for (cid, videos) in groups {
+    let mut first = true;
+    for v in queue {
+        let permit = match video_sem.clone().acquire_owned().await {
+            Ok(p) => p,
+            Err(_) => break,
+        };
+        // 拿到槽位后再错峰：保守档因此是"上一节结束 → 停 30s → 下一节"，
+        // 而不是把间隔藏在排队里（第一节不等待，保持原行为）
+        if !first {
+            profile.sleep_course_stagger().await;
+        }
+        first = false;
         let shared = shared.clone();
         let done_counter = done_counter.clone();
         let failed_counter = failed_counter.clone();
-        let course_sem = course_sem.clone();
         set.spawn(async move {
-            // 超出并发的课程在此排队等待（不额外打请求）
-            let _permit = match course_sem.acquire_owned().await {
-                Ok(p) => p,
-                Err(_) => return,
-            };
-            eprintln!("[rust_worker] [course-{cid}] 开始处理 {} 个视频", videos.len());
-            for v in &videos {
-                match study_video(&shared, v).await {
-                    Ok(true) => {
-                        done_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                    Ok(false) | Err(_) => {
-                        failed_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
+            let _permit = permit;
+            match study_video(&shared, &v).await {
+                Ok(true) => {
+                    done_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                Ok(false) | Err(_) => {
+                    failed_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
             }
-            eprintln!("[rust_worker] [course-{cid}] 课程处理完毕");
         });
-        // 课程间启动错峰：急速档零等待，温柔档拉长到几十秒（含随机抖动）
-        profile.sleep_course_stagger().await;
     }
     while set.join_next().await.is_some() {}
 
@@ -494,25 +516,12 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
     let done = done_counter.load(std::sync::atomic::Ordering::Relaxed);
     let failed = failed_counter.load(std::sync::atomic::Ordering::Relaxed);
     let total = task.videos.len() as u64;
-    let pct = if total > 0 { done * 100 / total } else { 100 };
 
-    // 平台进度复核：拉 study_record/video 算一次账号维度的完成率。
-    //
-    // 它是**参考信号，不是失败判据**。原因：该接口不带 courseId，返回的是账号下
-    // 全部课程的汇总，而本单通常只包含其中一部分（学员自己先刷掉几门很常见）。
-    // 拿账号全量完成率当门槛，会把「只下单 3 门、其他 7 门没动」的订单判成失败 ——
-    // 任务实际做完了却告诉用户失败，还会触发无谓的重试登录（平台风控）。
-    // 单视频是否真的刷完，由 study_video 自己的判定（studyTime 报满 + 墙钟 ≥ 2.1×时长）
-    // 保证，本地的 failed/dead 计数才是硬判据。
-    let actual_pct = verify_platform_progress(&shared).await;
-    match actual_pct {
-        Some(p) if p < 95 => tracing::warn!(
-            done, total, platform_pct = p,
-            "账号整体完成率低于 95%（可能包含本单未选中的课程），不计为失败"
-        ),
-        None => tracing::warn!(done, total, "平台进度复核失败（响应异常），跳过该项检查"),
-        _ => {}
-    }
+    // 完成判据只看本地：每个视频的成败由 study_video 自己判定
+    // （studyTime 报满 + 墙钟 ≥ 2.1×时长），failed 计数就是硬信号。
+    // 不再额外拉一次账号维度的平台完成率做"复核" —— 该接口不带 courseId，
+    // 只能给出账号全量完成率，与本单选中的课程子集不是一回事，既不能当判据，
+    // 又要多打一次平台请求，纯属噪声。
     if failed > 0 {
         anyhow::bail!("部分视频未完成 {done}/{total}");
     }
@@ -520,34 +529,10 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
     Ok(())
 }
 
-async fn verify_platform_progress(shared: &Shared) -> Option<u64> {
-    crate::speed::pace(&shared.profile).await;
-    // Cookie 头不能漏：run_study 用的 client 是 jar=None 的（不自动带 cookie），
-    // 本模块其它请求都是手动带上。漏了它就等于发了个未登录请求 —— 平台回登录页，
-    // JSON 解析失败 → 返回 None → 调用方 unwrap_or(0) 得到 0%，
-    // 于是**每个任务收尾都被判定「部分视频未完成」而失败**（哪怕课真的刷完了）。
-    let cookie = shared.cookie_str.lock().await.clone();
-    let resp = shared.client
-        .get(format!("{}/user/study_record/video.json", shared.base_url))
-        .header("Cookie", cookie)
-        .header("X-Requested-With", "XMLHttpRequest")
-        .send().await.ok()?;
-    let data: serde_json::Value = resp.json().await.ok()?;
-    let list = data["list"].as_array()?;
-    let mut total: u64 = 0;
-    let mut viewed: u64 = 0;
-    for item in list {
-        // 时长格式为 "HH:MM:SS"/"MM:SS"/秒数（与 Python _parse_duration_str 一致）
-        total += crate::scan::parse_duration_secs(item["duration"].as_str().unwrap_or("0"));
-        viewed += crate::scan::parse_duration_secs(item["viewedDuration"].as_str().unwrap_or("0"));
-    }
-    if total == 0 { return Some(0); }
-    Some(viewed * 100 / total)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex as StdMutex;
 
     /// 回归：报满 studyTime 后的"撑墙钟"阶段必须按 30s 粒度推进，
     /// 而不是 1s 空转（否则一个 45 分钟视频要多发上千次重复上报）
@@ -563,5 +548,144 @@ mod tests {
         assert!((next_tick_secs(true, 5.5) - 5.5).abs() < 1e-9);
         // 已到终点：不再睡（由完成判据收尾）
         assert_eq!(next_tick_secs(true, -3.0), 0.0);
+    }
+
+    // ── mock 平台 E2E：验证视频级调度的三条契约 ──────────────────────────
+    //
+    // mock 只实现 run_study 真正会打的端点，并记录每次上报的 (nodeId, 时刻)。
+    // 不碰真实平台，也不依赖任何外部服务。
+
+    /// 极简 HTTP/1.1 mock：POST /user/node/study → 记录上报并回成功 JSON，
+    /// 其余路径一律 200（run_study 里只有启动 cookie 检查与心跳会走到）
+    async fn spawn_mock_platform() -> (String, Arc<StdMutex<Vec<(String, f64)>>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let log: Arc<StdMutex<Vec<(String, f64)>>> = Arc::new(StdMutex::new(Vec::new()));
+        let log2 = log.clone();
+        let t0 = Instant::now();
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { continue };
+                let log = log2.clone();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = Vec::new();
+                    let mut tmp = [0u8; 4096];
+                    // 读到 header 结束，再按 Content-Length 读 body
+                    let (head_end, mut body) = loop {
+                        let n = match sock.read(&mut tmp).await { Ok(0) | Err(_) => return, Ok(n) => n };
+                        buf.extend_from_slice(&tmp[..n]);
+                        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                            let head = String::from_utf8_lossy(&buf[..pos]).to_string();
+                            let len: usize = head.lines()
+                                .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse().unwrap_or(0)))
+                                .unwrap_or(0);
+                            let rest = buf[pos + 4..].to_vec();
+                            let body = if rest.len() >= len {
+                                rest[..len].to_vec()
+                            } else {
+                                let mut b = rest;
+                                while b.len() < len {
+                                    let n = match sock.read(&mut tmp).await { Ok(0) | Err(_) => return, Ok(n) => n };
+                                    b.extend_from_slice(&tmp[..n]);
+                                }
+                                b[..len].to_vec()
+                            };
+                            break (head, body);
+                        }
+                    };
+                    let _ = head_end;
+                    let body = String::from_utf8_lossy(&body).to_string();
+                    if body.contains("nodeId=") {
+                        let node = body.split('&').find_map(|kv| kv.strip_prefix("nodeId="))
+                            .unwrap_or("?").to_string();
+                        log.lock().unwrap().push((node, t0.elapsed().as_secs_f64()));
+                    }
+                    let payload = r#"{"status":1,"state":0,"studyId":1,"need_code":0,"offline":false,"msg":""}"#;
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        payload.len(), payload);
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        (format!("http://{addr}"), log)
+    }
+
+    fn mock_videos(course: &str, count: usize, duration: u64) -> Vec<Video> {
+        (0..count).map(|i| Video {
+            node_id: format!("{course}-n{i}"),
+            duration,
+            viewed_duration: 0,
+            name: format!("{course} 第{i}节"),
+            course_id: course.to_string(),
+        }).collect()
+    }
+
+    /// 端到端：课程长度极不均（1 节 vs 7 节）时，
+    /// ① 每个视频自己的 begin→final 跨度仍满足 2.1× 安全比率
+    /// ② 任意时刻的重叠会话数不超过档位并发（平台重叠检测口径）
+    /// ③ 整单时长显著短于"每课程串行"（旧调度：7 节 × 2.1×2s ≈ 29s）
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_video_pool_keeps_span_and_caps_overlap() {
+        std::env::set_var("PLATFORM_REQUEST_SPACING_SECS", "0");
+        let (base_url, log) = spawn_mock_platform().await;
+
+        let mut videos = mock_videos("A", 1, 2);   // 短课程
+        videos.extend(mock_videos("B", 7, 2));     // 长课程
+
+        let task = TaskInput {
+            order_id: "TEST-ORD".into(),
+            username: String::new(),   // 空用户名 → 跳过启动 cookie 检查
+            password: String::new(),
+            base_url,
+            cookies: vec![],
+            videos,
+            concurrency: 0,
+            push_ws: false,            // 不打推送端点
+            speed_mode: "balanced".into(),   // 4 路会话 + 0.5s 启动错峰
+        };
+
+        let started = Instant::now();
+        run_study(&task, "", "").await.expect("mock 平台下应全部完成");
+        let makespan = started.elapsed().as_secs_f64();
+
+        let events = log.lock().unwrap().clone();
+        std::env::remove_var("PLATFORM_REQUEST_SPACING_SECS");
+
+        // 每个视频的首末上报即平台看到的 begin/final
+        let mut spans: Vec<(f64, f64)> = Vec::new();
+        for i in 0..8 {
+            let node = if i == 0 { "A-n0".to_string() } else { format!("B-n{}", i - 1) };
+            let ts: Vec<f64> = events.iter().filter(|(n, _)| *n == node).map(|(_, t)| *t).collect();
+            assert!(ts.len() >= 2, "{node} 至少应有 起/末 两次上报，实际 {:?}", ts);
+            let begin = ts[0];
+            let end = *ts.last().unwrap();
+            // 跨度从"首次上报"算起（首个上报发生在第 1 秒），所以下界要减掉这 1s
+            let need = 2.0 * MIN_RATIO - 1.5;
+            assert!(end - begin >= need,
+                    "{node} 跨度 {:.2}s 低于安全比率下界 {:.2}s", end - begin, need);
+            spans.push((begin, end));
+        }
+
+        // 重叠数扫描：任意时刻"未闭合会话"的最大值
+        let mut max_overlap = 0usize;
+        for (begin, _) in &spans {
+            let n = spans.iter().filter(|(b, e)| b <= begin && begin <= e).count();
+            max_overlap = max_overlap.max(n);
+        }
+        assert!(max_overlap <= 4, "重叠会话数 {max_overlap} 超过均衡档并发 4");
+        assert!(max_overlap >= 2, "应当真的并行推进（实际 {max_overlap}）");
+
+        // 旧调度（课程内串行）下这一单至少要 7 × 4.2s ≈ 29s
+        assert!(makespan < 22.0, "整单耗时 {makespan:.1}s，视频级调度没有生效");
+        assert!(makespan > 5.0, "整单耗时 {makespan:.1}s，疑似调度没真正等待墙钟");
+        eprintln!(
+            "[E2E] 8 节视频（课程 1 节 vs 7 节）：整单 {makespan:.1}s / 最大重叠 {max_overlap} 路；\
+             旧调度（课程内串行）下界 ≈29s"
+        );
     }
 }

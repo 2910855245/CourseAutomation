@@ -24,6 +24,16 @@ pub const SHORT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKi
 static SPACING: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::const_new(None);
 const REQUEST_SPACING_SECS: f64 = 0.5;
 
+/// 生效的请求间隔（秒）。默认 0.5；`PLATFORM_REQUEST_SPACING_SECS` 可覆盖
+/// （E2E 测试打 mock 平台时置 0，否则几十次上报会被 0.5s 串行拖到十几秒）。
+fn spacing_secs() -> f64 {
+    std::env::var("PLATFORM_REQUEST_SPACING_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|s| (0.0..=10.0).contains(s))
+        .unwrap_or(REQUEST_SPACING_SECS)
+}
+
 /// 出站超时。原先所有 client 都没设超时：平台无响应或 TCP 半开时
 /// `send().await` 会永久挂住，占死队列 worker 槽位（`active` 计数不归零）
 /// 与扫描并发许可，最终导致整条队列停摆且无任何日志。
@@ -39,7 +49,7 @@ pub async fn wait_rate_limit() {
             tokio::time::sleep(next - now).await;
         }
     }
-    *guard = Some(Instant::now() + Duration::from_secs_f64(REQUEST_SPACING_SECS));
+    *guard = Some(Instant::now() + Duration::from_secs_f64(spacing_secs()));
 }
 
 /// 构建平台 client。
