@@ -43,11 +43,21 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/api/queue/detect", get(queue_detect))
         // 聚合经营数据（订单/营收/在跑任务），属后台信息，移到鉴权组
         .route("/api/system/status", get(system_status))
+        // 支付配置：前端「支付收款 → 基本配置」依赖（此前后端整段缺失，
+        // 导致通讯密钥只能建库时写死、无法在后台读取或轮换）
+        .route("/api/ypay/config/get", get(ypay_config_get))
+        .route("/api/ypay/config/save", post(ypay_config_save))
+        .route("/api/ypay/status", get(ypay_status))
+        // 公告发布：前端「系统通告」页 + 首页弹窗依赖
+        .route("/api/admin/announcement", post(announcement_publish))
+        .route("/api/admin/announcement/disable", post(announcement_disable))
         .route_layer(middleware::from_fn_with_state(state.clone(), crate::auth::auth_middleware));
 
     Router::new()
         .route("/api/info", get(api_info))
         .route("/api/orders/batch", post(batch_orders))
+        // 公告读取（公开：首页弹窗）
+        .route("/api/announcement", get(announcement_get))
         // 游客可达：Bearer 或 view_token 二选一（handler 内校验）
         .route("/api/orders/{order_id}", get(order_get).delete(order_delete))
         .route("/api/orders/audit-log/{order_id}", get(order_audit_log))
@@ -155,6 +165,173 @@ async fn system_status(State(state): State<AppState>) -> Json<Value> {
         },
         "orders": orders,
     }))
+}
+
+// ── 系统公告（system_config 存储）───────────────────────────────────────
+//
+// 前端「系统通告」页与首页弹窗都依赖这三个键。此前后端没有对应路由，
+// 公告功能整条链路是断的（首页弹窗永远不出现、后台发布必然失败）。
+// id 用发布时间戳，且保证严格递增：前端用「服务端 id > 本地已读 id」判断
+// 是否弹出，递增才能让每条新公告都能到达已关闭过旧公告的用户。
+
+const ANN_CONTENT: &str = "announcement_content";
+const ANN_ID: &str = "announcement_id";
+const ANN_ACTIVE: &str = "announcement_active";
+
+async fn announcement_get(State(state): State<AppState>) -> Json<Value> {
+    let content = crate::queue::config_get(&state.db, ANN_CONTENT).await.unwrap_or_default();
+    let id: i64 = crate::queue::config_get(&state.db, ANN_ID).await
+        .and_then(|v| v.parse().ok()).unwrap_or(0);
+    let active = crate::queue::config_get(&state.db, ANN_ACTIVE).await
+        .map(|v| v == "1").unwrap_or(false) && !content.trim().is_empty();
+    Json(json!({
+        "success": true,
+        "message": "ok",
+        "data": { "id": id, "content": if active { content } else { String::new() }, "active": active },
+    }))
+}
+
+async fn announcement_publish(State(state): State<AppState>, Json(body): Json<Value>) -> Json<Value> {
+    let content = body["content"].as_str().unwrap_or("").trim().to_string();
+    if content.is_empty() {
+        return Json(json!({"success": false, "message": "公告内容不能为空"}));
+    }
+    // 严格递增的 id（同一秒内连续发布也不会撞号）
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let prev: i64 = crate::queue::config_get(&state.db, ANN_ID).await
+        .and_then(|v| v.parse().ok()).unwrap_or(0);
+    let id = now.max(prev + 1);
+    for (k, v) in [(ANN_CONTENT, content.as_str()), (ANN_ACTIVE, "1")] {
+        if let Err(e) = crate::queue::config_set(&state.db, k, v).await {
+            return Json(json!({"success": false, "message": e.to_string()}));
+        }
+    }
+    if let Err(e) = crate::queue::config_set(&state.db, ANN_ID, &id.to_string()).await {
+        return Json(json!({"success": false, "message": e.to_string()}));
+    }
+    Json(json!({"success": true, "message": "公告已发布", "data": {"id": id}}))
+}
+
+async fn announcement_disable(State(state): State<AppState>) -> Json<Value> {
+    match crate::queue::config_set(&state.db, ANN_ACTIVE, "0").await {
+        Ok(()) => Json(json!({"success": true, "message": "公告已下线"})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+// ── 支付配置（ypay_settings）────────────────────────────────────────────
+//
+// 这一组是「支付收款 → 基本配置」页面的数据源。此前后端完全没有对应路由，
+// 页面请求全部 404，等于支付通讯密钥只能建库时写死、出问题无法在后台轮换。
+
+/// 允许在后台读写的支付配置键（与前端 ypayForm 字段一一对应）
+const YPAY_CONFIG_KEYS: [(&str, &str); 3] = [
+    ("key", ""),          // 通讯密钥（回调签名用，空表示未配置）
+    ("close_time", "5"),  // 未支付订单关闭时间（分钟）
+    ("pay_timeout", "300"), // 支付超时（秒）
+];
+
+async fn ypay_config_get(State(state): State<AppState>) -> Json<Value> {
+    let db = state.db.clone_pool();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Map<String, Value>> {
+        let conn = db.get()?;
+        let mut out = Map::new();
+        for (k, default) in YPAY_CONFIG_KEYS {
+            let v: Option<String> = conn
+                .query_row(
+                    "SELECT value FROM ypay_settings WHERE key=?1",
+                    rusqlite::params![k],
+                    |r| r.get(0),
+                )
+                .ok();
+            out.insert(k.to_string(), json!(v.unwrap_or_else(|| default.to_string())));
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .and_then(|v| v);
+    match result {
+        Ok(mut data) => {
+            let key_set = data.get("key").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+            data.insert("key_set".into(), json!(key_set));
+            Json(json!({"success": true, "message": "ok", "data": data}))
+        }
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+async fn ypay_config_save(State(state): State<AppState>, Json(body): Json<Value>) -> Json<Value> {
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for (k, _) in YPAY_CONFIG_KEYS {
+        if let Some(v) = body.get(k) {
+            let s = v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.to_string());
+            pairs.push((k.to_string(), s));
+        }
+    }
+    if pairs.is_empty() {
+        return Json(json!({"success": false, "message": "没有可保存的字段"}));
+    }
+    // 密钥写成空串会让回调签名永久校验失败（pay.rs::ypay_key 取到空值），
+    // 这类「静默毁掉支付」的操作直接拒绝。
+    if let Some((_, v)) = pairs.iter().find(|(k, _)| k == "key") {
+        if v.trim().is_empty() {
+            return Json(json!({"success": false, "message": "通讯密钥不能为空"}));
+        }
+    }
+    let db = state.db.clone_pool();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let mut conn = db.get()?;
+        let tx = conn.transaction()?;
+        for (k, v) in &pairs {
+            tx.execute(
+                "INSERT INTO ypay_settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                rusqlite::params![k, v],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .and_then(|v| v);
+    match result {
+        Ok(()) => Json(json!({"success": true, "message": "支付配置已保存"})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
+}
+
+/// 支付通道概况：密钥是否就绪 + 支付单数量（供后台「支付收款」页展示）
+async fn ypay_status(State(state): State<AppState>) -> Json<Value> {
+    let db = state.db.clone_pool();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
+        let conn = db.get()?;
+        let key_set: bool = conn
+            .query_row(
+                "SELECT COALESCE(NULLIF(value,''),'') <> '' FROM ypay_settings WHERE key='key'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
+        Ok(json!({
+            "key_set": key_set,
+            "orders_total": count("SELECT COUNT(*) FROM ypay_order WHERE deleted_at IS NULL"),
+            "orders_paid": count("SELECT COUNT(*) FROM ypay_order WHERE deleted_at IS NULL AND status=1"),
+            "last_order_at": conn
+                .query_row("SELECT COALESCE(MAX(create_time),'') FROM ypay_order", [], |r| r.get::<_, String>(0))
+                .unwrap_or_default(),
+        }))
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .and_then(|v| v);
+    match result {
+        Ok(data) => Json(json!({"success": true, "message": "ok", "data": data})),
+        Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+    }
 }
 
 // 说明：Python 时代的 /api/jobs/submit 已删除 —— 没有任何调用方

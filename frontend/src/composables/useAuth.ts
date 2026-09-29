@@ -14,22 +14,10 @@ export function useAuth() {
   const pwForm = reactive({ old_password: '', new_password: '', confirm_password: '' })
   const changingPw = ref(false)
 
-  const captchaToken = ref('')
-  const captchaAnswer = ref('')
-  const captchaImage = ref('')
-  const captchaLoading = ref(false)
-
-  async function loadCaptcha() {
-    captchaLoading.value = true
-    try {
-      const r = await api.captcha.generate()
-      captchaToken.value = r.data.token
-      captchaImage.value = r.data.image
-      captchaAnswer.value = ''
-    } catch { captchaImage.value = '' }
-    finally { captchaLoading.value = false }
-  }
-
+  // 说明：登录表单原先带图形验证码，但后端 admin_login 明确不做校验
+  // （Rust 迁移后没有实现验证码签发），前端还调用了并不存在的
+  // /api/captcha/generate —— 表现为「获取验证码」占位图 + 一个填了也没用的输入框。
+  // 该假交互已整体移除：填了不生效的字段比没有更容易出事。
   async function doLogin(e: Event) {
     e.preventDefault()
     loginErr.value = ''
@@ -37,15 +25,12 @@ export function useAuth() {
       const r = await api.admin.login({
         username: adminUser.value,
         password: adminPass.value,
-        captcha_token: captchaToken.value,
-        captcha_answer: captchaAnswer.value.trim(),
       })
       store.setAdminToken(r.data.token)
       currentRole.value = 'admin'
       isLoggedIn.value = true
     } catch (err: any) {
       loginErr.value = err?.message || '登录失败，请稍后重试'
-      if (err?.message?.includes('验证码')) loadCaptcha()
     }
   }
 
@@ -70,7 +55,6 @@ export function useAuth() {
   return {
     adminUser, adminPass, loginErr,
     currentRole, isLoggedIn, pwForm, changingPw,
-    captchaToken, captchaAnswer, captchaImage, captchaLoading,
-    doLogin, logout, changeAdminPassword, loadCaptcha,
+    doLogin, logout, changeAdminPassword,
   }
 }

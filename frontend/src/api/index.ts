@@ -110,7 +110,7 @@ export const api = {
     },
   },
   admin: {
-    login: (d: { username: string; password: string; captcha_token?: string; captcha_answer?: string }) => post<ApiResponse<any>>('/api/admin/login', d),
+    login: (d: { username: string; password: string }) => post<ApiResponse<any>>('/api/admin/login', d),
     dashboard: () => get<ApiResponse<DashboardStats>>('/api/admin/dashboard'),
     changePassword: (d: { old_password: string; new_password: string }) => post<ApiResponse<any>>('/api/admin/change-password', d),
   },
@@ -142,21 +142,9 @@ export const api = {
     set: (key: string, value: string) => post<ApiResponse<any>>('/api/admin/config', { key, value }),
     testDeepseek: (model?: string) => post<ApiResponse<any>>('/api/admin/config/test-deepseek', { model: model || 'deepseek-chat' }),
   },
-  proxy: {
-    get: () => get<ApiResponse<{enabled:boolean;url:string;username:string;password:string}>>('/api/admin/proxy'),
-    save: (d: {enabled:boolean;url:string;username:string;password:string}) => post<ApiResponse<any>>('/api/admin/proxy', d),
-    test: (d: {enabled:boolean;url:string;username:string;password:string}) => post<ApiResponse<any>>('/api/admin/proxy/test', d),
-  },
-  adminDomainMonitor: {
-    status: () => get<ApiResponse<{ known_domains: Record<string, {name:string;url:string;discovered_at:string;source:string}>; last_check: string; last_change: string; interval: number; school_url: string }>>('/api/admin/domain-monitor/status'),
-    check: () => post<ApiResponse<{ checked_at: string; found: any[]; new_domains: any[]; changed_domains: any[]; errors: string[] }>>('/api/admin/domain-monitor/check'),
-    add: (d: { domain: string; name: string; url: string }) => post<ApiResponse<any>>('/api/admin/domain-monitor/add', d),
-    remove: (domain: string) => post<ApiResponse<any>>('/api/admin/domain-monitor/remove', { domain }),
-    setInterval: (interval: number) => post<ApiResponse<any>>('/api/admin/domain-monitor/interval', { interval }),
-    health: () => get<ApiResponse<{ checked_at: string; platforms: {domain:string;name:string;url:string;reachable:boolean;status_code:number;response_time_ms:number;error:string}[] }>>('/api/admin/domain-monitor/health'),
-    alerts: (limit?: number) => get<ApiResponse<{ time:string;type:string;message:string;domain:string }[]>>('/api/admin/domain-monitor/alerts' + (limit ? '?limit=' + limit : '')),
-    clearAlerts: () => post<ApiResponse<any>>('/api/admin/domain-monitor/alerts/clear'),
-  },
+  // 说明：proxy（3 个）与 adminDomainMonitor（8 个）两段已删除 ——
+  // 后端从未注册这些路由，对应的两个后台页面（网络代理 / 风险监控）
+  // 已一并移除，避免留下「点了必然 404」的死接口定义。
   pricing: {
     get: () => get<ApiResponse<{
       videoUnitPrice: number; examUnitPrice: number; homeworkUnitPrice: number;
@@ -205,9 +193,8 @@ export const api = {
       return res.json()
     },
   },
-  captcha: {
-    generate: () => get<ApiResponse<{ token: string; image: string }>>('/api/captcha/generate'),
-  },
+  // 说明：captcha 段已删除 —— 后端从无 /api/captcha/generate，
+  // 且 admin_login 明确不校验验证码；登录表单里的验证码字段属假交互。
   announcement: {
     get: () => get<ApiResponse<{ id: number; content: string; active: boolean }>>('/api/announcement'),
     set: (content: string) => post<ApiResponse<{ id: number }>>('/api/admin/announcement', { content }),

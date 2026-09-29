@@ -219,8 +219,23 @@ async fn cache_headers(req: Request, next: Next) -> Response {
     resp
 }
 
-/// SPA 回退：非 API/静态路径返回 index.html（no-cache）
-async fn spa_fallback() -> Response {
+/// SPA 回退：非 API/静态路径返回 index.html（no-cache）。
+///
+/// `/api/*` 下的未知路径**不再**回退到 index.html：以前它会给前端返回 200 + HTML，
+/// 让「调用了不存在的接口」看起来像 200，排查时极具误导性（前端只会得到
+/// JSON 解析失败）。这类请求一律 404 JSON，让问题在第一时间暴露。
+async fn spa_fallback(req: Request) -> Response {
+    if req.uri().path().starts_with("/api/") {
+        let mut resp = Response::new(Body::from(
+            r#"{"success":false,"message":"接口不存在"}"#,
+        ));
+        *resp.status_mut() = StatusCode::NOT_FOUND;
+        resp.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json; charset=utf-8"),
+        );
+        return resp;
+    }
     match tokio::fs::read("static/index.html").await {
         Ok(body) => {
             let mut resp = Response::new(Body::from(body));

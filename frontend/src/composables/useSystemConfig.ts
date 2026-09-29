@@ -42,7 +42,7 @@ export function useSystemConfig() {
       if (configs.deepseek_homework_model) homeworkModel.value = configs.deepseek_homework_model
       if (configs.deepseek_chaoxing_model) chaoxingModel.value = configs.deepseek_chaoxing_model
       if (configs.deepseek_pricing_model) pricingModel.value = configs.deepseek_pricing_model
-    } catch {}
+    } catch { }
   }
 
   async function saveDeepseekKey() {
@@ -175,189 +175,19 @@ export function useSystemConfig() {
     }
   }
 
-  // ── Proxy ──
-  const proxyForm = reactive({ enabled: false, url: '', username: '', password: '' })
-  const proxySaving = ref(false)
-  const proxyTesting = ref(false)
-  const proxyTestResult = ref('')
-  const proxyTestOk = ref(false)
-  const serverPublicIp = ref('')
+  // 说明：网络代理整块已删除。后端 rust_worker 从无 /api/admin/proxy 路由，
+  // 也没有任何出站请求读取代理配置（platform_client 只做 TLS/UA/限速），
+  // 所以原「网络代理」页是一整套无效交互，已连同侧栏入口一并移除。
+  // 若日后确实要接代理，应在 platform_client::build_client_with_ua 里统一
+  // 接 reqwest::Proxy，而不是先摆一个存不了也用不上的表单。
 
-  async function loadProxySettings() {
-    try { const r = await api.proxy.get(); if (r.data) Object.assign(proxyForm, r.data) } catch {}
-  }
-
-  async function saveProxy() {
-    proxySaving.value = true
-    try {
-      const r = await api.proxy.save({ ...proxyForm })
-      if (r.success) store.toast('代理设置已保存', 'success')
-      else store.toast(r.message || '保存失败', 'error')
-    } catch { store.toast('保存失败', 'error') }
-    finally { proxySaving.value = false }
-  }
-
-  async function testProxy() {
-    if (!proxyForm.url.trim()) { store.toast('请先输入代理地址', 'warning'); return }
-    proxyTesting.value = true; proxyTestResult.value = ''
-    try {
-      const r = await api.proxy.test({ ...proxyForm })
-      proxyTestOk.value = r.success
-      proxyTestResult.value = r.message + (r.data?.exit_ip ? ' — 出口IP: ' + r.data.exit_ip : '')
-    } catch { proxyTestResult.value = '测试请求失败'; proxyTestOk.value = false }
-    finally { proxyTesting.value = false }
-  }
-
-  async function fetchServerPublicIp() {
-    try {
-      const r = await fetch('https://myip.ipip.net')
-      const t = await r.text()
-      serverPublicIp.value = t.trim().split(' ').pop() || t.trim()
-    } catch {}
-  }
-
-  // ── Risk / Health ──
-  const riskDomainStatus = ref<any>(null)
-  const riskHealth = ref<any>(null)
-  const riskAlerts = ref<any[]>([])
-  const loadingRisk = ref(false)
-  const riskChecking = ref(false)
-  const riskIntervalInput = ref(3600)
-  const showAddDomainModal = ref(false)
-  const addDomainForm = reactive({ domain: '', name: '', url: '' })
-  const riskCheckStep = ref('')
-  const riskChecks = ref<any[]>([])
-
-  const riskScore = computed(() => {
-    const checks = riskChecks.value
-    if (!checks.length) return 0
-    const passCount = checks.filter(c => c.status === 'pass').length
-    return Math.round((passCount / checks.length) * 100)
-  })
-  const riskScoreColor = computed(() => {
-    const s = riskScore.value
-    if (s >= 80) return '#10b981'
-    if (s >= 50) return '#f59e0b'
-    return '#ef4444'
-  })
-  const riskScoreLevel = computed(() => {
-    const s = riskScore.value
-    if (s >= 80) return 'level-good'
-    if (s >= 50) return 'level-warn'
-    return 'level-bad'
-  })
-  const riskScoreText = computed(() => {
-    const s = riskScore.value
-    if (s >= 80) return '系统安全'
-    if (s >= 50) return '存在风险'
-    return '安全告警'
-  })
-  const riskScoreDesc = computed(() => {
-    const s = riskScore.value
-    const failCount = riskChecks.value.filter(c => c.status === 'fail').length
-    const warnCount = riskChecks.value.filter(c => c.status === 'warn').length
-    if (s >= 80) return '所有安全检查项正常运行'
-    if (s >= 50) return `${warnCount} 项警告, ${failCount} 项异常，请关注`
-    return `${failCount} 项异常，建议立即处理`
-  })
-  const riskScoreDash = computed(() => {
-    const circumference = 2 * Math.PI * 52
-    const filled = (riskScore.value / 100) * circumference
-    return `${filled} ${circumference}`
-  })
-
-  function buildRiskChecks() {
-    const checks: any[] = []
-    const platforms = riskHealth.value?.platforms || []
-    const allUp = platforms.length > 0 && platforms.every((p: any) => p.reachable)
-    const someUp = platforms.some((p: any) => p.reachable)
-    checks.push({ id: 'platform', name: '平台可达性', expanded: false, desc: allUp ? `${platforms.length} 个平台全部正常` : someUp ? `部分平台不可达` : '所有平台不可达', status: allUp ? 'pass' : someUp ? 'warn' : 'fail' })
-
-    const domainCount = riskDomainStatus.value?.known_domains ? Object.keys(riskDomainStatus.value.known_domains).length : 0
-    checks.push({ id: 'domain', name: '域名监控', expanded: false, desc: `正在监控 ${domainCount} 个域名`, status: domainCount > 0 ? 'pass' : 'warn' })
-
-    const alertCount = riskAlerts.value?.length || 0
-    checks.push({ id: 'alerts', name: '安全告警', expanded: false, desc: alertCount > 0 ? `${alertCount} 条未处理告警` : '无告警', status: alertCount === 0 ? 'pass' : alertCount < 5 ? 'warn' : 'fail' })
-
-    const interval = riskIntervalInput.value || 3600
-    checks.push({ id: 'interval', name: '自动检查', expanded: false, desc: `每 ${Math.floor(interval / 60)} 分钟自动检查一次`, status: interval >= 300 ? 'pass' : 'warn' })
-
-    riskChecks.value = checks
-  }
-
-  async function loadRiskData() {
-    loadingRisk.value = true
-    try {
-      const [ds, health, alerts] = await Promise.all([
-        api.adminDomainMonitor.status(),
-        api.adminDomainMonitor.health(), api.adminDomainMonitor.alerts(30),
-      ])
-      riskDomainStatus.value = ds.data
-      riskHealth.value = health.data; riskAlerts.value = alerts.data || []
-      riskIntervalInput.value = ds.data?.interval || 3600
-      buildRiskChecks()
-    } catch (e: any) { store.toast(e.message || '加载风险数据失败', 'error') }
-    finally { loadingRisk.value = false }
-  }
-
-  async function runDomainCheck() {
-    riskChecking.value = true
-    try {
-      const res = await api.adminDomainMonitor.check()
-      if (res.data?.new_domains?.length || res.data?.changed_domains?.length) {
-        store.toast(`检测到变更: ${res.data.new_domains?.length || 0}个新域名, ${res.data.changed_domains?.length || 0}个变更`, 'warning')
-      } else { store.toast('域名检查完成，无变更', 'success') }
-      loadRiskData()
-    } catch (e: any) { store.toast(e.message, 'error') }
-    finally { riskChecking.value = false }
-  }
-
-  async function saveRiskInterval() {
-    try { await api.adminDomainMonitor.setInterval(riskIntervalInput.value); store.toast('检查间隔已保存', 'success') }
-    catch (e: any) { store.toast(e.message, 'error') }
-  }
-
-  async function runFullRiskCheck() {
-    riskChecking.value = true
-    try {
-      riskCheckStep.value = '域名监控'
-      const dsRes = await api.adminDomainMonitor.check()
-      if (dsRes.data?.new_domains?.length || dsRes.data?.changed_domains?.length) {
-        store.toast(`检测到变更: ${dsRes.data.new_domains?.length || 0}个新域名, ${dsRes.data.changed_domains?.length || 0}个变更`, 'warning')
-      }
-      riskCheckStep.value = '刷新数据'
-      await loadRiskData()
-      store.toast('全面检查完成', 'success')
-    } catch { store.toast('检查失败', 'error') }
-    finally { setTimeout(() => { riskChecking.value = false; riskCheckStep.value = '' }, 800) }
-  }
-
-  async function addDomain() {
-    if (!addDomainForm.domain || !addDomainForm.name) { store.toast('请填写域名和名称', 'error'); return }
-    if (!addDomainForm.url) addDomainForm.url = `https://${addDomainForm.domain}`
-    try {
-      await api.adminDomainMonitor.add(addDomainForm)
-      showAddDomainModal.value = false
-      addDomainForm.domain = ''; addDomainForm.name = ''; addDomainForm.url = ''
-      loadRiskData(); store.toast('域名已添加', 'success')
-    } catch (e: any) { store.toast(e.message, 'error') }
-  }
-
-  async function removeDomain(domain: string) {
-    const ok = await showConfirm({ title: '移除域名', message: `确定要移除域名 ${domain} 吗？`, type: 'warning' })
-    if (!ok) return
-    try { await api.adminDomainMonitor.remove(domain); loadRiskData(); store.toast('域名已移除', 'success') }
-    catch (e: any) { store.toast(e.message, 'error') }
-  }
-
-  async function clearRiskAlerts() {
-    try { await api.adminDomainMonitor.clearAlerts(); riskAlerts.value = []; store.toast('告警历史已清除', 'success') }
-    catch (e: any) { store.toast(e.message, 'error') }
-  }
-
-  const platformColors: string[] = ['#4f6ef7','#22c55e','#f59e0b','#ef4444','#8b5cf6','#0ea5e9']
+  // 说明：风险 / 健康检查整块已删除 —— 它依赖的 8 个
+  // /api/admin/domain-monitor/* 接口后端一个都没有，页面上的
+  // 「全面检查」「刷新」「添加域名」「保存间隔」点了必然失败。
+  // 平台是否可用，看「队列监控」里失败任务的 error_message 即可。
+  const platformColors: string[] = ['#4f6ef7', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#0ea5e9']
   const taskTypeNames: Record<string, string> = { video: '视频', exam: '考试', full: '全包', chaoxing_points: '学习通积分', both: '视频+考试' }
-  const tierNames: Record<string, string> = { '1': '入门代理', '2': '高级代理', '3': '合伙人' }
+
 
   return {
     // DeepSeek
@@ -369,17 +199,8 @@ export function useSystemConfig() {
     applyingPackage, packagePricing,
     editingPricing, savingPricing, editPricing,
     loadPricing, applyPackagePricing, cancelEditPricing, savePricingConfig,
-    // Proxy
-    proxyForm, proxySaving, proxyTesting, proxyTestResult, proxyTestOk, serverPublicIp,
-    loadProxySettings, saveProxy, testProxy, fetchServerPublicIp,
-    // Risk
-    riskDomainStatus, riskHealth, riskAlerts, loadingRisk, riskChecking,
-    riskIntervalInput, showAddDomainModal, addDomainForm, riskCheckStep,
-    riskChecks,
-    riskScore, riskScoreColor, riskScoreLevel, riskScoreText, riskScoreDesc, riskScoreDash,
-    buildRiskChecks, loadRiskData, runDomainCheck, saveRiskInterval,
-    runFullRiskCheck, addDomain, removeDomain, clearRiskAlerts,
+
     // Constants
-    platformColors, taskTypeNames, tierNames,
+    platformColors, taskTypeNames,
   }
 }

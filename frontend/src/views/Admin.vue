@@ -14,9 +14,9 @@ import AppTopbar from '@/components/AppTopbar.vue'
 import OverviewTab from '@/views/admin/OverviewTab.vue'
 import OrdersTab from '@/views/admin/OrdersTab.vue'
 import QueueTab from '@/views/admin/QueueTab.vue'
-import ProxyTab from '@/views/admin/ProxyTab.vue'
+
 import SecurityTab from '@/views/admin/SecurityTab.vue'
-import RiskTab from '@/views/admin/RiskTab.vue'
+
 import PricingTab from '@/views/admin/PricingTab.vue'
 import YpayTab from '@/views/admin/YpayTab.vue'
 import AnnouncementTab from '@/views/admin/AnnouncementTab.vue'
@@ -25,7 +25,7 @@ const store = useAppStore()
 const realtime = useRealtimeStore()
 
 // ── Composables ──
-const { adminUser, adminPass, loginErr, currentRole, isLoggedIn, pwForm, changingPw, captchaToken, captchaAnswer, captchaImage, captchaLoading, doLogin, logout, changeAdminPassword, loadCaptcha } = useAuth()
+const { adminUser, adminPass, loginErr, currentRole, isLoggedIn, pwForm, changingPw, doLogin, logout, changeAdminPassword } = useAuth()
 const dashboard = useDashboard()
 const { allSidebarItems, visibleSidebarGroups, sidebarGroups, sidebarCollapsed, mobileSidebarOpen, loadingDash, dash, dashError, fmtDate, fmtShortDate, fmtMoney, loadDashboard, statusLabel, statusClass, orderStatusLabel, orderStatusClass, maxStatusCount, maxBarRevenue, maxBarOrders, totalPlatformOrders } = dashboard
 const orders = useOrders()
@@ -37,7 +37,10 @@ const ypayAdmin = useYpayAdmin()
 const { load: loadPlatformNames, getName: getPlatformName, platformNames } = usePlatformNames()
 
 // ── Tab switching (orchestrates across composables) ──
-type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'pricing' | 'ypay' | 'proxy' | 'announcement' | 'risk' | 'security'
+// proxy（网络代理）与 risk（风险监控）两页已删除：它们依赖的后端接口
+// 一个都不存在（/api/admin/proxy*、/api/admin/domain-monitor/* 共 11 个），
+// 页面上的每个按钮点了都是 404 —— 留着只会误导操作者以为有这些能力。
+type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'pricing' | 'ypay' | 'announcement' | 'security'
 const activeTab = ref<SidebarKey>('overview')
 const expandedSidebarItems = ref<string[]>(['queue'])
 
@@ -52,10 +55,10 @@ function switchTab(tab: SidebarKey) {
   if (tab === 'overview') dashboard.loadDashboard(currentRole.value)
   if (tab === 'orders') orders.loadOrders()
     // queue 数据由 watch(activeTab) → setQueueFilter 统一加载，此处不重复调用
-  if (tab === 'security') { pwForm.old_password = ''; pwForm.new_password = ''; pwForm.confirm_password = ''; if (currentRole.value === 'admin') { sysConfig.loadDeepseekKey(); sysConfig.loadRiskData() } }
+  if (tab === 'security') { pwForm.old_password = ''; pwForm.new_password = ''; pwForm.confirm_password = ''; if (currentRole.value === 'admin') sysConfig.loadDeepseekKey() }
   if (tab === 'pricing') sysConfig.loadPricing()
   if (tab === 'ypay') ypayAdmin.loadYpay()
-  if (tab === 'proxy') { sysConfig.loadProxySettings(); sysConfig.fetchServerPublicIp() }
+
 }
 
 // ── Lifecycle ──
@@ -66,8 +69,6 @@ onMounted(async () => {
       currentRole.value = 'admin'
     }
     dashboard.loadDashboard(currentRole.value)
-  } else {
-    loadCaptcha()
   }
 })
 
@@ -118,7 +119,7 @@ onUnmounted(() => {
 
 // ── Expose typed state slices to tab components via admin store ──
 useAdminStore().init({
-  auth: { adminUser, adminPass, loginErr, currentRole, isLoggedIn, pwForm, changingPw, captchaToken, captchaAnswer, captchaImage, captchaLoading, doLogin, logout, changeAdminPassword, loadCaptcha },
+  auth: { adminUser, adminPass, loginErr, currentRole, isLoggedIn, pwForm, changingPw, doLogin, logout, changeAdminPassword },
   dashboard,
   orders,
   payments,
@@ -162,17 +163,6 @@ useAdminStore().init({
           <div class="field">
             <label>密码</label>
             <input v-model="adminPass" type="password" placeholder="请输入密码" autocomplete="current-password" />
-          </div>
-          <div class="field">
-            <label>验证码</label>
-            <div class="captcha-row">
-              <input v-model="captchaAnswer" placeholder="请输入验证码" autocomplete="off" />
-              <img v-if="captchaImage" :src="captchaImage" class="captcha-img" title="点击刷新验证码" @click="loadCaptcha" />
-              <div v-else class="captcha-placeholder" @click="loadCaptcha">
-                <span v-if="captchaLoading">加载中...</span>
-                <span v-else>获取验证码</span>
-              </div>
-            </div>
           </div>
           <button type="submit" class="btn btn-primary btn-lg btn-block">
 登录后台
@@ -319,8 +309,7 @@ useAdminStore().init({
           <QueueTab v-if="activeTab === 'queue' || activeTab === 'queue_school' || activeTab === 'queue_chaoxing'" />
 
 
-          <!-- Proxy Tab -->
-          <ProxyTab v-if="activeTab === 'proxy'" />
+
 
 
           <!-- Security Tab -->
@@ -330,8 +319,7 @@ useAdminStore().init({
           <AnnouncementTab v-if="activeTab === 'announcement'" />
 
 
-          <!-- Risk Monitor Tab -->
-          <RiskTab v-if="activeTab === 'risk'" />
+
 
 
           <!-- Pricing Tab -->
@@ -355,7 +343,7 @@ useAdminStore().init({
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
           <span>队列</span>
         </button>
-        <button :class="['mbn-item', { active: activeTab === 'security' || activeTab === 'pricing' || activeTab === 'ypay' || activeTab === 'proxy' }]" @click="mobileSidebarOpen = true">
+        <button :class="['mbn-item', { active: activeTab === 'security' || activeTab === 'pricing' || activeTab === 'ypay' }]" @click="mobileSidebarOpen = true">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
           <span>更多</span>
         </button>
@@ -419,15 +407,6 @@ useAdminStore().init({
   font-size: 14px; outline: none; transition: all .15s;
 }
 .field input:focus { border-color: var(--c-primary); box-shadow: 0 0 0 3px var(--c-primary-bg); background: var(--c-surface); }
-.captcha-row { display: flex; gap: 8px; align-items: stretch; }
-.captcha-row input { flex: 1; min-width: 0; height: 44px; padding: 0 14px; border: 1.5px solid var(--c-border); border-radius: 8px; font-size: 14px; outline: none; }
-.captcha-img { height: 44px; cursor: pointer; border-radius: 8px; border: 1px solid var(--c-border); flex-shrink: 0; }
-.captcha-placeholder {
-  height: 44px; padding: 0 16px; display: flex; align-items: center; justify-content: center;
-  border: 1px dashed var(--c-border); border-radius: 8px; font-size: 13px; color: var(--c-text-muted);
-  cursor: pointer; flex-shrink: 0; white-space: nowrap;
-}
-.captcha-placeholder:hover { border-color: var(--c-primary); color: var(--c-primary); }
 .field input::placeholder { color: var(--c-text-muted); }
 .field-hint { font-size: 11px; color: var(--c-text-muted); margin-top: 2px; }
 .login-err { font-size: 13px; color: var(--c-danger); text-align: center; margin-top: 12px; }
