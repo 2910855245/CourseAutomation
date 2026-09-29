@@ -42,8 +42,6 @@ export const useRealtimeStore = defineStore('realtime', () => {
 
   /** 客户端关心的 topic 前缀（`order:`、`queue`、`*`） */
   const topicPrefixes = new Set<string>()
-  /** 游客逐单凭证：订单列表变化时由 renewGuestScope() 重新上报 */
-  let guestOrders: { order_id: string; view_token: string }[] = []
   let adminToken = ''
 
   function endpoint() {
@@ -56,16 +54,7 @@ export const useRealtimeStore = defineStore('realtime', () => {
   }
 
   function sendScope() {
-    if (adminToken) {
-      send({ type: 'auth', token: adminToken })
-      return
-    }
-    // 没有管理令牌时走游客通道；即使一笔都没有也要发，
-    // 否则 AUTH_WS_REQUIRED 开启时会被服务端 5s 超时断开。
-    send({
-      type: 'sub',
-      orders: guestOrders.filter(o => o.order_id && o.view_token),
-    })
+    if (adminToken) send({ type: 'auth', token: adminToken })
   }
 
   function matches(topic: string) {
@@ -163,12 +152,6 @@ export const useRealtimeStore = defineStore('realtime', () => {
     if (token) sendScope()
   }
 
-  /** 游客订单集合变化时重新上报 view_token 白名单 */
-  function renewGuestScope(orders: { order_id: string; view_token: string }[]) {
-    guestOrders = orders
-    if (!adminToken) sendScope()
-  }
-
   function disconnect() {
     closedByUs = true
     stopTimers()
@@ -184,5 +167,5 @@ export const useRealtimeStore = defineStore('realtime', () => {
     if (document.visibilityState === 'visible') wake()
   })
 
-  return { connected, subscribe, setAdminToken, renewGuestScope, disconnect }
+  return { connected, subscribe, setAdminToken, disconnect }
 })

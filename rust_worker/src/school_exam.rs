@@ -218,6 +218,29 @@ fn classify_exam(raw: &Value, course_name: &str, course_id: &str, now: i64) -> V
     })
 }
 
+/// 拉取某门课程"还需处理"的考试清单（供刷课主流程在视频刷完后接着做题）。
+///
+/// 返回 [{work_id, node_id, name, course_id}]，只含 is_actionable（未交/继续做题/在做）
+/// 且未做过的考试 —— 已交卷、已过期、未开始的都不动。
+pub(crate) async fn list_actionable_exams(client: &Client, cookie: &str,
+                                          base_url: &str, course_id: &str) -> Vec<Value> {
+    let base = base_url.trim_end_matches('/');
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64).unwrap_or(0);
+    let raw = fetch_all_pages(client, cookie,
+        &format!("{base}/user/study_record/exam"), course_id).await;
+    raw.iter()
+        .map(|e| classify_exam(e, "", course_id, now))
+        .filter(|e| e["is_actionable"].as_bool() == Some(true))
+        .map(|e| json!({
+            "work_id": e["work_id"],
+            "node_id": e["node_id"],
+            "name": e["name"],
+            "course_id": e["course_id"],
+        }))
+        .collect()
+}
+
 /// 扫描单门课程（对齐 scan_course：拉取+清洗+分类；跳过 _verify_exam_exists）
 async fn scan_course(client: &Client, cookie: &str, base_url: &str,
                      course_id: &str, course_name: &str) -> Result<Value> {

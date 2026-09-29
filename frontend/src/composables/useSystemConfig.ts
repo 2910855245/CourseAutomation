@@ -38,6 +38,7 @@ export function useSystemConfig() {
       thinkingMode.value = t === '1' || t === 'true' ? 'on' : t === '0' || t === 'false' ? 'off' : 'auto'
       // 未配置时默认开启（与后端默认值一致）
       visionOcr.value = configs.deepseek_vision_ocr !== '0'
+      examSolve.value = configs.exam_solve_enabled !== '0'
     } catch { }
   }
 
@@ -92,6 +93,8 @@ export function useSystemConfig() {
   // thinkingMode: 'auto' 不写配置（由模型名语义决定）/ 'on' / 'off'
   const thinkingMode = ref<'auto' | 'on' | 'off'>('auto')
   const visionOcr = ref(true)
+  // 考试环节总开关：关闭后 exam/full 订单只刷视频，不做考试（应急刹车）
+  const examSolve = ref(true)
   const savingAiOptions = ref(false)
 
   async function saveAiOptions() {
@@ -101,6 +104,7 @@ export function useSystemConfig() {
       const thinkingVal = thinkingMode.value === 'on' ? '1' : thinkingMode.value === 'off' ? '0' : ''
       await api.adminConfig.set('deepseek_thinking', thinkingVal)
       await api.adminConfig.set('deepseek_vision_ocr', visionOcr.value ? '1' : '0')
+      await api.adminConfig.set('exam_solve_enabled', examSolve.value ? '1' : '0')
       store.toast('AI 能力开关已保存', 'success')
     } catch (e: any) { store.toast(e?.message || '保存失败', 'error') }
     finally { savingAiOptions.value = false }
@@ -206,7 +210,7 @@ export function useSystemConfig() {
     testingModel, DEEPSEEK_MODELS,
     loadDeepseekKey, saveDeepseekKey, clearDeepseekKey, testDeepseekApi, saveModels, testModelApi,
     // AI 能力开关
-    thinkingMode, visionOcr, savingAiOptions, saveAiOptions,
+    thinkingMode, visionOcr, examSolve, savingAiOptions, saveAiOptions,
     // Pricing
     applyingPackage, packagePricing,
     editingPricing, savingPricing, editPricing,

@@ -126,9 +126,16 @@ POST /api/orders/{id}/accept  # 接单
 ### 2. 任务执行（进程内 tokio 任务）
 
 - 扫描/登录/刷课/考试全部在 rust_worker 进程内并发执行，无子进程
-- 学校任务：登录（本地 OCR）→ 链式扫描+刷课 → 考试
+- 学校任务：登录（本地 OCR）→ 链式扫描+刷课 → **考试**（`exam`/`full` 订单）
+- **考试环节**（`scan::solve_exams`）：视频刷完后按课程拉 `/user/study_record/exam`，
+  只处理 is_actionable（未交/继续做题/在做）的考试，逐场交给 `exam::solve_exam` 作答，
+  考试之间按所选档位错峰。只要有考试没做成，任务就返回失败交给队列重试
+  （视频已完成，重跑只补考试）。总开关 `exam_solve_enabled`（默认开，关掉只刷视频）；
+  AI Key 未配置时直接明确报错，不会静默跳过
 - 学习通：`cx_study.rs` 刷课（enc MD5 签名 + dtoken + 上报循环），`cx_quiz.rs` 测评/讨论/笔记/考试
 - 点选验证码（need_code=2）不支持，直接报错；图形码（need_code=1）走进程内 ONNX OCR
+- 取消任务：管理端取消会 abort 真实运行中的 tokio 任务（任务表存 AbortHandle），
+  不只是改库状态
 
 ### 3. 前端 (`frontend/`)
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useAdminStore } from '@/stores/admin'
 const { changeAdminPassword, changingPw, currentRole, pwForm } = useAdminStore().state().auth
-const { DEEPSEEK_MODELS, clearDeepseekKey, deepseekApiKey, deepseekKeyMasked, deepseekTestResult, aiModel, saveDeepseekKey, saveModels, savingDeepseekKey, savingModels, showDeepseekKey, testDeepseekApi, testModelApi, testingDeepseek, testingModel, thinkingMode, visionOcr, savingAiOptions, saveAiOptions } = useAdminStore().state().sysConfig
+const { DEEPSEEK_MODELS, clearDeepseekKey, deepseekApiKey, deepseekKeyMasked, deepseekTestResult, aiModel, saveDeepseekKey, saveModels, savingDeepseekKey, savingModels, showDeepseekKey, testDeepseekApi, testModelApi, testingDeepseek, testingModel, thinkingMode, visionOcr, examSolve, savingAiOptions, saveAiOptions } = useAdminStore().state().sysConfig
 </script>
 
 <template>
@@ -160,6 +160,27 @@ const { DEEPSEEK_MODELS, clearDeepseekKey, deepseekApiKey, deepseekKeyMasked, de
             </div>
             <select
               v-model="visionOcr"
+              class="ai-model-select ai-option-select"
+            >
+              <option :value="true">
+                开启
+              </option>
+              <option :value="false">
+                关闭
+              </option>
+            </select>
+          </div>
+          <div class="ai-option">
+            <div class="ai-option-main">
+              <div class="ai-option-title">
+                考试环节
+              </div>
+              <div class="ai-option-desc">
+                考试/全包订单刷完视频后自动做未完成的考试；关掉则只刷视频。
+              </div>
+            </div>
+            <select
+              v-model="examSolve"
               class="ai-model-select ai-option-select"
             >
               <option :value="true">

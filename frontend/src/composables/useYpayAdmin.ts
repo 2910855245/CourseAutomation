@@ -164,8 +164,8 @@ export function useYpayAdmin() {
 
   async function saveAccount() {
     if (!accountForm.name.trim()) { store.toast('请输入通道名称', 'warning'); return }
-    const needQrUrl = accountForm.type === 'wxpay' || ['dougong_alipay','lebrush_alipay'].includes(accountForm.code)
-    const needAppid = ['alipay_dmf','alipay_official'].includes(accountForm.code)
+    const needQrUrl = accountForm.type === 'wxpay' || ['dougong_alipay', 'lebrush_alipay'].includes(accountForm.code)
+    const needAppid = ['alipay_dmf', 'alipay_official'].includes(accountForm.code)
     const needRemark = accountForm.code.startsWith('lkl_')
     if (needQrUrl && !accountForm.qr_url.trim()) { store.toast('请输入收款码内容', 'warning'); return }
     if (needAppid && !accountForm.alipay_appid.trim()) { store.toast('请输入应用APPID', 'warning'); return }
@@ -313,12 +313,9 @@ export function useYpayAdmin() {
     finally { ypayTesting.value = false }
   }
 
-  async function resetYpayConnection() {
-    try {
-      const r = await api.ypay.resetConnection()
-      alert(r.message || '已重置'); await loadYpay()
-    } catch { alert('重置失败，请检查网络') }
-  }
+  // 说明：resetYpayConnection 已删除 —— 后端无会话状态可重置
+  // （ypay_account.status 是"该渠道可被选中收款"的标记，清掉会直接让收款失效），
+  // 原来那个按钮点了只会返回"无可重置的会话状态"，属假交互。
 
   return {
     // YPay
@@ -335,6 +332,6 @@ export function useYpayAdmin() {
     closeAccountModal, loadAccounts, saveAccount, deleteAccount, toggleAccount, testChannel,
     loadYpay, saveYpaySettings, saveYpayKeyOnly, regenerateYpayKey, loadPairQr,
     loadYpayOrders, closeExpiredYpayOrders, clearYpayOrderHistory,
-    runYpayTest, resetYpayConnection,
+    runYpayTest,
   }
 }

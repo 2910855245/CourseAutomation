@@ -48,6 +48,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/api/ypay/config/get", get(ypay_config_get))
         .route("/api/ypay/config/save", post(ypay_config_save))
         .route("/api/ypay/status", get(ypay_status))
+        // 支付收款页其余管理接口（渠道账号 CRUD / 通道自检 / 配对二维码 /
+        // 支付订单 / 测试支付 / 诊断 / 连接重置）——见 ypay_admin.rs。
+        // 合并进 protected 分组，随附管理员 Bearer 鉴权。
+        .merge(crate::ypay_admin::router())
         // 公告发布：前端「系统通告」页 + 首页弹窗依赖
         .route("/api/admin/announcement", post(announcement_publish))
         .route("/api/admin/announcement/disable", post(announcement_disable))
@@ -109,6 +113,11 @@ async fn vmq_heart(
     let t = params.get("t").cloned().unwrap_or_default();
     let sign = params.get("sign").cloned().unwrap_or_default();
     let ok = crate::pay::verify_heart_sign(&state.db, &t, &sign).await;
+    if ok {
+        // 记下最后一次心跳：后台「监控在线/离线」徽标与心跳时间读的就是它。
+        // 不记的话徽标只能靠猜（此前恒显"监控离线"，等于骗操作者）。
+        let _ = crate::queue::config_set(&state.db, "ypay_last_heart", &crate::queue::now_str()).await;
+    }
     axum::response::Response::new(if ok { "success" } else { "fail" }.into())
 }
 
@@ -372,6 +381,13 @@ async fn ypay_status(State(state): State<AppState>) -> Json<Value> {
             )
             .unwrap_or(false);
         let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
+        // 心跳：vmq_heart 成功时写入 ypay_last_heart（超过 120s 视为离线）
+        let last_heart: String = conn
+            .query_row("SELECT COALESCE(config_value,'') FROM system_config WHERE config_key='ypay_last_heart'",
+                       [], |r| r.get(0)).unwrap_or_default();
+        let seconds_ago: i64 = crate::pay::parse_iso_secs(&last_heart)
+            .map(|t| (crate::queue::local_secs() as i64 - t).max(0))
+            .unwrap_or(-1);
         Ok(json!({
             "key_set": key_set,
             "orders_total": count("SELECT COUNT(*) FROM ypay_order WHERE deleted_at IS NULL"),
@@ -379,6 +395,11 @@ async fn ypay_status(State(state): State<AppState>) -> Json<Value> {
             "last_order_at": conn
                 .query_row("SELECT COALESCE(MAX(create_time),'') FROM ypay_order", [], |r| r.get::<_, String>(0))
                 .unwrap_or_default(),
+            "monitor_last_heart": last_heart,
+            "seconds_ago": seconds_ago,
+            "is_online": seconds_ago >= 0 && seconds_ago < 120,
+            "monitor_status": if !key_set { "key_missing" } else if seconds_ago >= 0 && seconds_ago < 120 { "online" } else { "offline" },
+            "online_accounts": count("SELECT COUNT(*) FROM ypay_account WHERE deleted_at IS NULL AND status=1"),
         }))
     })
     .await
@@ -502,7 +523,10 @@ async fn orders_list(
     State(state): State<AppState>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Json<Value> {
-    let limit = params.get("limit").and_then(|v| v.parse::<i64>().ok()).unwrap_or(50);
+    // 钳到 1..=200：limit=0 会让下面的 total_pages 整除零 panic，
+    // 负数在 SQLite 里是 LIMIT -1（返回全表），都不该由调用方决定
+    let limit = params.get("limit").and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(50).clamp(1, 200);
     let status_filter = params.get("status").cloned();
     let db = state.db.clone_pool();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
@@ -1520,6 +1544,7 @@ async fn admin_order_execute(State(state): State<AppState>, Path(order_id): Path
         return Json(json!({"success": false, "message": "订单账号或凭据缺失，无法执行"}));
     }
     let website_id = order["website_id"].as_i64().unwrap_or(1);
+    let task_type = order["task_type"].as_str().unwrap_or("video").to_string();
     let course_ids: Vec<String> = order["course_ids"].as_array()
         .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
@@ -1533,18 +1558,28 @@ async fn admin_order_execute(State(state): State<AppState>, Path(order_id): Path
     let tasks = state.tasks.clone();
     let oid_task = order_id.clone();
     let oid_resp = order_id.clone();
+    // 手动执行必须自己回写订单终态：这条路径不经过队列（queue::sync_order_state），
+    // 此前只在 tracing 里记一笔，订单会永久停在 running，顾客看到"永远执行中"。
+    let state2 = state.clone();
     let handle = tokio::spawn(async move {
         let base_url = crate::scan::platform_base_url(website_id);
         let session = match crate::session::get_session(&base_url, &username, &password).await {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(order_id = %oid_task, error = %e, "手动执行：登录失败");
+                finish_manual_run(&state2, &oid_task, false, &format!("登录失败: {e}")).await;
                 tasks.remove(&oid_task);
                 return;
             }
         };
         let tmpdir = std::env::temp_dir().join(format!("task_{oid_task}"));
         let _ = tokio::fs::create_dir_all(&tmpdir).await;
+        // 手动执行也要能跑考试环节：与队列路径同一套取配置方式
+        let api_key = crate::llm::effective_api_key(&state2.db).await;
+        let ai_model = crate::llm::configured_model(&state2.db, "deepseek_model",
+                                                    crate::llm::MODEL_FLASH).await;
+        let exam_enabled = crate::queue::config_get(&state2.db, "exam_solve_enabled").await
+            .map(|v| v != "0").unwrap_or(true);
         let task = crate::scan::ScanTaskInput {
             order_id: oid_task.clone(),
             username,
@@ -1555,15 +1590,54 @@ async fn admin_order_execute(State(state): State<AppState>, Path(order_id): Path
             status_file: tmpdir.join("status.json").to_string_lossy().to_string(),
             push_ws: true,
             speed_mode,
+            task_type,
+            api_key,
+            ai_model,
+            exam_enabled,
         };
-        if let Err(e) = crate::scan::run_scan_and_study(&task, &push_url, &push_token).await {
+        let result = crate::scan::run_scan_and_study(&task, &push_url, &push_token).await;
+        match &result {
+            Ok(()) => finish_manual_run(&state2, &oid_task, true, "").await,
+            Err(e) => finish_manual_run(&state2, &oid_task, false, &e.to_string()).await,
+        }
+        if let Err(e) = result {
             tracing::warn!(order_id = %oid_task, error = %e, "手动执行任务失败");
         }
         let _ = tokio::fs::remove_dir_all(&tmpdir).await;
         tasks.remove(&oid_task);
     });
-    state.tasks.insert(oid_resp.clone(), handle);
+    state.tasks.insert(oid_resp.clone(), handle.abort_handle());
     Json(json!({"success": true, "message": "订单执行中", "data": {"order_id": oid_resp}}))
+}
+
+/// 手动执行的收尾：写订单终态 + 广播（与队列路径同一套语义，避免两处口径漂移）。
+/// 只在订单仍处于流转中状态时改写，管理员已人工推进的单不覆盖。
+async fn finish_manual_run(state: &AppState, order_id: &str, ok: bool, note: &str) {
+    let pool = state.db.clone_pool();
+    let oid = order_id.to_string();
+    let note = note.to_string();
+    let status = if ok { "completed" } else { "failed" };
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+        let conn = pool.get()?;
+        let now = crate::queue::now_str();
+        let n = conn.execute(
+            "UPDATE orders SET status=?1, admin_note=?2, finished_at=?3, updated_at=?3
+             WHERE order_id=?4 AND deleted_at IS NULL
+               AND status IN ('pending','accepted','queued','running','paid','waiting')",
+            rusqlite::params![status, note, now, oid],
+        )?;
+        Ok(n)
+    })
+    .await;
+    match result {
+        Ok(Ok(0)) => {}
+        Ok(Ok(_)) => {
+            crate::progress::broadcast(state, &format!("order:{order_id}"), "order.update",
+                                      json!({"order_id": order_id, "status": status}));
+        }
+        Ok(Err(e)) => tracing::warn!(order_id, error = %e, "手动执行回写订单状态失败"),
+        Err(e) => tracing::warn!(order_id, error = %e, "手动执行回写订单状态失败（spawn_blocking 异常）"),
+    }
 }
 
 // ── 管理端：改密 / 配置 ─────────────────────────────────────────────────
@@ -1728,6 +1802,29 @@ fn find_job_table(conn: &rusqlite::Connection, job_id: &str) -> Option<&'static 
 }
 
 async fn queue_job_cancel(State(state): State<AppState>, Path(job_id): Path<String>) -> Json<Value> {
+    // 先真正停掉在跑的任务，再改库状态。
+    // 此前只 UPDATE 一行状态：任务照旧跑完，并在完成时把状态覆盖回 completed，
+    // 管理员看到的是"取消成功但任务又跑起来了"。
+    let db = state.db.clone_pool();
+    let jid = job_id.clone();
+    let order_id = tokio::task::spawn_blocking(move || -> Option<String> {
+        let conn = db.get().ok()?;
+        let table = find_job_table(&conn, &jid)?;
+        conn.query_row(
+            &format!("SELECT order_id FROM {table} WHERE job_id=?1"),
+            rusqlite::params![jid], |r| r.get::<_, Option<String>>(0),
+        ).ok().flatten()
+    })
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_default();
+    if !order_id.is_empty() {
+        if let Some((_, abort)) = state.tasks.remove(&order_id) {
+            abort.abort();
+            tracing::info!(job_id = %job_id, order_id = %order_id, "已中止运行中的刷课任务");
+        }
+    }
     queue_job_action(&state, &job_id,
         "UPDATE {t} SET status='cancelled', finished_at=?1 WHERE job_id=?2 AND status IN ('pending','running','retrying','waiting')",
         "任务已取消").await
@@ -1759,6 +1856,9 @@ async fn queue_job_action(state: &AppState, job_id: &str, sql_tpl: &str, ok_msg:
     .map_err(|e| anyhow::anyhow!("{e}"))
     .and_then(|v| v);
     match result {
+        // 影响 0 行说明状态不匹配（如已完成的单不能再取消）：
+        // 以前这种情况也返回 success，等于把"什么都没做"报成成功
+        Ok(0) => Json(json!({"success": false, "message": "任务当前状态不允许该操作，请刷新后重试"})),
         Ok(_) => Json(json!({"success": true, "message": ok_msg})),
         Err(e) => Json(json!({"success": false, "message": e.to_string()})),
     }

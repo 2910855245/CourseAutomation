@@ -229,7 +229,8 @@ export const api = {
         get<ApiResponse<any>>(`/api/ypay/pay-test/check/${batchId}` + buildQuery(params)),
     },
     diagnose: () => get<ApiResponse<any>>('/api/ypay/diagnose'),
-    resetConnection: () => post<ApiResponse<any>>('/api/ypay/reset-connection'),
+    // resetConnection 已删除：服务端不保存 APP 会话状态，
+    // 该接口只能返回"无可重置"，按钮已从「支付收款」页移除
     decodeQr: async (file: File) => {
       const fd = new FormData()
       fd.append('file', file)

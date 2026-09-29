@@ -33,6 +33,7 @@ mod school_exam;
 mod session;
 mod speed;
 mod study;
+mod ypay_admin;
 mod ypay_db;
 mod ypay_qr;
 
@@ -51,7 +52,12 @@ use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeDir;
 use tracing_subscriber::EnvFilter;
 
-type TaskMap = Arc<DashMap<String, tokio::task::JoinHandle<()>>>;
+/// 运行中任务表：key = 订单号，value = 任务的 AbortHandle。
+///
+/// 存 AbortHandle 而不是 JoinHandle —— 管理员在队列监控里「取消」运行中的任务时
+/// 需要真的把它停掉，而 JoinHandle 无法在不 await 的情况下从外部获得。
+/// 队列派发与手动执行两条路径都登记到这里，取消逻辑才能一视同仁。
+type TaskMap = Arc<DashMap<String, tokio::task::AbortHandle>>;
 
 #[derive(Clone)]
 pub struct AppState {

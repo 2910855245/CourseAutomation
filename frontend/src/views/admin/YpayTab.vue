@@ -2,7 +2,7 @@
 import { useAdminStore } from '@/stores/admin'
 const { orders } = useAdminStore().state().orders
 const { payTestAccountId, closePayTest, payTestChannelName, payTestChecks, payTestExpired, payTestLoading, payTestPaid, payTestPolling, payTestQrImage, payTestReallyPrice, showPayTest, startChannelPayTest } = useAdminStore().state().payments
-const { accountForm, aliAccounts, channelCodeHelp, channelCodeLabels, channelTestAccount, channelTestAllOk, channelTestChecks, channelTestLoading, channelTestQrImage, clearYpayOrderHistory, closeAccountModal, closeExpiredYpayOrders, codeLabel, deleteAccount, downloadQrImage, downloadQrLoading, editingAccount, fmtHeartbeat, loadYpay, loadYpayOrders, onQrFileChange, openAddAccount, openEditAccount, pairQrImage, pairQrLoading, payTypeLabels, qrFileInput, qrUploading, regenerateYpayKey, resetYpayConnection, saveAccount, saveYpaySettings, savingAccount, showAccountModal, showCertFields, showChannelTest, testChannel, toggleAccount, triggerQrUpload, typeLabels, wxAccounts, ypayForm, ypayOrderFilters, ypayOrderStatusFilter, ypayOrders, ypayOrdersPage, ypayOrdersTotal, ypaySaving, ypayStateLabels, ypayStatus, ypayTab } = useAdminStore().state().ypay
+const { accountForm, aliAccounts, channelCodeHelp, channelCodeLabels, channelTestAccount, channelTestAllOk, channelTestChecks, channelTestLoading, channelTestQrImage, clearYpayOrderHistory, closeAccountModal, closeExpiredYpayOrders, codeLabel, deleteAccount, downloadQrImage, downloadQrLoading, editingAccount, fmtHeartbeat, loadYpay, loadYpayOrders, onQrFileChange, openAddAccount, openEditAccount, pairQrImage, pairQrLoading, payTypeLabels, qrFileInput, qrUploading, regenerateYpayKey, saveAccount, saveYpaySettings, savingAccount, showAccountModal, showCertFields, showChannelTest, testChannel, toggleAccount, triggerQrUpload, typeLabels, wxAccounts, ypayForm, ypayOrderFilters, ypayOrderStatusFilter, ypayOrders, ypayOrdersPage, ypayOrdersTotal, ypaySaving, ypayStateLabels, ypayStatus, ypayTab } = useAdminStore().state().ypay
 </script>
 
 <template>
@@ -214,13 +214,7 @@ const { accountForm, aliAccounts, channelCodeHelp, channelCodeLabels, channelTes
             x2="12.01"
             y2="17"
           /></svg>
-          <span>APP密钥不匹配，请重新扫码配对</span>
-          <button
-            class="btn btn-xs btn-warn"
-            @click="resetYpayConnection"
-          >
-            重置
-          </button>
+          <span>APP 密钥不匹配，请重新扫码配对</span>
         </div>
       </div>
       <div class="ypay-order-toolbar">

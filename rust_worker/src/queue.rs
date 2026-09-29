@@ -349,6 +349,14 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
     let course_ids: Vec<String> = serde_json::from_str(&job.course_ids)
         .unwrap_or_else(|_| job.course_ids.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect());
 
+    // 考试环节所需的 AI 凭据与开关：在这一层解析（队列侧有 db），
+    // 让 scan/exam 保持"纯执行"、不依赖数据库
+    let api_key = crate::llm::effective_api_key(&state.db).await;
+    let ai_model = crate::llm::configured_model(&state.db, "deepseek_model",
+                                                crate::llm::MODEL_FLASH).await;
+    let exam_enabled = crate::queue::config_get(&state.db, "exam_solve_enabled").await
+        .map(|v| v != "0").unwrap_or(true);
+
     let task = ScanTaskInput {
         order_id: if job.order_id.is_empty() { job.job_id.clone() } else { job.order_id.clone() },
         username: job.username.clone(),
@@ -360,6 +368,10 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
         // 队列任务同样要推进度：否则管理端只能靠手动刷新看任务跑到哪了
         push_ws: true,
         speed_mode: job.speed_mode.clone(),
+        task_type: job.job_type.clone(),
+        api_key,
+        ai_model,
+        exam_enabled,
     };
 
     let result = crate::scan::run_scan_and_study(&task, &state.push_url, &state.push_token).await;
@@ -442,10 +454,22 @@ pub async fn dispatcher_loop(state: Arc<AppState>) {
                 let state2 = state.clone();
                 // 槽位由 RAII 守卫持有：任务 panic 时 Drop 依然会归还槽位
                 let slot = WorkerSlot::acquire();
-                tokio::spawn(async move {
+                let order_id = job.order_id.clone();
+                let order_id_task = order_id.clone();
+                let handle = tokio::spawn(async move {
                     let _slot = slot;
                     execute_school_job(&state2, &job).await;
+                    // 跑完自行摘除登记，避免表无限增长（panic 时留一条无效句柄，
+                    // 对外部 abort 一个已结束的任务是无害空操作）
+                    if !order_id_task.is_empty() {
+                        state2.tasks.remove(&order_id_task);
+                    }
                 });
+                // 登记 AbortHandle：管理端「取消」运行中的任务要能真的停下来，
+                // 只改库状态的话任务会继续跑完并把状态覆盖回 completed
+                if !order_id.is_empty() && !handle.is_finished() {
+                    state.tasks.insert(order_id, handle.abort_handle());
+                }
             }
             Ok(None) => tokio::time::sleep(std::time::Duration::from_secs(2)).await,
             Err(e) => {

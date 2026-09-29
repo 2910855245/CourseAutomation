@@ -48,6 +48,17 @@ pub struct ScanTaskInput {
     /// 刷课节奏档位（turbo/balanced/gentle；缺省/未知 → 均衡）
     #[serde(default)]
     pub speed_mode: String,
+    /// 订单类型（video / exam / full）：exam、full 刷完视频后要接着做未完成的考试
+    #[serde(default)]
+    pub task_type: String,
+    /// 考试答题用的 AI Key 与模型（由调用方从 system_config/env 解析后传入）
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub ai_model: String,
+    /// 考试环节总开关（关闭时只刷视频，考试留给人工）
+    #[serde(default)]
+    pub exam_enabled: bool,
 }
 
 /// 课程条目（从 /user/index HTML 解析）
@@ -299,6 +310,10 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
     let selected: Vec<&CourseItem> = courses.iter()
         .filter(|c| filter.is_empty() || filter.contains(&c.course_id))
         .collect();
+    // 考试环节要按课程回访考试清单，先把 (course_id, name) 留一份
+    let exam_courses: Vec<(String, String)> = selected.iter()
+        .map(|c| (c.course_id.clone(), c.name.clone()))
+        .collect();
     if selected.is_empty() {
         write_scan_status(&task.status_file, "error", "未找到课程", Some(true), Some(false),
                           &[]).await;
@@ -388,12 +403,102 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
         push_ws: task.push_ws,
         speed_mode: task.speed_mode.clone(),
     };
-    run_study(&study_task, push_url, push_token).await
+    run_study(&study_task, push_url, push_token).await?;
+
+    // 视频刷完 → 接着做考试（考试/全包订单）。
+    // 这一步此前完全缺失：exam/full 订单只刷视频就被标记完成，等于收了考试的钱没做考试。
+    if needs_exam(&task.task_type) {
+        solve_exams(task, &shared_client, &base_url, &exam_courses, push_url, push_token).await?;
+    }
+    Ok(())
+}
+
+/// 是否需要在刷课之后执行考试环节
+fn needs_exam(task_type: &str) -> bool {
+    matches!(task_type, "exam" | "full")
+}
+
+/// 逐课程拉取未完成的考试并交给 AI 作答（沿用订单所选档位的节奏错峰）。
+///
+/// 失败语义：只要有考试没做成，就返回 Err 让队列按重试策略再跑一遍 ——
+/// 视频此时已刷完，重跑只会补考试，代价很小；比"悄悄少做几场考试还报成功"诚实。
+async fn solve_exams(task: &ScanTaskInput, client: &Client, base_url: &str,
+                     courses: &[(String, String)], push_url: &str, push_token: &str) -> Result<()> {
+    if !task.exam_enabled {
+        tracing::warn!(order_id = %task.order_id, "考试环节已关闭，跳过考试");
+        return Ok(());
+    }
+    if task.api_key.is_empty() {
+        anyhow::bail!("考试环节需要 AI Key，但当前未配置");
+    }
+    let profile = crate::speed::SpeedMode::parse(&task.speed_mode).profile();
+    let mut total = 0usize;
+    let mut ok = 0usize;
+    let mut failed: Vec<String> = Vec::new();
+
+    for (course_id, course_name) in courses {
+        let exams = crate::school_exam::list_actionable_exams(
+            client, &task.cookie_str, base_url, course_id).await;
+        if exams.is_empty() {
+            continue;
+        }
+        tracing::info!(course = %course_name, count = exams.len(), "开始处理考试");
+        for e in &exams {
+            let work_id = e["work_id"].as_str().unwrap_or("");
+            let node_id = e["node_id"].as_str().unwrap_or("");
+            let name = e["name"].as_str().unwrap_or("");
+            if work_id.is_empty() {
+                continue;
+            }
+            total += 1;
+            // 把考试进度写进状态文件（管理端进度条读的就是它）
+            write_scan_status(&task.status_file, "exam",
+                              &format!("考试 {} / {}", ok, total), None, None, &[]).await;
+            match crate::exam::solve_exam(base_url, &task.cookie_str, work_id, course_id, node_id,
+                                          &task.api_key, &task.ai_model, "exam", None).await {
+                Ok(r) if r["success"].as_bool() == Some(true) => {
+                    ok += 1;
+                    tracing::info!(course = %course_name, exam = %name, "考试完成");
+                }
+                Ok(r) => {
+                    let msg = r["error"].as_str().unwrap_or("未知原因").to_string();
+                    failed.push(format!("{course_name}/{name}: {msg}"));
+                    tracing::warn!(course = %course_name, exam = %name, error = %msg, "考试未通过");
+                }
+                Err(e) => {
+                    failed.push(format!("{course_name}/{name}: {e}"));
+                    tracing::warn!(course = %course_name, exam = %name, error = %e, "考试执行失败");
+                }
+            }
+            // 考试之间同样按档位错峰（保守档会拉长到几十秒）
+            profile.sleep_course_stagger().await;
+        }
+    }
+
+    if total == 0 {
+        tracing::info!(order_id = %task.order_id, "没有需要处理的考试");
+        return Ok(());
+    }
+    if failed.is_empty() {
+        tracing::info!(order_id = %task.order_id, total, "全部考试已完成");
+        return Ok(());
+    }
+    anyhow::bail!("{} 场考试未完成（共 {} 场）：{}", failed.len(), total, failed.join("；"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_needs_exam_only_for_exam_and_full() {
+        // 只有"考试"与"全包"订单才需要跑考试环节，纯视频订单不该多打平台请求
+        assert!(needs_exam("exam"));
+        assert!(needs_exam("full"));
+        assert!(!needs_exam("video"));
+        assert!(!needs_exam("chaoxing_points"));
+        assert!(!needs_exam(""));
+    }
 
     #[test]
     fn test_parse_duration() {
