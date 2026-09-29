@@ -59,14 +59,15 @@ impl PromoConfig {
     }
 }
 
-/// 该访客当前能享受的免费待遇
+/// 该访客当前能享受的免费待遇。免费即**只能用保守档**（串行），
+/// 适中/暴力是付费权益 —— 服务端会在创建订单时强制改写档位，前端置灰只是提示。
 #[derive(Debug, Clone, Default)]
 pub struct Benefit {
     pub free: bool,
     /// global（全局免费）/ card（刷课卡）
     pub reason: String,
     pub card_id: String,
-    /// 免费单默认档位（持有免费待遇时锁定保守档，降低平台风控面）
+    /// 免费单锁定的档位（恒为保守档）
     pub speed_mode: String,
 }
 
@@ -225,14 +226,25 @@ pub async fn mark_converted(db: &Db, invitee_vid: &str, order_id: &str) {
     let order_id = order_id.to_string();
     let _ = tokio::task::spawn_blocking(move || -> Result<()> {
         let conn = pool.get()?;
-        conn.execute(
-            "UPDATE invites SET converted=1, converted_order_id=?1
-             WHERE invitee_vid=?2 AND converted=0",
-            rusqlite::params![order_id, invitee],
-        )?;
+        mark_converted_inner(&conn, &invitee, &order_id)?;
         Ok(())
     })
     .await;
+}
+
+/// 同步版转化标记（在入队的 spawn_blocking 内部直接调用，避免再包一层）
+pub(crate) fn mark_converted_blocking(db: &Db, invitee_vid: &str, order_id: &str) {
+    let Some(conn) = db.clone_pool().get().ok() else { return };
+    let _ = mark_converted_inner(&conn, invitee_vid, order_id);
+}
+
+fn mark_converted_inner(conn: &rusqlite::Connection, invitee_vid: &str, order_id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE invites SET converted=1, converted_order_id=?1
+         WHERE invitee_vid=?2 AND converted=0",
+        rusqlite::params![order_id, invitee_vid],
+    )?;
+    Ok(())
 }
 
 // ── 邀请统计与领卡 ───────────────────────────────────────────────────────
@@ -253,11 +265,15 @@ pub async fn invite_overview(db: &Db, vid: &str) -> Result<Value> {
         let total: i64 = conn.query_row(
             "SELECT COUNT(*) FROM invites WHERE inviter_vid=?1",
             rusqlite::params![vid], |r| r.get(0)).unwrap_or(0);
-        let valid: i64 = conn.query_row(
+        let converted: i64 = conn.query_row(
             "SELECT COUNT(*) FROM invites WHERE inviter_vid=?1 AND converted=1",
             rusqlite::params![vid], |r| r.get(0)).unwrap_or(0);
+        // require_order=0 时"打开链接即算"：此时全部邀请都算有效
+        let valid = if cfg.require_order { converted } else { total };
+        // 已领张数按"累计发放"计（含已吊销）：否则吊销一张就能再领一张，
+        // 等于把额度退回来
         let claimed: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM brush_cards WHERE owner_vid=?1 AND revoked=0",
+            "SELECT COUNT(*) FROM brush_cards WHERE owner_vid=?1",
             rusqlite::params![vid], |r| r.get(0)).unwrap_or(0);
         // 每满一个阈值可领一张，已领数从可领数里扣掉
         let can_claim = if cfg.invite_enabled {
@@ -304,19 +320,18 @@ pub async fn invite_overview(db: &Db, vid: &str) -> Result<Value> {
     .await?
 }
 
-/// 领卡（可重复领；需要联系方式，便于清缓存后人工找回）
+/// 领卡（可重复领；联系方式选填，留空也能领，只是少了人工找回凭据）
 pub async fn claim_card(db: &Db, vid: &str, contact: &str) -> Result<Value> {
     let cfg = PromoConfig::load(db).await;
     if !cfg.invite_enabled {
         anyhow::bail!("邀请活动未开启");
     }
+    // 联系方式是选填：留空也能领卡（降低领卡摩擦），只是换设备后少了找回凭据
     let contact = contact.trim().to_string();
-    if contact.is_empty() {
-        anyhow::bail!("请填写联系方式，便于卡片找回");
-    }
     if contact.chars().count() > 120 {
         anyhow::bail!("联系方式过长");
     }
+    let has_contact = !contact.is_empty();
     let pool = db.clone_pool();
     let vid_s = vid.to_string();
     let valid_days = cfg.valid_days;
@@ -328,7 +343,7 @@ pub async fn claim_card(db: &Db, vid: &str, contact: &str) -> Result<Value> {
             "SELECT COUNT(*) FROM invites WHERE inviter_vid=?1 AND converted=1",
             rusqlite::params![vid_s], |r| r.get(0))?;
         let claimed: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM brush_cards WHERE owner_vid=?1 AND revoked=0",
+            "SELECT COUNT(*) FROM brush_cards WHERE owner_vid=?1",
             rusqlite::params![vid_s], |r| r.get(0))?;
         if valid / threshold - claimed <= 0 {
             anyhow::bail!("暂无可领取的刷课卡（还差 {} 位好友下单）", threshold - valid % threshold);
@@ -345,8 +360,10 @@ pub async fn claim_card(db: &Db, vid: &str, contact: &str) -> Result<Value> {
             );
             match r {
                 Ok(_) => {
-                    tx.execute("UPDATE visitors SET contact=?1 WHERE vid=?2",
-                               rusqlite::params![contact, vid_s])?;
+                    if has_contact {
+                        tx.execute("UPDATE visitors SET contact=?1 WHERE vid=?2",
+                                   rusqlite::params![contact, vid_s])?;
+                    }
                     tx.commit()?;
                     return Ok(json!({
                         "code": code, "expires_at": expires, "valid_days": valid_days,
@@ -408,17 +425,24 @@ pub async fn check_benefit(db: &Db, vid: &str) -> Benefit {
     }
 }
 
-/// 免费单用掉一次卡额度（全局免费不计数）
-pub async fn consume_card(db: &Db, card_id: &str) {
-    if card_id.is_empty() {
+/// 免费单用掉卡额度（按订单数递增；全局免费不计数）。
+///
+/// 条件写进 UPDATE 里（`used_orders + n <= max_orders`）：先 SELECT 再判断再写
+/// 在并发下会超出额度。已吊销/已过期的卡不再扣（本来也不该能免单）。
+pub async fn consume_card(db: &Db, card_id: &str, orders: i64) {
+    if card_id.is_empty() || orders <= 0 {
         return;
     }
     let pool = db.clone_pool();
     let card_id = card_id.to_string();
     let _ = tokio::task::spawn_blocking(move || -> Result<()> {
         let conn = pool.get()?;
-        conn.execute("UPDATE brush_cards SET used_orders = used_orders + 1 WHERE card_id=?1",
-                     rusqlite::params![card_id])?;
+        let now = crate::queue::now_str();
+        conn.execute(
+            "UPDATE brush_cards SET used_orders = used_orders + ?1
+             WHERE card_id=?2 AND revoked=0 AND expires_at > ?3",
+            rusqlite::params![orders, card_id, now],
+        )?;
         Ok(())
     })
     .await;
@@ -533,5 +557,13 @@ mod tests {
         assert!(b.is_free());
         assert_eq!(b.to_json()["reason"], "card");
         assert!(!Benefit::paid().is_free());
+    }
+
+    #[test]
+    fn test_free_always_serial_mode() {
+        // 商业规则：不付费只能串行。免费待遇携带的档位必须恒为保守档，
+        // create_batch_orders 会拿它覆盖客户端传来的档位。
+        assert_eq!(crate::speed::SpeedMode::Gentle.as_str(), "gentle");
+        assert!(crate::speed::SpeedMode::parse("gentle").is_serial());
     }
 }

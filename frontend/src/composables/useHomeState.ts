@@ -1,5 +1,5 @@
 // Home.vue 完整状态管理：扫描、课程选择、定价、支付、角色检测
-import { ref, computed } from 'vue'
+import { ref, computed, onScopeDispose } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { api, type PlatformResult, type CourseItem } from '@/api'
 
@@ -9,7 +9,6 @@ export function useHomeState() {
   // ── Role detection ──
   const userRole = ref<'admin' | null>(null)
   const isPrivileged = computed(() => !!userRole.value)
-  const isRegularUser = ref(false)
 
   function detectUserRole() {
     // 管理员徽章：仅检查 admin token（用户体系已删除）
@@ -129,6 +128,8 @@ export function useHomeState() {
     hasSavedSpeed ? (localStorage.getItem(SPEED_LS_KEY) as SpeedMode) : 'balanced'
   )
   function setSpeedMode(mode: SpeedMode) {
+    // 免费待遇下只能串行：付费档位在此被拦下（服务端同样会强制，双保险）
+    if (benefit.value.free && mode !== 'gentle') return
     speedMode.value = mode
     try { localStorage.setItem(SPEED_LS_KEY, mode) } catch { }
   }
@@ -148,8 +149,8 @@ export function useHomeState() {
       benefit.value = d.benefit || { free: false, reason: '' }
       if (d.invite) inviteInfo.value = { ...inviteInfo.value, ...d.invite }
       myCard.value = d.card || null
-      // 免费用户默认走保守档（没手动选过档位时才覆盖）
-      if (benefit.value.free && !hasSavedSpeed) speedMode.value = 'gentle'
+      // 免费＝只能串行：把档位锁到保守档（服务端也会强制改写，这里只是让界面一致）
+      if (benefit.value.free) speedMode.value = 'gentle'
     } catch { /* 营销是附加功能，失败不打扰用户 */ }
   }
 
@@ -198,26 +199,8 @@ export function useHomeState() {
   }
 
   // ── Pricing ──
-  function calcCoursePrice(c: { video_total: number; video_completed: number; exam_total?: number; exam_done?: number }): number {
-    const pkg = packagePricing.value
-    if (c.video_total <= 0) {
-      if ((c.exam_total ?? 0) > 0) return pkg.priceExamOnly || 5
-      return 0
-    }
-    let base: number
-    if (c.video_total <= 30) base = pkg.priceSmall
-    else if (c.video_total <= 80) base = pkg.priceMedium
-    else base = pkg.priceLarge
-    const progress = c.video_completed / c.video_total * 100
-    let coeff: number
-    if (progress <= 25) coeff = 1.0
-    else if (progress <= 50) coeff = pkg.discount25
-    else if (progress <= 75) coeff = pkg.discount50
-    else coeff = pkg.discount75
-    return Math.max(pkg.priceMinimum, Math.round(base * coeff * 100) / 100)
-  }
-
   const backendPrices = ref<Record<string, { price: number; type: string; label: string }>>({})
+  let priceSeq = 0   // 定价请求序号（丢弃乱序返回的旧结果）
   const loadingPrices = ref(false)
 
   async function fetchBackendPrices() {
@@ -235,14 +218,18 @@ export function useHomeState() {
     }
     if (courses.length === 0) return
     loadingPrices.value = true
+    // 选择变动很频繁（每次勾选/全选都触发），响应可能乱序返回：
+    // 只认最后一次请求的结果，避免旧响应把新选择的价格覆盖掉
+    const seq = ++priceSeq
     try {
       const res = await api.pricing.calculate({ courses })
+      if (seq !== priceSeq) return
       if (res.data?.courses) {
         const map: Record<string, { price: number; type: string; label: string }> = {}
         for (const item of res.data.courses) map[item.course_id] = { price: item.price, type: item.type, label: item.label }
         backendPrices.value = map
       }
-    } catch { } finally { loadingPrices.value = false }
+    } catch { } finally { if (seq === priceSeq) loadingPrices.value = false }
   }
 
   const summary = computed(() => {
@@ -272,11 +259,6 @@ export function useHomeState() {
     return 'none' as const
   })
 
-  const currentPrices = computed(() => {
-    const pkg = packagePricing.value
-    return { priceSmall: pkg.priceSmall, priceMedium: pkg.priceMedium, priceLarge: pkg.priceLarge, discount25: pkg.discount25, discount50: pkg.discount50, discount75: pkg.discount75, priceMinimum: pkg.priceMinimum, priceChaoxing: pkg.priceChaoxing }
-  })
-
   const studentName = computed(() => {
     for (const p of scanData.value) { if (p.student_name) return p.student_name }
     return ''
@@ -295,17 +277,6 @@ export function useHomeState() {
       pendingCount: p.courses?.filter(c => !isCourseDoneOrSubmitted(c)).length || 0,
       workPending: p.courses?.reduce((s, c) => s + (c.work_pending || 0), 0) || 0,
     }
-  })
-
-  const chaoxingServiceType = computed(() => {
-    const p = scanData.value.find(p => p.website_id === 4)
-    if (!p || p.status !== 'ok') return null
-    const hasPoints = p.courses.some(c => (c.points_remaining ?? 0) > 0)
-    const hasWork = p.courses.some(c => (c.work_pending ?? 0) > 0)
-    if (hasPoints && hasWork) return 'both'
-    if (hasWork) return 'work'
-    if (hasPoints) return 'points'
-    return 'done'
   })
 
   // ── Scan logic ──
@@ -470,6 +441,14 @@ export function useHomeState() {
   }
 
   function goToOrders() { window.location.href = '/#/orders' }
+
+  // 卸载时清掉所有常驻定时器：此前只清了支付轮询，扫码倒计时与自动跳转计时器
+  // 会继续跑并在页面已卸载后写状态（内存泄漏 + 偶发的 setState-after-unmount 报错）
+  onScopeDispose(() => {
+    stopPaySession()
+    if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null }
+    if (loginErrorTimer) { clearInterval(loginErrorTimer); loginErrorTimer = null }
+  })
 
   async function submitAndPay() {
     if (summary.value.courses === 0) { store.toast('请至少选择一门课程', 'warning'); return }
@@ -713,25 +692,26 @@ export function useHomeState() {
 
   return {
     // Role
-    userRole, isPrivileged, isRegularUser, detectUserRole, handleVisibilityChange,
+    userRole, isPrivileged, detectUserRole, handleVisibilityChange,
     // Scan
     username, password, scanning, rescanning, scanDone, allDone, isLeaving, scanData, countdown,
     activeTab, chaoxingUsername, chaoxingPassword, startChaoxingScan,
     loginError, failedPlatforms, reloginDialog, reloginPassword, reloginLoading, loginErrorCountdown,
-    packagePricing, submittedCourseIds, allInProgress, pendingOrderedCourseIds, checkedCourseIds,
+    submittedCourseIds, allInProgress, pendingOrderedCourseIds, checkedCourseIds,
     savedData, loadingPrices, backendPrices,
     // Speed mode
     speedMode, setSpeedMode,
     // 营销：免费待遇 / 邀请 / 刷课卡
     benefit, inviteInfo, myCard, loadBenefit,
     isCourseDone, isCourseDoneOrSubmitted, visiblePlatforms, togglePlatform, toggleCourse, isPlatformAllChecked,
-    summary, scenario, currentPrices, studentName, chaoxingInfo, chaoxingServiceType,
+    summary, scenario, studentName, chaoxingInfo,
     startScan, resetScan, rescan, openReloginDialog, closeReloginDialog, submitRelogin,
-    calcCoursePrice, fetchBackendPrices, saveSession, clearSaved,
+    fetchBackendPrices, saveSession, clearSaved,
     // Payment
     paying, showPayModal, payTotal, submitSuccess, payError, payQrCode, payPollTimer,
     selectedPayMethod, payOrders, payQrCodes, payReallyPrices, payBatchIds, payBatchOutTradeNos,
     payBatchId, payBatchOutTradeNo, showPaySuccess, paySuccessAmount, payTimedOut,
+    payPhase, payRemaining, payRechecking, recheckPayment, retryPayment,
     handleOrderSuccess, goToOrders, submitAndPay, startPollPayment, onPaySuccessDone, closePay, savePayQr, switchPayMethod,
     // UI
     pct, pctClass,

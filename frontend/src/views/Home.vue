@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useAppStore } from '@/stores/app'
-import { api, type CourseItem } from '@/api'
+import { type CourseItem } from '@/api'
 import { usePlatformNames } from '@/composables/usePlatformNames'
 import { useHomeState } from '@/composables/useHomeState'
 import AppTopbar from '@/components/AppTopbar.vue'
@@ -11,19 +11,20 @@ const store = useAppStore()
 const { load: loadPlatformNames, getName: getPlatformName } = usePlatformNames()
 
 const {
-  userRole, isPrivileged, isRegularUser, detectUserRole, handleVisibilityChange,
+  userRole, isPrivileged, detectUserRole, handleVisibilityChange,
   username, password, scanning, rescanning, scanDone, allDone, isLeaving, scanData, countdown,
   activeTab, chaoxingUsername, chaoxingPassword, startChaoxingScan,
   loginError, failedPlatforms, reloginDialog, reloginPassword, reloginLoading, loginErrorCountdown,
-  packagePricing, submittedCourseIds, allInProgress, pendingOrderedCourseIds, checkedCourseIds,
+  submittedCourseIds, allInProgress, pendingOrderedCourseIds, checkedCourseIds,
   loadingPrices, backendPrices, speedMode, setSpeedMode,
   isCourseDone, isCourseDoneOrSubmitted, visiblePlatforms, togglePlatform, toggleCourse, isPlatformAllChecked,
-  summary, scenario, currentPrices, studentName, chaoxingInfo, chaoxingServiceType,
+  summary, scenario, studentName, chaoxingInfo,
   startScan, resetScan, rescan, openReloginDialog, closeReloginDialog, submitRelogin,
-  calcCoursePrice, fetchBackendPrices, saveSession,
+  fetchBackendPrices, saveSession,
   paying, showPayModal, payTotal, submitSuccess, payError, payQrCode, payPollTimer,
   selectedPayMethod, payOrders, payQrCodes, payReallyPrices, payBatchIds, payBatchOutTradeNos,
   payBatchId, payBatchOutTradeNo, showPaySuccess, paySuccessAmount, payTimedOut,
+  payPhase, payRemaining, payRechecking, recheckPayment, retryPayment,
   handleOrderSuccess, goToOrders, submitAndPay, onPaySuccessDone, closePay, savePayQr, switchPayMethod,
   pct, pctClass, LS_KEY,
   showAnnouncement, announcementContent, announcementTitle, announcementImage,
@@ -43,6 +44,18 @@ const speedModeDesc = computed(() => ({
   balanced: '中等并发 + 适度错峰，完成时间与账号安全的平衡点。',
   gentle: '完全串行：一节课刷完再刷下一节，课程间自动拉长间隔，最接近真人。',
 }[speedMode.value]))
+
+// 付费权益：不付费（全局免费活动 / 刷课卡）只能跑保守档，适中与暴力锁定
+function isSpeedLocked(key: string) {
+  return benefit.value.free && key !== 'gentle'
+}
+function pickSpeed(key: 'turbo' | 'balanced' | 'gentle') {
+  if (isSpeedLocked(key)) {
+    store.toast('免费刷只能使用保守档，付费下单可解锁适中 / 暴力档', 'warning')
+    return
+  }
+  setSpeedMode(key)
+}
 
 // 场景说明（原来铺三张静态卡片，改成一条紧凑提示，减少视觉噪声）
 const SCENARIO_NOTES: Record<string, { tag: string; text: string }> = {
@@ -81,6 +94,9 @@ watch(allInProgress, (val) => {
   }
 })
 
+// 支付倒计时展示：m:ss
+const fmtCountdown = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+
 onBeforeUnmount(() => {
   if (autoRedirectTimer) { clearInterval(autoRedirectTimer); autoRedirectTimer = null }
   if (payPollTimer.value) { clearTimeout(payPollTimer.value); payPollTimer.value = null }
@@ -93,17 +109,8 @@ onMounted(async () => {
   loadPlatformNames()
   checkAnnouncement()
   loadBenefit()
-  try {
-    const res = await api.pricing.get()
-    if (res.data) {
-      packagePricing.value = {
-        priceSmall: res.data.priceSmall ?? 3, priceMedium: res.data.priceMedium ?? 5, priceLarge: res.data.priceLarge ?? 6,
-        discount25: res.data.discount25 ?? 0.7, discount50: res.data.discount50 ?? 0.5, discount75: res.data.discount75 ?? 0.3,
-        priceMinimum: res.data.priceMinimum ?? 2, priceExamOnly: res.data.priceExamOnly ?? 5, priceHomeworkOnly: res.data.priceHomeworkOnly ?? 3,
-        priceChaoxing: res.data.priceChaoxing ?? 8,
-      }
-    }
-  } catch {}
+  // 定价由 useHomeState 的 loadPackagePricing 在 setup 期统一加载，
+  // 这里不再重复请求（此前首屏会对 /api/pricing 打两次）
 })
 </script>
 
@@ -340,6 +347,7 @@ onMounted(async () => {
 
                 <div class="cr-side">
                   <span v-if="coursePrice(c) > 0" class="cr-price mono">¥{{ coursePrice(c).toFixed(2) }}</span>
+                  <span v-else-if="loadingPrices" class="cr-done-tag">计价中…</span>
                   <span v-else-if="isCourseDone(c)" class="cr-done-tag">已完成</span>
                 </div>
               </div>
@@ -358,18 +366,38 @@ onMounted(async () => {
                 :key="opt.key"
                 type="button"
                 class="sp-opt"
-                :class="{ active: speedMode === opt.key }"
-                @click="setSpeedMode(opt.key)"
+                :class="{ active: speedMode === opt.key, locked: isSpeedLocked(opt.key) }"
+                :title="isSpeedLocked(opt.key) ? '付费订单可用' : ''"
+                @click="pickSpeed(opt.key)"
               >
-                <span class="sp-opt-name">{{ opt.name }}</span>
-                <span class="sp-opt-sub">{{ opt.sub }}</span>
+                <span class="sp-opt-name">
+                  {{ opt.name }}
+                  <svg
+                    v-if="isSpeedLocked(opt.key)"
+                    class="sp-lock"
+                    width="11"
+                    height="11"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.4"
+                  ><rect
+                    x="4"
+                    y="10"
+                    width="16"
+                    height="11"
+                    rx="2"
+                  /><path d="M8 10V7a4 4 0 018 0v3" /></svg>
+                </span>
+                <span class="sp-opt-sub">{{ isSpeedLocked(opt.key) ? '付费可用' : opt.sub }}</span>
               </button>
             </div>
-            <p v-if="speedMode === 'turbo'" class="sp-warn">
-              暴力档并发最高（已控制在平台检测安全线内），建议仅在需要当天见效时使用。
+            <p v-if="benefit.free && speedMode === 'gentle'" class="sp-free">
+              {{ benefit.reason === 'card' ? '刷课卡' : '限时免费' }}只能使用保守档（一节课接一节课）。
+              想要更快？付费下单即可解锁适中 / 暴力档。
             </p>
-            <p v-else-if="benefit.free && speedMode === 'gentle'" class="sp-free">
-              免费单默认使用保守档：一节课接一节课，不影响刷课，最不容易被平台察觉。
+            <p v-else-if="speedMode === 'turbo'" class="sp-warn">
+              暴力档并发最高（已控制在平台检测安全线内），建议仅在需要当天见效时使用。
             </p>
           </div>
 
@@ -447,18 +475,35 @@ onMounted(async () => {
   <div class="modal-overlay" :class="{ show: showPayModal && !showPaySuccess }" @click.self="closePay">
     <div class="modal-box pay-modal">
       <template v-if="payTimedOut">
-        <div class="modal-header"><span>订单已提交</span></div>
+        <div class="modal-header"><span>{{ payPhase === 'uncredited' ? '已支付' : '支付超时' }}</span></div>
         <div class="modal-body">
-          <p class="pm-note">支付查询已超时，但订单已创建成功。请到订单页查看支付状态。</p>
+          <template v-if="payPhase === 'uncredited'">
+            <p class="pm-note">
+              已收到你的付款，正在等待人工/自动对账入账。入账后会自动开始刷课，无需重复支付。
+            </p>
+          </template>
+          <template v-else>
+            <p class="pm-note">支付查询已超时，但订单已创建成功。可重新发起支付，或到订单页查看状态。</p>
+          </template>
         </div>
-        <div class="modal-footer">
-          <button class="btn btn-primary btn-block" @click="goToOrders(); closePay()">查看订单</button>
+        <div class="modal-footer col">
+          <button
+            v-if="payPhase === 'uncredited'"
+            class="btn btn-primary btn-block"
+            :disabled="payRechecking"
+            @click="recheckPayment"
+          >
+            {{ payRechecking ? '查询中…' : '重新检查到账' }}
+          </button>
+          <button v-else class="btn btn-primary btn-block" @click="goToOrders(); closePay()">重新支付</button>
+          <button class="btn btn-ghost btn-block" @click="goToOrders(); closePay()">查看订单</button>
         </div>
       </template>
 
       <template v-else>
         <div class="modal-header">
           <span>确认支付</span>
+          <span v-if="payRemaining > 0" class="pm-countdown mono">剩余 {{ fmtCountdown(payRemaining) }}</span>
           <button class="modal-close" @click="closePay">&times;</button>
         </div>
         <div class="modal-body">
@@ -1096,6 +1141,15 @@ onMounted(async () => {
   background: var(--c-primary-soft);
   box-shadow: inset 0 0 0 1px var(--c-primary);
 }
+/* 付费档位在免费待遇下置灰：不是禁用而是"要解锁"，所以保留可点击（点了给出提示） */
+.sp-opt.locked {
+  opacity: .55;
+  cursor: not-allowed;
+  background: var(--c-bg);
+}
+.sp-opt.locked:hover { border-color: var(--c-border); transform: none; }
+.sp-opt.locked .sp-opt-sub { color: var(--c-warning); }
+.sp-lock { margin-left: 4px; vertical-align: -1px; opacity: .8; }
 .sp-opt-name { font-size: var(--fs-base); font-weight: 700; }
 .sp-opt.active .sp-opt-name { color: var(--c-primary); }
 .sp-opt-sub { font-size: var(--fs-xs); color: var(--c-text-muted); }
@@ -1154,6 +1208,14 @@ onMounted(async () => {
   font-size: var(--fs-xs);
   color: var(--c-warning);
   line-height: 1.6;
+}
+/* 支付倒计时：贴在标题栏右侧、关闭按钮左边 */
+.pm-countdown {
+  margin-left: auto;
+  margin-right: var(--space-3);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--c-text-muted);
 }
 .pm-note { font-size: var(--fs-sm); color: var(--c-text-secondary); line-height: 1.7; }
 
@@ -1375,5 +1437,11 @@ onMounted(async () => {
   .co-action .btn { flex: 1; }
   .cr-meter-track { max-width: none; }
   .hide-on-mobile-results { display: none; }
+}
+
+@media (max-width: 480px) {
+  /* 窄屏上三个档位横排会挤成两行且文字换行，改成竖排整行点击区 */
+  .sp-opts { flex-direction: column; }
+  .sp-opt { width: 100%; }
 }
 </style>

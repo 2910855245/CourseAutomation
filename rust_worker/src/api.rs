@@ -52,6 +52,8 @@ pub fn router(state: AppState) -> Router<AppState> {
         // 支付订单 / 测试支付 / 诊断 / 连接重置）——见 ypay_admin.rs。
         // 合并进 protected 分组，随附管理员 Bearer 鉴权。
         .merge(crate::ypay_admin::router())
+        // 营销推广统计：必须带管理员鉴权（访客量/转化率/邀请码列表属经营数据）
+        .route("/api/admin/promo/stats", get(crate::promo_routes::admin_promo_stats))
         // 公告发布：前端「系统通告」页 + 首页弹窗依赖
         .route("/api/admin/announcement", post(announcement_publish))
         .route("/api/admin/announcement/disable", post(announcement_disable))

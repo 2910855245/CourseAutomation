@@ -6,6 +6,7 @@ import AppTopbar from '@/components/AppTopbar.vue'
 
 const store = useAppStore()
 const loading = ref(true)
+const loadError = ref('')
 const data = ref<any>(null)
 // 领取时留联系方式：类型 + 号码，拼成"微信：abc"存库（便于人工找回）
 const saved = (localStorage.getItem('invite_contact') || '').split('：')
@@ -37,11 +38,14 @@ const contactTypes = ['微信', 'QQ', '手机', '其他']
 
 async function load() {
   loading.value = true
+  loadError.value = ''
   try {
     const r = await api.invite.me()
     data.value = r.data
   } catch (e: any) {
-    store.toast(e?.message || '加载失败', 'error')
+    // 页面主体全靠这份数据，失败必须给出可见的错误态，不能白屏
+    loadError.value = e?.message || '加载失败，请稍后重试'
+    store.toast(loadError.value, 'error')
   } finally { loading.value = false }
 }
 
@@ -60,15 +64,11 @@ async function copyLink() {
 
 async function claim() {
   if (!data.value?.can_claim) return
-  if (!contact.value) {
-    store.toast('请填写联系方式，便于找回卡片', 'warning')
-    return
-  }
   claiming.value = true
   try {
     const r = await api.invite.claim(contact.value)
     data.value = r.data?.overview || data.value
-    localStorage.setItem('invite_contact', contact.value)
+    if (contact.value) localStorage.setItem('invite_contact', contact.value)
     store.toast(`领取成功：${r.data?.card?.code || '刷课卡'}`, 'success')
   } catch (e: any) {
     store.toast(e?.message || '领取失败', 'error')
@@ -95,11 +95,16 @@ onMounted(load)
 
         <div v-if="data?.free_mode" class="hero-banner">
           <span class="hb-dot" />
-          限时活动进行中：当前<b>全场免费</b>，无需刷课卡
+          限时活动进行中：当前<b>全场免费</b>，刷课卡可留到活动结束后继续免单
         </div>
       </section>
 
       <div v-if="loading" class="loading">加载中…</div>
+
+      <div v-else-if="loadError" class="error-card">
+        <p class="error-text">{{ loadError }}</p>
+        <button class="btn btn-primary" @click="load">重试</button>
+      </div>
 
       <template v-else-if="data">
         <!-- 邀请链接 -->
@@ -158,7 +163,7 @@ onMounted(load)
               <input
                 v-model="contactValue"
                 class="contact-input contact-value"
-                placeholder="填写号码，便于找回卡片"
+                placeholder="选填：微信 / 手机号"
                 :disabled="!data.can_claim"
               >
               <button
@@ -205,8 +210,8 @@ onMounted(load)
             <li>分享链接给好友，好友<b>通过链接进入并完成一次下单</b>记为 1 位有效邀请。</li>
             <li>每满 {{ data.threshold }} 位有效邀请，可领取 1 张 {{ data.valid_days }} 天免费刷课卡，可重复领取。</li>
             <li>持卡期间下单 <b>0 元</b>，不限次数；免费单默认使用保守档（一节课接一节课，最稳）。</li>
-            <li>卡片与浏览器身份绑定，换设备/清缓存后凭领取时填写的联系方式联系客服找回。</li>
-            <li>同一好友仅计一次；异常刷量（同一设备批量注册等）不计入进度。</li>
+            <li>卡片与当前浏览器身份绑定；领卡时填了联系方式的，换设备 / 清缓存后联系客服可找回。</li>
+            <li>同一好友仅计一次；需通过你的链接进入并完成下单才计入，自己邀请自己不计。</li>
           </ol>
         </section>
       </template>
@@ -265,6 +270,20 @@ onMounted(load)
 }
 
 .loading { text-align: center; padding: 60px; color: var(--c-text-muted); }
+
+/* 加载失败：主体数据取不到时的出口，避免整页空白 */
+.error-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 48px 22px;
+  text-align: center;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 16px;
+}
+.error-text { font-size: 13.5px; color: var(--c-text-secondary); }
 
 /* ==================== 卡片 ==================== */
 .card {

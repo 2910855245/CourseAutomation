@@ -167,8 +167,8 @@ const roleBadge = computed(() => (isAdmin.value ? '管理员' : ''))
 .theme-toggle {
   display: grid;
   place-content: center;
-  width: 34px;
-  height: 34px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   border: 1px solid var(--c-border-light);
   border-radius: var(--radius-sm);
@@ -184,9 +184,9 @@ const roleBadge = computed(() => (isAdmin.value ? '管理员' : ''))
 /* ---------- 汉堡菜单 ---------- */
 .hamburger {
   display: none;
-  width: 36px;
-  height: 36px;
-  padding: 7px;
+  width: 44px;
+  height: 44px;
+  padding: 11px;
   flex-direction: column;
   justify-content: center;
   align-items: center;

@@ -75,19 +75,24 @@ const hasPending = computed(() => orders.value.some(o => {
   return g === 'todo' || g === 'running'
 }))
 
+let inFlight = false
 async function load() {
+  // 手动刷新与 10s 轮询可能撞在一起，后到的旧响应会覆盖新数据 → 只放行一个请求
+  if (inFlight) return
+  inFlight = true
   loading.value = true
   try {
-    const items: OrderItem[] = []
-    for (const oid of orderIds.value) {
-      try {
-        const r = await api.orders.get(oid, orderTokens[oid])
-        if (r?.data) items.push(r.data as OrderItem)
-      } catch { /* 单条查不到就跳过（可能是别人的单或已清理） */ }
-    }
-    orders.value = items
+    // 游客只能逐单查：并发发出，N 单不再串成 N 个 RTT
+    const results = await Promise.all(orderIds.value.map(oid =>
+      api.orders.get(oid, orderTokens[oid]).then(
+        r => (r?.data as OrderItem) || null,
+        () => null,   // 单条查不到就跳过（可能是别人的单或已清理）
+      )
+    ))
+    orders.value = results.filter((o): o is OrderItem => !!o)
   } finally {
     loading.value = false
+    inFlight = false
   }
 }
 
@@ -474,7 +479,7 @@ const fmtMoney = (n: number) => `¥${(n || 0).toFixed(2)}`
   transition: border-color .2s ease, box-shadow .25s cubic-bezier(.32, .72, .35, 1), transform .25s cubic-bezier(.32, .72, .35, 1);
 }
 .order-card:hover {
-  border-color: var(--c-primary-bg);
+  border-color: var(--c-border-strong);
   box-shadow: var(--shadow-sm);
   transform: translateY(-1px);
 }

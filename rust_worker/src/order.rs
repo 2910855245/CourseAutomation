@@ -170,21 +170,27 @@ fn price_single_course(cd: &Value, cfg: &Value) -> f64 {
 /// 后端总价（对齐 order_service.compute_batch_price）
 pub async fn compute_batch_price(db: &Db, orders: &[Value]) -> Result<f64> {
     let cfg = pricing_config(db).await?;
-    let mut total = 0.0;
-    for item in orders {
+    Ok(compute_item_prices(&cfg, orders).iter().sum::<f64>().round_to_2())
+}
+
+/// 逐单后端价（唯一真相源）。有明细按课程计价，否则按打包/学习通口径。
+///
+/// 抽成函数是为了让下单路径能**逐单覆盖**客户端传来的价格：
+/// 客户端只要把所有 price 传 0，旧逻辑里 "front_total=0 时不重算" 的分支就会让
+/// 0 元订单落库（支付金额取自库里的价格）—— 等于白嫖。现在一律以后端算出的价为准。
+fn compute_item_prices(cfg: &Value, orders: &[Value]) -> Vec<f64> {
+    orders.iter().map(|item| {
         let website_id = item["website_id"].as_i64().unwrap_or(1);
         let video_count = item["video_count"].as_i64().unwrap_or(0);
         let details = item["course_details"].as_array().cloned().unwrap_or_default();
-        let item_price = if website_id == 4 {
+        if website_id == 4 {
             cfg["price_chaoxing"].as_f64().unwrap_or(8.0)
         } else if !details.is_empty() {
-            details.iter().map(|cd| price_single_course(cd, &cfg)).sum::<f64>().round_to_2()
+            details.iter().map(|cd| price_single_course(cd, cfg)).sum::<f64>().round_to_2()
         } else {
-            calculate_package_price(&cfg, video_count, 0)
-        };
-        total += item_price;
-    }
-    Ok(total.round_to_2())
+            calculate_package_price(cfg, video_count, 0)
+        }
+    }).collect()
 }
 
 /// 创建订单（对齐 db.create_order）
@@ -260,28 +266,14 @@ pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
     let password = body["password"].as_str().unwrap_or("").to_string();
     let mut orders: Vec<Value> = body["orders"].as_array().cloned().unwrap_or_default();
 
-    let computed_total = compute_batch_price(db, &orders).await?;
-    let front_total: f64 = orders.iter()
-        .map(|o| o["price"].as_f64().unwrap_or(0.0))
-        .sum::<f64>().round_to_2();
-
-    let mut total_price = front_total;
-    // 后端价为准：超差重分配（对齐 Python 的比例缩放 + 首位误差修正）
-    if (front_total - computed_total).abs() > 0.015 {
-        if front_total > 0.0 {
-            let ratio = computed_total / front_total;
-            for item in orders.iter_mut() {
-                let p = item["price"].as_f64().unwrap_or(0.0);
-                item["price"] = json!((p * ratio).round_to_2());
-            }
-            let scaled: f64 = orders.iter().map(|o| o["price"].as_f64().unwrap_or(0.0)).sum();
-            let diff = (computed_total - scaled).round_to_2();
-            if diff != 0.0 && !orders.is_empty() {
-                let p0 = orders[0]["price"].as_f64().unwrap_or(0.0);
-                orders[0]["price"] = json!((p0 + diff).round_to_2());
-            }
-        }
-        total_price = computed_total;
+    // 价格唯一真相源是后端：逐单用后端算出的价覆盖客户端传值。
+    // 旧实现只在"客户端总价与后端不一致且客户端总价>0"时才重算，
+    // 于是把 price 全传 0 就能让 0 元订单落库（支付金额读库里的价格）→ 白嫖。
+    let cfg = pricing_config(db).await?;
+    let item_prices = compute_item_prices(&cfg, &orders);
+    let total_price = item_prices.iter().sum::<f64>().round_to_2();
+    for (item, price) in orders.iter_mut().zip(item_prices.iter()) {
+        item["price"] = json!(price);
     }
 
     let mut created = Vec::new();
@@ -290,12 +282,12 @@ pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
         if course_ids.is_empty() && item["video_count"].as_i64().unwrap_or(0) == 0 {
             continue;
         }
-        // 免费订单：价格清零，免费单默认走保守档（除非用户自己选过档位）
+        // 免费订单（全局免费 / 刷课卡）：价格清零，并且**强制**保守档。
+        // 这是商业规则而不是默认值：不付费只能用串行档，适中/暴力是付费权益。
+        // 必须在服务端强制——只靠前端置灰的话，直接调接口传 turbo 就白嫖了加速。
         let mut item = item.clone();
         if benefit.is_free() {
-            if item["speed_mode"].as_str().unwrap_or("").is_empty() {
-                item["speed_mode"] = json!(benefit.speed_mode);
-            }
+            item["speed_mode"] = json!(crate::speed::SpeedMode::Gentle.as_str());
             item["price"] = json!(0.0);
         }
         let order = create_order(db, &username, &password, &item, "").await?;
@@ -331,14 +323,29 @@ pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
             .await;
             crate::pay_routes::enqueue_paid_order(db, &oid).await;
         }
-        if !vid.is_empty() {
-            if let Some(first) = created.first() {
-                let oid = first["order_id"].as_str().unwrap_or("");
-                crate::promo::mark_converted(db, vid, oid).await;
-            }
-        }
-        crate::promo::consume_card(db, &benefit.card_id).await;
+        // 一卡按张数计额度：一次提交建了 N 单就扣 N 次，
+        // 否则把多门课塞进一批就能用 1 次额度刷 N 单
+        crate::promo::consume_card(db, &benefit.card_id, created.len() as i64).await;
         tracing::info!(orders = created.len(), reason = %benefit.reason, "免费订单已创建并直接入队");
+    }
+    // 付费订单：把访客身份写进订单，供"付款成功 → 邀请转化"归因
+    // （有效邀请只认已收款订单，免费单不算，避免注册小号白刷卡）
+    if !benefit.is_free() && !vid.is_empty() {
+        for order in &created {
+            let oid = order["order_id"].as_str().unwrap_or("").to_string();
+            if oid.is_empty() {
+                continue;
+            }
+            let pool = db.clone_pool();
+            let vid2 = vid.to_string();
+            let _ = tokio::task::spawn_blocking(move || -> Result<()> {
+                let conn = pool.get()?;
+                conn.execute("UPDATE orders SET vid=?1 WHERE order_id=?2",
+                             rusqlite::params![vid2, oid])?;
+                Ok(())
+            })
+            .await;
+        }
     }
 
     Ok(json!({

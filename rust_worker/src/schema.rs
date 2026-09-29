@@ -175,7 +175,8 @@ CREATE TABLE IF NOT EXISTS queue_jobs_school (
     started_at VARCHAR(255),
     finished_at VARCHAR(255),
     deleted_at VARCHAR(255),
-    speed_mode VARCHAR(255) DEFAULT 'balanced'
+    speed_mode VARCHAR(255) DEFAULT 'balanced',
+    vid VARCHAR(64) DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS queue_jobs_chaoxing (
     job_id VARCHAR(255) PRIMARY KEY,
@@ -303,6 +304,9 @@ const YPAY_ACCOUNT_EXTRA_COLUMNS: &[(&str, &str)] = &[
 /// 老库（DDL 早于该列）缺失的列：orders / queue_jobs_school 的刷课档位
 const SPEED_MODE_COLUMN: &[(&str, &str)] = &[("speed_mode", "VARCHAR(255) DEFAULT 'balanced'")];
 
+/// 订单上的访客标识（营销归因：付款成功后据此把邀请记为有效）
+const ORDER_VISITOR_COLUMN: &[(&str, &str)] = &[("vid", "VARCHAR(64) DEFAULT ''")];
+
 /// 幂等补列：表里缺失的列用 ALTER TABLE ADD COLUMN 补上（已存在的跳过）
 fn add_missing_columns(
     conn: &rusqlite::Connection,
@@ -333,6 +337,7 @@ pub fn ensure_schema(pool: &Pool<SqliteConnectionManager>) -> Result<()> {
     add_missing_columns(&conn, "orders", SPEED_MODE_COLUMN)?;
     add_missing_columns(&conn, "queue_jobs_school", SPEED_MODE_COLUMN)?;
     add_missing_columns(&conn, "queue_jobs_chaoxing", SPEED_MODE_COLUMN)?;
+    add_missing_columns(&conn, "orders", ORDER_VISITOR_COLUMN)?;
 
     conn.execute_batch(INDEX_DDL).context("建索引失败")?;
 

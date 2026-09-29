@@ -26,12 +26,14 @@ impl VisitorId {
     }
 }
 
+/// 公开路由（客户侧）。注意：后台统计**不在这里** ——
+/// 它必须挂在 api.rs 的 protected 分组里带管理员鉴权，
+/// 否则任何人能读到访客量、转化率与邀请码列表。
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/invite/me", get(invite_me))
         .route("/api/invite/claim", post(invite_claim))
         .route("/api/me/benefit", get(my_benefit))
-        .route("/api/admin/promo/stats", get(admin_promo_stats))
 }
 
 /// 从 Cookie 头里取 vid
@@ -168,7 +170,7 @@ async fn my_benefit(
     }))
 }
 
-async fn admin_promo_stats(State(state): State<AppState>) -> Json<Value> {
+pub async fn admin_promo_stats(State(state): State<AppState>) -> Json<Value> {
     match promo::admin_stats(&state.db).await {
         Ok(data) => Json(json!({"success": true, "message": "ok", "data": data})),
         Err(e) => Json(json!({"success": false, "message": e.to_string()})),

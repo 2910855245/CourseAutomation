@@ -128,6 +128,9 @@ fn order_row_to_json(r: &rusqlite::Row) -> rusqlite::Result<Value> {
         "finished_at": r.get::<_, Option<String>>(26)?,
         // 刷课节奏档位：历史订单该列为空 → 显示回退均衡
         "speed_mode": r.get::<_, Option<String>>(27)?.unwrap_or_else(|| "balanced".into()),
+        // 访客标识：付款成功后据此归因"有效邀请"（必须在 ORDER_COLS 里选出来，
+        // 否则 enqueue_order_sync 里取到的永远是空）
+        "vid": r.get::<_, Option<String>>(28)?.unwrap_or_default(),
     }))
 }
 
@@ -135,7 +138,7 @@ const ORDER_COLS: &str = "order_id, out_trade_no, ezfpy_trade_no, payment_channe
      paid_processed, user_id, customer_name, customer_contact, username, password,
      website_id, task_type, course_ids, video_count, exam_count, price, notes,
      status, paid, task_id, admin_note, created_at, updated_at, accepted_at,
-     started_at, finished_at, speed_mode";
+     started_at, finished_at, speed_mode, vid";
 
 impl Db {
     // ── ypay_settings（对齐 ypay_setting_get/set）──────────────────────────
@@ -719,4 +722,38 @@ pub fn uuid_hex_upper(n: usize) -> String {
     let mut rng = rand::rng();
     let bytes: Vec<u8> = (0..(n + 1) / 2).map(|_| rng.random::<u8>()).collect();
     bytes.iter().map(|b| format!("{b:02X}")).collect::<String>()[..n].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 回归：ORDER_COLS 必须带 vid。
+    /// 漏选不会报错，但会让「付款成功 → 有效邀请」的归因永远取到空串、
+    /// 静默失效（邀请进度永远不涨）。用断言钉住这一列。
+    #[test]
+    fn test_order_json_carries_vid_and_speed_mode() {
+        let dir =
+            std::env::temp_dir().join(format!("rust_worker_ypay_db_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("order_vid.db");
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(path.to_str().unwrap()).unwrap();
+        {
+            let conn = db.clone_pool().get().unwrap();
+            conn.execute(
+                "INSERT INTO orders (order_id, username, password, website_id, task_type,
+                     course_ids, video_count, exam_count, price, status, paid, created_at,
+                     updated_at, speed_mode, vid)
+                 VALUES ('ORD-T1','u','p',1,'video','[]',1,0,3.0,'paid',1,
+                     '2026-01-01 00:00:00','2026-01-01 00:00:00','turbo','VID-TEST')",
+                [],
+            )
+            .unwrap();
+        }
+        let order = db.get_order_sync("ORD-T1").expect("订单应能读出");
+        assert_eq!(order["vid"], "VID-TEST");
+        assert_eq!(order["speed_mode"], "turbo");
+        let _ = std::fs::remove_file(&path);
+    }
 }

@@ -91,6 +91,12 @@ fn enqueue_order_sync(db: &Db, order_id: &str) -> bool {
     match db.submit_paid_order_job_sync(&order) {
         Ok(true) => {
             db.start_order_sync(order_id, "");
+            // 付款成功即"有效邀请"：这是唯一可信的转化信号（免费单走不到这里）。
+            // 放在入队的唯一扼流点上，推送/对账/手动三条收款路径都覆盖到。
+            let vid = order.get("vid").and_then(Value::as_str).unwrap_or("");
+            if !vid.is_empty() {
+                crate::promo::mark_converted_blocking(db, vid, order_id);
+            }
             true
         }
         Ok(false) => false,

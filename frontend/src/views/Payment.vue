@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="pay-page">
     <div class="pay-card">
       <template v-if="loading">
@@ -20,6 +20,9 @@
         <p class="pay-error-text">
           {{ error }}
         </p>
+        <button class="pay-btn-back" @click="router.push('/')">
+          返回首页重试
+        </button>
       </template>
 
       <template v-else-if="expired">
@@ -34,6 +37,9 @@
         <p class="pay-hint">
           请返回重新下单
         </p>
+        <button class="pay-btn-back" @click="router.push('/')">
+          返回下单页
+        </button>
       </template>
 
       <template v-else>
@@ -109,13 +115,10 @@ const payType = ref(1)
 const qrContentType = ref('')
 const channelName = ref('')
 const remaining = ref(0)
-const redirectCountdown = ref(0)
 const h5Url = ref('')
 const mobileRedirecting = ref(false)
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
-let countdownTimer: ReturnType<typeof setInterval> | null = null
-let redirectTimer: ReturnType<typeof setInterval> | null = null
 let currentTradeNo = ''
 let checking = false
 
@@ -136,7 +139,7 @@ async function checkOnce(tradeNo: string) {
       stopPoll()
       paid.value = true
       reallyPrice.value = d.really_price || reallyPrice.value
-      startRedirectCountdown()
+      showSuccess()
     }
   } catch { /* ignore */ }
   finally { checking = false }
@@ -198,7 +201,7 @@ async function loadOrder() {
       paid.value = true
       reallyPrice.value = d.data.truemoney || 0
       loading.value = false
-      startRedirectCountdown()
+      showSuccess()
       return
     }
     const timeout = d.data.timeout_seconds || 300
@@ -221,7 +224,7 @@ async function loadOrder() {
   }
 }
 
-function startRedirectCountdown() {
+function showSuccess() {
   showPaySuccess.value = true
 }
 function onPaySuccessDone() {
@@ -246,7 +249,7 @@ function startPoll(tradeNo: string) {
       if (d.paid) {
         stopped = true; stopPoll(); paid.value = true
         reallyPrice.value = d.really_price || reallyPrice.value
-        startRedirectCountdown(); return
+        showSuccess(); return
       }
       if (d.expired || (d.remaining !== undefined && d.remaining <= 0)) {
         stopped = true; stopPoll(); expired.value = true; return
@@ -262,8 +265,6 @@ function startPoll(tradeNo: string) {
 
 function stopPoll() {
   if (pollTimer) { clearTimeout(pollTimer); pollTimer = null }
-  if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null }
-  if (redirectTimer) { clearInterval(redirectTimer); redirectTimer = null }
 }
 
 onMounted(() => {
