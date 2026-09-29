@@ -69,7 +69,7 @@ fn plain_text(s: &'static str) -> Response {
     resp
 }
 
-/// form 解析失败 → 422 + "fail"（对齐 FastAPI 表单解析失败响应形状）
+/// form 解析失败 → 422 + "fail"（支付通道对接约定的响应形状，改动会影响对端重试语义）
 fn form_fail() -> Response {
     let mut resp = plain_text("fail");
     *resp.status_mut() = StatusCode::UNPROCESSABLE_ENTITY;
@@ -226,7 +226,7 @@ async fn payment_create(State(state): State<AppState>, Json(body): Json<PaymentC
 // ── /api/payment/notify（对齐 _payment_notify_sync）──────────
 
 async fn payment_notify(State(state): State<AppState>, body: Bytes) -> Response {
-    // FastAPI 的 await request.form() 仅在表单 Content-Type 下解析，否则抛错 → "fail"
+    // 只在表单 Content-Type 下解析，其它一律抛错 → "fail"（对接约定）
     let text = match String::from_utf8(body.to_vec()) {
         Ok(t) => t,
         Err(_) => return form_fail(),

@@ -1,13 +1,17 @@
 [Unit]
-Description=Rust Study Daemon (rust_worker)
+Description=Rust Study Daemon（后端：REST API + 前端静态页 + OCR + 刷课）
 After=network.target
 
 [Service]
 Type=simple
+# 必须是仓库根目录：进程用相对路径读写 static/（前端产物）与 data/（SQLite）。
+# 不设这一项时 systemd 会以 / 为工作目录，静态页与数据库路径全部落空。
+WorkingDirectory=/opt/anti-course
 ExecStart=/opt/anti-course/rust_worker/rust_worker
 Environment=RUST_DAEMON_PORT=17017
-Environment=RUST_DAEMON_PUSH_URL=http://127.0.0.1:17017/api/progress/live/push
-Environment=RUST_DAEMON_PUSH_TOKEN=change-me-worker-token
+# 进度推送令牌：入站校验与出站推送同源，缺省时进程内随机生成（自推送照常）。
+# 与 .env 里的 WORKER_TOKEN 二选一即可（systemd 环境变量优先级更高）。
+Environment=WORKER_TOKEN=change-me-worker-token
 Restart=always
 RestartSec=5
 

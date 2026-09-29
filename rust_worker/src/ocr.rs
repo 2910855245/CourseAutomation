@@ -110,18 +110,36 @@ pub static ENGINE: OnceLock<Result<CaptchaOcr, String>> = OnceLock::new();
 pub fn engine() -> Result<&'static CaptchaOcr> {
     let r = ENGINE.get_or_init(|| {
         let model_path = std::env::var("OCR_MODEL_PATH")
-            .unwrap_or_else(|_| r"D:\dev\python\Lib\site-packages\ddddocr\common_old.onnx".to_string());
+            .unwrap_or_else(|_| first_existing(&[
+                // 部署/便携优先：模型放在进程工作目录下
+                "models/common_old.onnx".to_string(),
+                "rust_worker/models/common_old.onnx".to_string(),
+                // 开发机兜底（历史遗留路径，保留以免打断本地调试）
+                r"D:\dev\python\Lib\site-packages\ddddocr\common_old.onnx".to_string(),
+            ]));
         let charset_path = std::env::var("OCR_CHARSET_PATH")
-            .unwrap_or_else(|_| {
+            .unwrap_or_else(|_| first_existing(&[
+                "rust_worker/ddddocr_charset.json".to_string(),
+                "ddddocr_charset.json".to_string(),
+                // 编译期源码目录：本机 cargo run 时最省事，部署机上通常不存在
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("ddddocr_charset.json")
                     .to_string_lossy()
-                    .to_string()
-            });
+                    .to_string(),
+            ]));
         CaptchaOcr::load(&model_path, &charset_path).map_err(|e| e.to_string())
     });
     match r {
         Ok(e) => Ok(e),
         Err(e) => bail!("{e}"),
     }
+}
+
+/// 返回第一个存在的候选路径；都不存在时回退到第一个（报错信息里给出预期位置）
+fn first_existing(candidates: &[String]) -> String {
+    candidates
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .cloned()
+        .unwrap_or_else(|| candidates[0].clone())
 }

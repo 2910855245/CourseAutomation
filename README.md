@@ -35,16 +35,21 @@
 
 ```bash
 # 1. 构建后端（Rust 1.97+）
-cd rust_worker && cargo build --release
+#    仓库里的 rust_worker/.cargo/config.toml 把构建目录固定到了 Windows 开发机的
+#    ASCII 路径（中文路径下 mingw 链接器找不到 rlib）。Linux 部署时覆盖即可：
+cd rust_worker
+CARGO_TARGET_DIR=/opt/anti-course/target cargo build --release
+cd ..
 
 # 2. 配置（至少改 SITE_URL 与 JWT_SECRET_KEY）
 cp .env.example .env && vi .env
 
 # 3. 构建前端
-cd frontend && npm install && npm run build
+cd frontend && npm install && npm run build && cd ..
 
 # 4. 启动（API + 前端 + OCR + 刷课全在这一进程）
-./rust_worker    # 默认 :17017
+#    必须在仓库根目录启动：进程用相对路径读写 static/ 与 data/
+/opt/anti-course/target/release/rust_worker    # 默认 :17017
 ```
 
 ### systemd 常驻
@@ -55,6 +60,9 @@ sudo vi /etc/systemd/system/rust-study-daemon.service   # 按实际路径修改 
 sudo systemctl daemon-reload
 sudo systemctl enable --now rust-study-daemon
 ```
+
+> `WorkingDirectory` 必须是仓库根目录（相对路径的 `static/`、`data/` 都基于它）；
+> 推送令牌用 `WORKER_TOKEN`（旧的 `RUST_DAEMON_PUSH_TOKEN` 仍兼容但不再推荐）。
 
 ### Nginx 反代（可选）
 
