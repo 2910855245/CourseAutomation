@@ -69,9 +69,17 @@ pub fn platform_base_url(website_id: i64) -> String {
             return url;
         }
     }
+    // 注意：这里是**静默兜底**——未列出的 website_id 会被当成学校平台 1 去登录。
+    // 学习通（id=4）绝不能落到这条兜底上：那会拿用户的手机号+密码去登录
+    // 在线课程测评考试平台，若该手机号在那边也存在，就会刷错人的课。
+    // （id 4/5 的来源见 DB system_config.domain_monitor_website_map。）
     match website_id {
         2 => "https://cdcas.duxingkej.com".to_string(),
         3 => "https://cdcas.chaoxiankeji.com".to_string(),
+        // 学习通站点本身；登录另需 TLS 指纹伪装（见 school_exam::scan_chaoxing 注释）
+        4 => "https://mooc1.chaoxing.com".to_string(),
+        // 同一学校体系的镜像域名（DB 的 domain_monitor 自动发现）
+        5 => "https://cdcas.suwankj.com".to_string(),
         _ => "https://cdcass.taiskeji.com".to_string(),
     }
 }
