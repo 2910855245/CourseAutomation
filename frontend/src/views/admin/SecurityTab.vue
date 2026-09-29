@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useAdminStore } from '@/stores/admin'
 const { changeAdminPassword, changingPw, currentRole, pwForm } = useAdminStore().state().auth
-const { DEEPSEEK_MODELS, chaoxingModel, clearDeepseekKey, deepseekApiKey, deepseekKeyMasked, deepseekTestResult, finalExamModel, homeworkModel, pricingModel, saveDeepseekKey, saveModels, savingDeepseekKey, savingModels, showDeepseekKey, testDeepseekApi, testModelApi, testingDeepseek, testingModel } = useAdminStore().state().sysConfig
+const { DEEPSEEK_MODELS, chaoxingModel, clearDeepseekKey, deepseekApiKey, deepseekKeyMasked, deepseekTestResult, finalExamModel, homeworkModel, pricingModel, saveDeepseekKey, saveModels, savingDeepseekKey, savingModels, showDeepseekKey, testDeepseekApi, testModelApi, testingDeepseek, testingModel, thinkingMode, visionOcr, savingAiOptions, saveAiOptions } = useAdminStore().state().sysConfig
 </script>
 
 <template>
@@ -231,6 +231,63 @@ const { DEEPSEEK_MODELS, chaoxingModel, clearDeepseekKey, deepseekApiKey, deepse
         >
           {{ savingModels ? '保存中...' : '保存模型' }}
         </button>
+
+        <div class="ai-options">
+          <div class="ai-option">
+            <div class="ai-option-main">
+              <div class="ai-option-title">
+                思考模式
+              </div>
+              <div class="ai-option-desc">
+                开启后模型先推理再作答，难题正确率更高、耗时与费用也更高；自动=按模型默认（Flash 非思考）。
+              </div>
+            </div>
+            <select
+              v-model="thinkingMode"
+              class="ai-model-select ai-option-select"
+            >
+              <option value="auto">
+                自动
+              </option>
+              <option value="on">
+                始终开启
+              </option>
+              <option value="off">
+                始终关闭
+              </option>
+            </select>
+          </div>
+          <div class="ai-option">
+            <div class="ai-option-main">
+              <div class="ai-option-title">
+                验证码视觉兜底
+              </div>
+              <div class="ai-option-desc">
+                本地 OCR 三次都识别不出时，改用模型看图（deepseek-flash 图像理解），只在这时产生费用。
+              </div>
+            </div>
+            <select
+              v-model="visionOcr"
+              class="ai-model-select ai-option-select"
+            >
+              <option :value="true">
+                开启
+              </option>
+              <option :value="false">
+                关闭
+              </option>
+            </select>
+          </div>
+          <div class="ai-option-actions">
+            <button
+              class="btn btn-primary btn-sm"
+              :disabled="savingAiOptions"
+              @click="saveAiOptions"
+            >
+              {{ savingAiOptions ? '保存中...' : '保存能力开关' }}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -479,6 +536,51 @@ const { DEEPSEEK_MODELS, chaoxingModel, clearDeepseekKey, deepseekApiKey, deepse
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* AI 能力开关：左侧说明 + 右侧选择，纵向排列成独立分组 */
+.ai-options {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--c-border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ai-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.ai-option-main {
+  min-width: 0;
+}
+
+.ai-option-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--c-text);
+}
+
+.ai-option-desc {
+  font-size: 12px;
+  color: var(--c-text-muted);
+  line-height: 1.6;
+  margin-top: 2px;
+}
+
+.ai-option-select {
+  width: auto;
+  min-width: 110px;
+  flex-shrink: 0;
+}
+
+.ai-option-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 @media (max-width: 768px) {

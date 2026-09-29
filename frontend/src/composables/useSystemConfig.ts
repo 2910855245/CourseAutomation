@@ -15,18 +15,18 @@ export function useSystemConfig() {
   const showDeepseekKey = ref(false)
   const testingDeepseek = ref(false)
   const deepseekTestResult = ref<any>(null)
-  const examModel = ref('deepseek-chat')
-  const finalExamModel = ref('deepseek-v4-flash')
-  const homeworkModel = ref('deepseek-chat')
+  const examModel = ref('deepseek-flash')
+  const finalExamModel = ref('deepseek-flash')
+  const homeworkModel = ref('deepseek-flash')
   const pricingModel = ref('deepseek-v4-pro')
-  const chaoxingModel = ref('deepseek-chat')
+  const chaoxingModel = ref('deepseek-flash')
   const savingModels = ref(false)
   const testingModel = ref('')
+  // 当前在售模型（deepseek-chat / deepseek-reasoner 已于 2026-07-24 弃用；
+  // 老配置里的旧名字后端会自动归一化，这里只提供在售选项）
   const DEEPSEEK_MODELS = [
-    { value: 'deepseek-chat', label: 'deepseek-chat (v4-flash)', desc: '答题推荐，快速便宜' },
-    { value: 'deepseek-v4-flash', label: 'deepseek-v4-flash', desc: '非思考模式，速度快' },
-    { value: 'deepseek-v4-pro', label: 'deepseek-v4-pro', desc: '深度推理，适合分析' },
-    { value: 'deepseek-reasoner', label: 'deepseek-reasoner', desc: '思考模式，最强推理' },
+    { value: 'deepseek-flash', label: 'deepseek-flash', desc: 'V4.1-Flash，答题/测验首选，快且便宜' },
+    { value: 'deepseek-v4-pro', label: 'deepseek-v4-pro', desc: 'V4-Pro，复杂推理与分析' },
   ]
 
   async function loadDeepseekKey() {
@@ -42,6 +42,10 @@ export function useSystemConfig() {
       if (configs.deepseek_homework_model) homeworkModel.value = configs.deepseek_homework_model
       if (configs.deepseek_chaoxing_model) chaoxingModel.value = configs.deepseek_chaoxing_model
       if (configs.deepseek_pricing_model) pricingModel.value = configs.deepseek_pricing_model
+      const t = configs.deepseek_thinking
+      thinkingMode.value = t === '1' || t === 'true' ? 'on' : t === '0' || t === 'false' ? 'off' : 'auto'
+      // 未配置时默认开启（与后端默认值一致）
+      visionOcr.value = configs.deepseek_vision_ocr !== '0'
     } catch { }
   }
 
@@ -94,6 +98,24 @@ export function useSystemConfig() {
       store.toast('模型配置已保存', 'success')
     } catch (e: any) { store.toast(e?.message || '保存失败', 'error') }
     finally { savingModels.value = false }
+  }
+
+  // ── AI 能力开关（对齐 DeepSeek 官方能力：思考模式 / 图像理解兜底）──
+  // thinkingMode: 'auto' 不写配置（由模型名语义决定）/ 'on' / 'off'
+  const thinkingMode = ref<'auto' | 'on' | 'off'>('auto')
+  const visionOcr = ref(true)
+  const savingAiOptions = ref(false)
+
+  async function saveAiOptions() {
+    savingAiOptions.value = true
+    try {
+      // auto 用空串表示"未配置"，后端 configured_thinking() 会把空串当作 None
+      const thinkingVal = thinkingMode.value === 'on' ? '1' : thinkingMode.value === 'off' ? '0' : ''
+      await api.adminConfig.set('deepseek_thinking', thinkingVal)
+      await api.adminConfig.set('deepseek_vision_ocr', visionOcr.value ? '1' : '0')
+      store.toast('AI 能力开关已保存', 'success')
+    } catch (e: any) { store.toast(e?.message || '保存失败', 'error') }
+    finally { savingAiOptions.value = false }
   }
 
   async function testModelApi(model: string) {
@@ -195,6 +217,8 @@ export function useSystemConfig() {
     deepseekTestResult, examModel, finalExamModel, homeworkModel, pricingModel, chaoxingModel, savingModels,
     testingModel, DEEPSEEK_MODELS,
     loadDeepseekKey, saveDeepseekKey, clearDeepseekKey, testDeepseekApi, saveModels, testModelApi,
+    // AI 能力开关
+    thinkingMode, visionOcr, savingAiOptions, saveAiOptions,
     // Pricing
     applyingPackage, packagePricing,
     editingPricing, savingPricing, editPricing,

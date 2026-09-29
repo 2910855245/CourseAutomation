@@ -100,10 +100,27 @@ pub struct QueueJob {
     pub speed_mode: String,
 }
 
-pub(crate) fn now_str() -> String {
+/// 本地时区偏移（北京时间 UTC+8）。
+///
+/// 库里所有时间戳都经 [`now_str`] 写入，必须与看板的"今日/本周"口径同源。
+/// Rust 移植时误用了 UTC：那样"今日订单"会在北京时间早上 8 点翻篇，运营看到的
+/// 日报与真实营业日错开 8 小时（Python 版用 datetime.now()，即本地时间，这是移植回归）。
+pub(crate) const LOCAL_OFFSET_SECS: u64 = 8 * 3600;
+
+/// 当前本地时间（自 epoch 起的秒数 + 时区偏移，用于日期前缀计算）
+pub(crate) fn local_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH)
-        .map(|d| chrono_lite(d.as_secs()))
-        .unwrap_or_default()
+        .map(|d| d.as_secs() + LOCAL_OFFSET_SECS)
+        .unwrap_or(LOCAL_OFFSET_SECS)
+}
+
+pub(crate) fn now_str() -> String {
+    iso_from_secs(local_secs())
+}
+
+/// 秒时间戳（已含时区偏移）→ "YYYY-MM-DDTHH:MM:SS"
+pub(crate) fn iso_from_secs(secs: u64) -> String {
+    chrono_lite(secs)
 }
 
 /// 简易 ISO 时间（避免引入 chrono 依赖）
@@ -478,6 +495,16 @@ pub async fn config_get(db: &Db, key: &str) -> Option<String> {
     .await
     .ok()
     .flatten()
+}
+
+/// 同步版配置读取（已在 spawn_blocking 闭包内、拿到连接时使用，避免再起一层嵌套）
+pub fn config_get_blocking(conn: &rusqlite::Connection, key: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT config_value FROM system_config WHERE config_key=?1",
+        rusqlite::params![key],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
 }
 
 /// 写系统配置（upsert）

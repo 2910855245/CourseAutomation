@@ -26,7 +26,9 @@ fn make_client() -> (Client, Arc<reqwest::cookie::Jar>) {
 
 /// 取验证码并 OCR，最多重取 3 次直到结果「看起来合法」（4 位字母数字）。
 /// 非法结果直接丢弃重取，避免把噪声送去平台白白计一次失败。
+/// 本地 OCR 三次都不可信时，用 DeepSeek 视觉兜底再读一次（可关闭）。
 async fn fetch_captcha_code(client: &Client, captcha_url: &str, login_url: &str) -> String {
+    let mut last_img: Option<Vec<u8>> = None;
     for _ in 0..3 {
         let img = match client.get(captcha_url)
             .header("Referer", login_url)
@@ -46,8 +48,15 @@ async fn fetch_captcha_code(client: &Client, captcha_url: &str, login_url: &str)
         if ocr::plausible(&code) {
             return code;
         }
+        last_img = Some(img.to_vec());
     }
-    // 3 次都不可信：返回空串，交回主循环（平台返回「验证码有误」后重取）
+    // 本地 OCR 全部不可信 → 视觉模型兜底（图片格式由内容推断，默认 png）
+    if let Some(img) = last_img {
+        if let Some(code) = crate::llm::recognize_captcha_vision(&img, "image/png").await {
+            return code;
+        }
+    }
+    // 仍无结果：返回空串，交回主循环（平台返回「验证码有误」后重取）
     String::new()
 }
 

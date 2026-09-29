@@ -170,10 +170,9 @@ pub fn parse_iso_secs(s: &str) -> Option<i64> {
 }
 
 /// 当前时间 + secs 秒 → ISO 字符串（对齐 datetime.now() + timedelta(seconds=...) 的 isoformat）
+/// 基准时刻与 queue::now_str() 同源（本地时间），否则与落库时间戳比大小会差一个时区
 pub fn iso_after_secs(secs: u64) -> String {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let now = crate::queue::local_secs();
     let days = (now + secs) / 86400;
     let mut y = 1970u64;
     let mut rem = days;

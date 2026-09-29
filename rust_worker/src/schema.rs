@@ -203,6 +203,21 @@ CREATE TABLE IF NOT EXISTS queue_jobs_chaoxing (
     deleted_at VARCHAR(255),
     speed_mode VARCHAR(255) DEFAULT 'balanced'
 );
+
+-- AI 调用用量与费用（每次 DeepSeek 调用一行；后台看板的 AI 成本来源）
+CREATE TABLE IF NOT EXISTS ai_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at VARCHAR(255) NOT NULL,
+    scene VARCHAR(64) DEFAULT '',
+    model VARCHAR(64) DEFAULT '',
+    thinking INTEGER DEFAULT 0,
+    prompt_tokens INTEGER DEFAULT 0,
+    cache_hit_tokens INTEGER DEFAULT 0,
+    cache_miss_tokens INTEGER DEFAULT 0,
+    completion_tokens INTEGER DEFAULT 0,
+    cost_yuan FLOAT DEFAULT 0.0,
+    ok INTEGER DEFAULT 1
+);
 "#;
 
 /// 索引（统一在建表+补列之后执行，避免老库缺列导致建索引失败）
@@ -224,6 +239,7 @@ CREATE INDEX IF NOT EXISTS ix_queue_jobs_school_deleted_at ON queue_jobs_school 
 CREATE INDEX IF NOT EXISTS ix_queue_jobs_chaoxing_username ON queue_jobs_chaoxing (username);
 CREATE INDEX IF NOT EXISTS ix_queue_jobs_chaoxing_status ON queue_jobs_chaoxing (status);
 CREATE INDEX IF NOT EXISTS ix_queue_jobs_chaoxing_deleted_at ON queue_jobs_chaoxing (deleted_at);
+CREATE INDEX IF NOT EXISTS ix_ai_usage_created_at ON ai_usage (created_at);
 "#;
 
 /// ypay_account 老库可能缺失的列（对应 api/database.py 的 _add_columns_if_missing）

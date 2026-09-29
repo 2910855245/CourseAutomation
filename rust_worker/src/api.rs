@@ -555,43 +555,183 @@ async fn order_get(
     }
 }
 
+/// 后台数据看板。
+///
+/// 口径说明（与订单列表/队列监控保持一致，避免同一屏上两个数字对不上）：
+///   - 「今日/昨日/近 7 天」按本地时间（北京时间）日期前缀；时间戳统一由
+///     queue::now_str() 写入，见 queue::LOCAL_OFFSET_SECS。
+///   - 收入 = 已收款（paid=1 或已记 payment_time）且未取消的订单金额；
+///     未收款金额单列 `receivable`，两者相加才等于订单总额。此前收入把
+///     未付款、已取消的单全部计入，财务报表数字虚高。
+///   - 完成率分母为已进入终态的订单（完成 + 失败 + 取消），不含仍在流转的单，
+///     否则"刚下单还没跑"会稀释完成率，看着像系统在变差。
+///
+/// 聚合次数：订单 1 次全表条件聚合 + 7 天分组 1 次 + 队列 2 次 + AI 用量 3 次，
+/// 替代此前「7 次 COUNT + 3 次 SUM + 每日 2 次 ×7 天」的 24 次扫描。
 async fn admin_dashboard(State(state): State<AppState>) -> Json<Value> {
     let db = state.db.clone_pool();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
         let conn = db.get()?;
-        let today_prefix: String = crate::queue::now_str()[..10].into();
-        let today = today_prefix.as_str();
+        let now = crate::queue::local_secs();
+        let today_prefix = day_label(now).1;               // YYYY-MM-DD
+        let today_like = format!("{today_prefix}%");
+        let yest_like = format!("{}%", day_label(now - 86400).1);
+        let week_from = day_label(now - 6 * 86400).1;       // 近 7 天（含今日）
+        // 卡单判定阈值：排队/待处理超 2 小时、执行中超 6 小时
+        let stuck_before = crate::queue::iso_from_secs(now - 2 * 3600);
+        let running_before = crate::queue::iso_from_secs(now - 6 * 3600);
+        // 已收款的统一定义，多处复用
+        const PAID: &str = "(paid=1 OR payment_time IS NOT NULL) AND status<>'cancelled'";
 
-        // 原先这里是 7 次 COUNT + 3 次 SUM = 10 次全表扫描（每次都要重新
-        // `pool.get()`）。合成一条条件聚合：一次扫描同时算出所有计数与金额。
-        // 三个时间边界沿用原口径：今日=日期前缀、本周=近 7 天前缀、今日金额=今日零点
-        let today_like = format!("{today}%");
-        let week_from = week_start_prefix();
-        let today_midnight = format!("{}T00:00:00", &today_prefix[..10]);
-        let (total, today_c, week_c, completed, pending, running, failed,
-             rev_total, rev_today, rev_week): (i64, i64, i64, i64, i64, i64, i64, f64, f64, f64) =
+        let (total, paid_count, today_c, yest_c, week_c, completed, pending, running, failed, cancelled,
+             rev_total, rev_today, rev_yest, rev_week, receivable, refund_due,
+             stuck, long_running, avg_hours): (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64,
+                                               f64, f64, f64, f64, f64, f64, i64, i64, f64) =
             conn.query_row(
-                "SELECT
-                    COUNT(*),
-                    COALESCE(SUM(created_at LIKE ?1), 0),
-                    COALESCE(SUM(created_at >= ?2), 0),
-                    COALESCE(SUM(status='completed'), 0),
-                    COALESCE(SUM(status='pending'), 0),
-                    COALESCE(SUM(status='running'), 0),
-                    COALESCE(SUM(status='failed'), 0),
-                    COALESCE(SUM(price), 0),
-                    COALESCE(SUM(CASE WHEN created_at LIKE ?1 THEN price ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN created_at >= ?3 THEN price ELSE 0 END), 0)
-                 FROM orders WHERE deleted_at IS NULL",
-                rusqlite::params![today_like, week_from, today_midnight],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?,
-                        r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?)),
-            ).unwrap_or_default();
-        // 简化：week 按近 7 天日期前缀计算（对齐 Python 的口径近似）
-        let week_c = week_c.max(today_c);
+                &format!(
+                    "SELECT
+                        COUNT(*),
+                        COALESCE(SUM(CASE WHEN {PAID} THEN 1 ELSE 0 END), 0),
+                        COALESCE(SUM(created_at LIKE ?1), 0),
+                        COALESCE(SUM(created_at LIKE ?2), 0),
+                        COALESCE(SUM(created_at >= ?3), 0),
+                        COALESCE(SUM(status='completed'), 0),
+                        COALESCE(SUM(status='pending'), 0),
+                        COALESCE(SUM(status='running'), 0),
+                        COALESCE(SUM(status='failed'), 0),
+                        COALESCE(SUM(status='cancelled'), 0),
+                        COALESCE(SUM(CASE WHEN {PAID} THEN price ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN {PAID} AND created_at LIKE ?1 THEN price ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN {PAID} AND created_at LIKE ?2 THEN price ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN {PAID} AND created_at >= ?3 THEN price ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN NOT {PAID} AND status<>'cancelled' THEN price ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN (paid=1 OR payment_time IS NOT NULL) AND status='cancelled'
+                                          THEN price ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN status IN ('pending','accepted','paid','queued','waiting')
+                                           AND created_at < ?4 THEN 1 ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN status='running' AND created_at < ?5 THEN 1 ELSE 0 END), 0),
+                        COALESCE(AVG(CASE WHEN status='completed' AND finished_at IS NOT NULL
+                                          THEN (julianday(finished_at)-julianday(created_at))*24 END), 0)
+                     FROM orders WHERE deleted_at IS NULL"
+                ),
+                rusqlite::params![today_like, yest_like, week_from, stuck_before, running_before],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?,
+                        r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?, r.get(11)?,
+                        r.get(12)?, r.get(13)?, r.get(14)?, r.get(15)?, r.get(16)?, r.get(17)?,
+                        r.get(18)?)),
+            // 元组超过 12 项不实现 Default，失败时手写全零兜底（与成功路径同形状）
+            ).unwrap_or((0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                         0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0.0));
 
+        // 近 7 天趋势：一次分组查询取回订单/收入/失败，避免每天 2 次 COUNT
+        let mut day_rows: std::collections::HashMap<String, (i64, f64, i64)> =
+            std::collections::HashMap::new();
+        {
+            let mut stmt = conn.prepare(
+                &format!(
+                    "SELECT substr(created_at,1,10) AS d, COUNT(*),
+                            COALESCE(SUM(CASE WHEN {PAID} THEN price ELSE 0 END), 0),
+                            COALESCE(SUM(status='failed'), 0)
+                     FROM orders WHERE deleted_at IS NULL AND created_at >= ?1
+                     GROUP BY d"
+                ))?;
+            for r in stmt.query_map(rusqlite::params![week_from], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?,
+                    r.get::<_, f64>(2)?, r.get::<_, i64>(3)?))
+            })? {
+                let (d, c, v, f) = r?;
+                day_rows.insert(d, (c, v, f));
+            }
+        }
+
+        // AI 用量（近 7 天按天分组；今日单独一条汇总）
+        let mut ai_days: std::collections::HashMap<String, (i64, f64)> =
+            std::collections::HashMap::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT substr(created_at,1,10) AS d, COUNT(*), COALESCE(SUM(cost_yuan),0)
+                 FROM ai_usage WHERE created_at >= ?1 GROUP BY d")?;
+            for r in stmt.query_map(rusqlite::params![week_from], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, f64>(2)?))
+            })? {
+                let (d, c, v) = r?;
+                ai_days.insert(d, (c, v));
+            }
+        }
+
+        let mut recent_7_days = Vec::new();
+        for i in (0..7).rev() {
+            let (label, prefix) = day_label(now - i * 86400);
+            let (o, rev, fail) = day_rows.get(&prefix).copied().unwrap_or((0, 0.0, 0));
+            let (ai_calls, ai_cost) = ai_days.get(&prefix).copied().unwrap_or((0, 0.0));
+            recent_7_days.push(json!({
+                "date": label, "orders": o, "revenue": rev, "failed": fail,
+                "ai_calls": ai_calls, "ai_cost": ai_cost,
+            }));
+        }
+
+        // AI 用量汇总：今日 / 近 7 天 / 累计，含缓存命中率与成功率
+        let ai_agg = |range_sql: &str, param: Option<&str>| -> (i64, i64, i64, i64, i64, f64) {
+            let sql = format!(
+                "SELECT COUNT(*), COALESCE(SUM(ok),0), COALESCE(SUM(prompt_tokens),0),
+                        COALESCE(SUM(completion_tokens),0),
+                        COALESCE(SUM(cache_hit_tokens),0), COALESCE(SUM(cost_yuan),0)
+                 FROM ai_usage {range_sql}");
+            let map = |r: &rusqlite::Row<'_>| -> rusqlite::Result<(i64, i64, i64, i64, i64, f64)> {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+            };
+            match param {
+                Some(p) => conn.query_row(&sql, rusqlite::params![p], map),
+                None => conn.query_row(&sql, [], map),
+            }
+            .unwrap_or_default()
+        };
+        let ai_today = ai_agg("WHERE created_at LIKE ?1", Some(&today_like));
+        let ai_total = ai_agg("", None);
+        // by_scene 近 7 天：哪类调用在烧钱（答题/测验/复核/验证码）
+        let mut ai_scenes: Vec<(String, i64, f64)> = Vec::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT scene, COUNT(*), COALESCE(SUM(cost_yuan),0) FROM ai_usage
+                 WHERE created_at >= ?1 GROUP BY scene ORDER BY 3 DESC LIMIT 8")?;
+            for r in stmt.query_map(rusqlite::params![week_from], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, f64>(2)?))
+            })? {
+                ai_scenes.push(r?);
+            }
+        }
+        let hit_rate = |hit: i64, miss: i64| -> f64 {
+            let d = hit + miss;
+            if d > 0 { hit as f64 / d as f64 } else { 0.0 }
+        };
+
+        // 队列快照（看板要能一眼看出"任务有没有在动"）
+        let (q_pending, q_running, q_retrying, q_failed, q_completed, q_waiting):
+            (i64, i64, i64, i64, i64, i64) = conn.query_row(
+            "SELECT COALESCE(SUM(status='pending'),0), COALESCE(SUM(status='running'),0),
+                    COALESCE(SUM(status='retrying'),0), COALESCE(SUM(status='failed'),0),
+                    COALESCE(SUM(status='completed'),0), COALESCE(SUM(status='waiting'),0)
+             FROM queue_jobs_school WHERE deleted_at IS NULL",
+            [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+        ).unwrap_or_default();
+        let oldest_pending: Option<String> = conn.query_row(
+            "SELECT MIN(created_at) FROM queue_jobs_school
+             WHERE deleted_at IS NULL AND status IN ('pending','retrying')",
+            [], |r| r.get(0)).ok().flatten();
+        let max_workers = crate::queue::config_get_blocking(&conn, "queue_max_workers")
+            .and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+        let paused = crate::queue::config_get_blocking(&conn, "queue_paused")
+            .map(|v| v == "1").unwrap_or(false);
+        let backlog_minutes = oldest_pending.as_deref()
+            .and_then(crate::pay::parse_iso_secs)
+            .map(|t| ((now as i64 - t) / 60).max(0))
+            .unwrap_or(0);
+
+        // 平台 / 任务类型 / 状态分布
         let mut stmt = conn.prepare(
-            "SELECT website_id, COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE deleted_at IS NULL GROUP BY website_id")?;
+            &format!(
+                "SELECT website_id, COUNT(*), COALESCE(SUM(CASE WHEN {PAID} THEN price ELSE 0 END),0)
+                 FROM orders WHERE deleted_at IS NULL GROUP BY website_id"))?;
         let mut dist = std::collections::HashMap::new();
         for r in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, f64>(2)?)))? {
             let (w, c, v) = r?;
@@ -603,7 +743,9 @@ async fn admin_dashboard(State(state): State<AppState>) -> Json<Value> {
         }).collect();
 
         let mut stmt = conn.prepare(
-            "SELECT task_type, COUNT(*), COALESCE(SUM(price),0) FROM orders WHERE deleted_at IS NULL GROUP BY task_type")?;
+            &format!(
+                "SELECT task_type, COUNT(*), COALESCE(SUM(CASE WHEN {PAID} THEN price ELSE 0 END),0)
+                 FROM orders WHERE deleted_at IS NULL GROUP BY task_type"))?;
         let task_type_distribution: Vec<Value> = stmt.query_map([], |r| {
             Ok(json!({"task_type": r.get::<_, String>(0)?, "count": r.get::<_, i64>(1)?, "revenue": r.get::<_, f64>(2)?}))
         })?.collect::<Result<Vec<_>, _>>()?;
@@ -614,23 +756,8 @@ async fn admin_dashboard(State(state): State<AppState>) -> Json<Value> {
             Ok(json!({"status": r.get::<_, String>(0)?, "count": r.get::<_, i64>(1)?}))
         })?.collect::<Result<Vec<_>, _>>()?;
 
-        // recent_7_days：MM/DD 标签 7 天
-        let mut recent_7_days = Vec::new();
-        let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-        for i in (0..7).rev() {
-            let day_secs = now_secs - i * 86400;
-            let (date_label, prefix) = day_label(day_secs);
-            let orders: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM orders WHERE deleted_at IS NULL AND created_at LIKE ?1",
-                rusqlite::params![format!("{prefix}%")], |r| r.get(0)).unwrap_or(0);
-            let rev: f64 = conn.query_row(
-                "SELECT COALESCE(SUM(price),0) FROM orders WHERE deleted_at IS NULL AND created_at LIKE ?1",
-                rusqlite::params![format!("{prefix}%")], |r| r.get(0)).unwrap_or(0.0);
-            recent_7_days.push(json!({"date": date_label, "orders": orders, "revenue": rev}));
-        }
-
         let mut stmt = conn.prepare(
-            "SELECT order_id, username, website_id, task_type, price, status, created_at
+            "SELECT order_id, username, website_id, task_type, price, status, created_at, paid
              FROM orders WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 10")?;
         let recent_orders: Vec<Value> = stmt.query_map([], |r| {
             Ok(json!({
@@ -641,16 +768,108 @@ async fn admin_dashboard(State(state): State<AppState>) -> Json<Value> {
                 "price": r.get::<_, f64>(4)?,
                 "status": r.get::<_, Option<String>>(5)?.unwrap_or_default(),
                 "created_at": r.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                "paid": r.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0,
             }))
         })?.collect::<Result<Vec<_>, _>>()?;
 
+        // ── 异常信号：看板第一眼要看的就是"现在有没有事" ──
+        let mut alerts: Vec<Value> = Vec::new();
+        let mut push_alert = |level: &str, title: &str, detail: String| {
+            alerts.push(json!({"level": level, "title": title, "detail": detail}));
+        };
+        if !crate::queue::dispatcher_enabled_public() && (q_pending + q_retrying) > 0 {
+            push_alert("danger", "调度器已停用",
+                       format!("有 {} 个任务在排队但调度器处于停用状态，任务不会被执行",
+                               q_pending + q_retrying));
+        }
+        if paused && (q_pending + q_retrying) > 0 {
+            push_alert("danger", "队列处于暂停",
+                       format!("队列已暂停，{} 个任务等待放行", q_pending + q_retrying));
+        }
+        if q_failed > 0 {
+            push_alert("warn", "有失败任务待处理",
+                       format!("队列中有 {q_failed} 个失败任务，可在队列监控里重试或删除"));
+        }
+        if backlog_minutes >= 60 {
+            push_alert("warn", "排队积压",
+                       format!("最早的排队任务已等待 {} 分钟", backlog_minutes));
+        }
+        if stuck > 0 {
+            push_alert("warn", "订单长时间未推进",
+                       format!("{stuck} 个待处理/排队订单超过 2 小时没有状态变化"));
+        }
+        if long_running > 0 {
+            push_alert("danger", "执行中订单超时",
+                       format!("{long_running} 个订单执行超过 6 小时，可能已卡死"));
+        }
+        if failed > 0 {
+            push_alert("warn", "存在失败订单",
+                       format!("累计 {failed} 个失败订单，需人工确认是否重跑"));
+        }
+        if refund_due > 0.0 {
+            push_alert("warn", "已收款订单被取消",
+                       format!("共 {refund_due:.2} 元已收款但订单已取消，请确认是否已完成退款"));
+        }
+        let ai_calls_today = ai_today.0;
+        let ai_fail_today = ai_calls_today - ai_today.1;
+        if ai_calls_today >= 5 && ai_fail_today * 5 > ai_calls_today {
+            push_alert("warn", "AI 调用失败率偏高",
+                       format!("今日 {ai_calls_today} 次调用中 {ai_fail_today} 次失败，检查 API Key 与额度"));
+        }
+        if total == 0 {
+            push_alert("info", "暂无经营数据", "还没有订单记录，跑通一单后这里会出现趋势与分布".into());
+        }
+
+        let terminal = completed + failed + cancelled;
         Ok(json!({
             "orders": {
-                "total": total, "today": today_c, "week": week_c,
-                "completed": completed, "pending": pending, "running": running, "failed": failed,
-                "completion_rate": if total > 0 { completed as f64 / total as f64 } else { 0.0 },
+                "total": total, "today": today_c, "yesterday": yest_c, "week": week_c,
+                "completed": completed, "pending": pending, "running": running,
+                "failed": failed, "cancelled": cancelled, "paid": paid_count,
+                // 完成率分母为终态订单（见函数注释）
+                "completion_rate": if terminal > 0 { completed as f64 / terminal as f64 } else { 0.0 },
+                "avg_delivery_hours": (avg_hours * 10.0).round() / 10.0,
+                "stuck": stuck,
+                "long_running": long_running,
+                // 环比：今日 vs 昨日（昨日为 0 时不返回倍数，避免除零得到 Infinity）
+                "today_change": if yest_c > 0 { Some((today_c - yest_c) as f64 / yest_c as f64) } else { None },
+                "today_diff": (today_c - yest_c),
             },
-            "revenue": {"total": rev_total, "today": rev_today, "week": rev_week},
+            "revenue": {
+                "total": rev_total, "today": rev_today, "yesterday": rev_yest,
+                "week": rev_week, "receivable": receivable, "refund_due": refund_due,
+                // 客单价 = 实收 / 已收款订单数（用全部订单数是把未付款单也算进分母）
+                "avg_order": if paid_count > 0 { (rev_total / paid_count as f64 * 100.0).round() / 100.0 } else { 0.0 },
+                "today_change": if rev_yest > 0.0 { Some((rev_today - rev_yest) / rev_yest) } else { None },
+                "today_diff": (rev_today - rev_yest * 100.0).round() / 100.0,
+            },
+            "queue": {
+                "enabled": crate::queue::dispatcher_enabled_public(),
+                "paused": paused,
+                "active_workers": crate::queue::active_workers(),
+                "max_workers": max_workers,
+                "pending": q_pending, "retrying": q_retrying, "running": q_running,
+                "waiting": q_waiting, "failed": q_failed, "completed": q_completed,
+                "backlog_minutes": backlog_minutes,
+            },
+            "ai": {
+                "today": {
+                    "calls": ai_today.0, "ok": ai_today.1,
+                    "prompt_tokens": ai_today.2, "completion_tokens": ai_today.3,
+                    "cache_hit_tokens": ai_today.4, "cost": ai_today.5,
+                    "cache_hit_rate": hit_rate(ai_today.4, (ai_today.2 - ai_today.4).max(0)),
+                    "success_rate": if ai_today.0 > 0 { ai_today.1 as f64 / ai_today.0 as f64 } else { 0.0 },
+                },
+                "total": {
+                    "calls": ai_total.0, "ok": ai_total.1,
+                    "prompt_tokens": ai_total.2, "completion_tokens": ai_total.3,
+                    "cache_hit_tokens": ai_total.4, "cost": ai_total.5,
+                },
+                "by_scene": ai_scenes.iter().map(|(s, c, v)| json!({
+                    "scene": s, "calls": c, "cost": v,
+                })).collect::<Vec<_>>(),
+            },
+            "alerts": alerts,
             "platform_distribution": platform_distribution,
             "task_type_distribution": task_type_distribution,
             "status_distribution": status_distribution,
@@ -665,12 +884,6 @@ async fn admin_dashboard(State(state): State<AppState>) -> Json<Value> {
         Ok(data) => Json(json!({"success": true, "message": "ok", "data": data})),
         Err(e) => Json(json!({"success": false, "message": e.to_string()})),
     }
-}
-
-/// 近 7 天起始日期前缀（YYYY-MM-DD）
-fn week_start_prefix() -> String {
-    let now_secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-    day_label(now_secs - 6 * 86400).1
 }
 
 /// 秒时间戳 → (MM/DD 标签, YYYY-MM-DD 前缀)

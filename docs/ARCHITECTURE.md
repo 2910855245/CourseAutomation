@@ -61,9 +61,21 @@ Anti-Course Cheating Plugin/
 - 启动时：`ensure_schema` 建表/迁移、自动创建管理员、初始化定价配置、启动任务队列、恢复运行中订单
 
 #### `schema.rs` - 数据库引导
-- 11 张表 + 17 个索引，全部 `CREATE TABLE IF NOT EXISTS` 幂等
+- 12 张表 + 18 个索引，全部 `CREATE TABLE IF NOT EXISTS` 幂等
 - ypay_account 列级补丁、`ypay_settings` ← `vmq_settings` 数据迁移
+- `ai_usage`：每次 AI 调用的 tokens/费用/成功与否（后台看板的成本与成功率来源）
 - 每次启动经 `Db::open` 执行，可安全重复运行
+
+#### 数据看板（`/api/admin/dashboard`）
+口径（几个数字必须互相能对上，否则运营会误判）：
+- 时间：**本地时间（北京时间）**。所有时间戳由 `queue::now_str()` 统一写入，
+  见 `queue::LOCAL_OFFSET_SECS`；此前 Rust 版误用 UTC，日报会与营业日错开 8 小时。
+- 收入：`实收` = 已收款（`paid=1` 或已记 `payment_time`）且未取消的订单金额；
+  未收款单列 `receivable`；已收款但订单被取消的单列 `refund_due` 并给出待退款提醒。
+- 完成率：分母为终态订单（完成+失败+取消），不把"刚下单还没跑"算进分母。
+- AI：今日/近 7 天/累计的调用次数、tokens、缓存命中率、成功率与估算费用，按场景拆分。
+- 异常信号：队列暂停/调度器停用/排队积压/卡单/超时执行/失败订单/退款待确认/AI 失败率偏高，
+  由后端算好返回，前端只做展示（危险级排在前面）。
 
 #### 定价系统
 ```
@@ -105,12 +117,13 @@ Home.vue (首页)
   └── 已登录用户直接进入课程选择
 
 Admin.vue (管理员后台)
-  ├── 概览仪表盘
-  ├── 用户管理
+  ├── 财务报表（数据看板：KPI/趋势/异常信号/队列健康/AI 用量）
   ├── 订单管理
-  ├── 定价配置 (打包/按量/AI推荐)
-  ├── AI 模型配置
-  └── YPay 支付配置
+  ├── 队列监控（全部 / 学校平台 / 学习通）
+  ├── 产品定价（打包/按量/AI 推荐）
+  ├── 支付收款（YPay 配置与对账）
+  ├── 系统通告
+  └── 安全中心（DeepSeek Key、模型与能力开关、改密）
 ```
 
 ### 4. 定价系统详解
@@ -145,16 +158,38 @@ homework_only_price = ¥3  # 可配置
 
 ### 5. AI 集成
 
+对齐 DeepSeek 官方 API（2026-09 版）：对话补全 `POST /chat/completions`，
+统一由 `rust_worker/src/llm.rs` 的 `LlmClient` 发出（超时/重试/记账集中一处）。
+
 #### 模型配置
 | 用途 | 默认模型 | 配置项 |
 |------|----------|--------|
-| 期末考试 | deepseek-v4-flash | `deepseek_final_exam_model` |
-| 平时作业 | deepseek-chat | `deepseek_homework_model` |
+| 期末考试 | deepseek-flash | `deepseek_final_exam_model` |
+| 平时作业 | deepseek-flash | `deepseek_homework_model` |
+| 学习通测验 | deepseek-flash | `deepseek_chaoxing_model` |
 | 定价顾问 | deepseek-v4-pro | `deepseek_pricing_model` |
+| 考试答题 | deepseek-flash | `deepseek_exam_model` |
+
+在售模型只有 `deepseek-flash`（V4.1-Flash）与 `deepseek-v4-pro`。
+旧的 `deepseek-chat` / `deepseek-reasoner` 已于 2026-07-24 弃用；
+老库里存着旧名字时，`llm::resolve_model` 会自动归一化（chat→flash 非思考、
+reasoner→flash 思考），不需要人工改配置。
+
+#### 用到的官方能力
+- **思考模式**：`thinking:{type:enabled}` + `reasoning_effort`。考试答题首次
+  作答置信度 < 0.6 时，用思考模式复核一遍（`exam::review_low_confidence`）；
+  管理端「思考模式」开关可强制开/关（`deepseek_thinking`）。
+- **JSON Output**：`response_format:{type:json_object}`，学习通批量答题用它替代正则抓取。
+- **图像理解**：验证码在本地 OCR 连续三次识别不出时，用 `deepseek-flash` 看图兜底
+  （`llm::recognize_captcha_vision`，开关 `deepseek_vision_ocr`，默认开）。
+- **上下文硬盘缓存**：前缀命中部分单价只有未命中的 1/50，因此 system prompt 保持固定前缀。
+- **分时计价**：周一至周五 9-12 / 14-18（北京时间）为高峰，其余半价。
 
 #### AI 成本
-- deepseek-v4-flash: 输入 ¥1/百万tokens，输出 ¥2/百万tokens
+- deepseek-flash：输入 ¥1/百万tokens（缓存命中 ¥0.02）、输出 ¥4/百万tokens（空闲时段半价）
 - 单门考试成本约 ¥0.01-0.05（极低）
+- 每次调用后的 tokens 与估算费用写入 `ai_usage` 表，后台看板按
+  今日 / 近 7 天 / 累计汇总，并按调用场景拆出成本占比
 
 ## 运行方式
 

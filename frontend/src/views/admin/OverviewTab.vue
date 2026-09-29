@@ -26,10 +26,46 @@ function tooltipStyle(p: ReturnType<typeof chartPalette>) {
   }
 }
 
+/** 环比徽标：昨日为 0 时后端给 null，此时不显示（而不是显示 +100%） */
+function changeText(v: number | null | undefined): string {
+  if (v === null || v === undefined) return ''
+  const pct = v * 100
+  const sign = pct > 0 ? '+' : ''
+  return `${sign}${pct.toFixed(0)}%`
+}
+function changeClass(v: number | null | undefined): string {
+  if (!v) return 'flat'
+  return v > 0 ? 'up' : 'down'
+}
+
+/** 大数字缩写：1234 → 1.2k，避免 KPI 卡片被超长数字撑破 */
+function compact(n: number | undefined): string {
+  const v = n || 0
+  if (v >= 1_000_000) return (v / 1_000_000).toFixed(1) + 'M'
+  if (v >= 10_000) return (v / 1000).toFixed(1) + 'k'
+  return String(v)
+}
+
+const alertCount = computed(() => (dash.value?.alerts || []).length)
+/** 危险级信号排在前面，运营一眼先看到需要立刻处理的 */
+const sortedAlerts = computed(() =>
+  [...(dash.value?.alerts || [])].sort((a: any, b: any) => {
+    const rank: Record<string, number> = { danger: 0, warn: 1, info: 2 }
+    return (rank[a.level] ?? 3) - (rank[b.level] ?? 3)
+  }),
+)
+
+/** 队列占用率：worker 用了几个 / 上限（上限为 0 时按 0 处理，不显示 NaN 宽度） */
+const workersPct = computed(() => {
+  const q = dash.value?.queue
+  if (!q || !q.max_workers) return 0
+  return Math.min(100, Math.round((q.active_workers / q.max_workers) * 100))
+})
+
 /** 近 7 天：收入折线（左轴）+ 订单柱（右轴），图例由面板头部 HTML 承担 */
 const trendOption = computed(() => {
   const p = palette.value
-  const days = (dash.value?.recent_7_days || []) as { date: string; orders: number; revenue: number }[]
+  const days = (dash.value?.recent_7_days || []) as { date: string; orders: number; revenue: number; failed: number }[]
   return {
     grid: { left: 4, right: 4, top: 16, bottom: 0, containLabel: true },
     tooltip: tooltipStyle(p),
@@ -115,6 +151,12 @@ const statusOption = computed(() => {
 const statusChartHeight = computed(() =>
   `${Math.max(120, ((dash.value?.status_distribution?.length || 0) * 30) + 24)}px`,
 )
+
+/** 场景名 → 中文（AI 用量按场景拆分时展示） */
+const sceneNames: Record<string, string> = {
+  exam: '考试答题', quiz: '测验答题', discussion: '讨论生成',
+  captcha_vision: '验证码兜底', selftest: '连通测试',
+}
 </script>
 
 <template>
@@ -123,6 +165,22 @@ const statusChartHeight = computed(() =>
       v-if="dash"
       class="overview-content"
     >
+      <!-- 异常信号：只有真有事时才出现，避免常驻噪声 -->
+      <div
+        v-if="alertCount"
+        class="alert-strip"
+      >
+        <div
+          v-for="(a, i) in sortedAlerts"
+          :key="i"
+          :class="['alert-item', a.level]"
+        >
+          <span class="alert-dot" />
+          <span class="alert-title">{{ a.title }}</span>
+          <span class="alert-detail">{{ a.detail }}</span>
+        </div>
+      </div>
+
       <div class="kpi-row">
         <div class="kpi-card">
           <div class="kpi-icon rev">
@@ -145,13 +203,18 @@ const statusChartHeight = computed(() =>
               {{ fmtMoney(dash.revenue.today) }}
             </div>
             <div class="kpi-label">
-              今日收入
+              今日实收
             </div>
           </div>
           <div class="kpi-sub">
-            本周 {{ fmtMoney(dash.revenue.week) }}
+            <span :class="['chg', changeClass(dash.revenue.today_change)]">
+              {{ changeText(dash.revenue.today_change) || '环比昨日 —' }}
+            </span>
+            <span>本周 {{ fmtMoney(dash.revenue.week) }}</span>
+            <span>累计 {{ fmtMoney(dash.revenue.total) }}</span>
           </div>
         </div>
+
         <div class="kpi-card">
           <div class="kpi-icon ord">
             <svg
@@ -182,9 +245,13 @@ const statusChartHeight = computed(() =>
             </div>
           </div>
           <div class="kpi-sub">
-            本周 {{ dash.orders.week }} 单
+            <span :class="['chg', changeClass(dash.orders.today_change)]">
+              {{ changeText(dash.orders.today_change) || '环比昨日 —' }}
+            </span>
+            <span>本周 {{ dash.orders.week }} 单</span>
           </div>
         </div>
+
         <div class="kpi-card">
           <div class="kpi-icon rate">
             <svg
@@ -205,44 +272,100 @@ const statusChartHeight = computed(() =>
             </div>
           </div>
           <div class="kpi-sub">
-            累计 {{ dash.orders.completed }}/{{ dash.orders.total }}
+            <span>已完成 {{ dash.orders.completed }}</span>
+            <span v-if="dash.orders.avg_delivery_hours > 0">均 {{ dash.orders.avg_delivery_hours }}h</span>
           </div>
         </div>
+
         <div class="kpi-card">
           <div class="kpi-icon agt">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            ><circle
+              cx="12"
+              cy="12"
+              r="10"
+            /><line
+              x1="12"
+              y1="8"
+              x2="12"
+              y2="12"
+            /><line
+              x1="12"
+              y1="16"
+              x2="12.01"
+              y2="16"
+            /></svg>
           </div>
           <div class="kpi-body">
             <div class="kpi-val">
-              {{ dash.orders.pending || 0 }}
+              {{ dash.orders.pending }}
             </div>
             <div class="kpi-label">
-              待处理订单
+              待处理
             </div>
           </div>
           <div class="kpi-sub">
-            执行中 {{ dash.orders.running || 0 }} 单
+            <span>执行中 {{ dash.orders.running }}</span>
+            <span
+              v-if="dash.orders.stuck || dash.orders.long_running"
+              class="chg down"
+            >卡单 {{ dash.orders.stuck + dash.orders.long_running }}</span>
           </div>
         </div>
+
         <div class="kpi-card">
-          <div class="kpi-icon rev">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>
+          <div class="kpi-icon ai">
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            ><rect
+              x="4"
+              y="4"
+              width="16"
+              height="16"
+              rx="3"
+            /><path d="M9 9h6v6H9z" /><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2" /></svg>
           </div>
           <div class="kpi-body">
             <div class="kpi-val">
-              {{ fmtMoney(dash.revenue.total) }}
+              {{ fmtMoney(dash.ai.today.cost) }}
             </div>
             <div class="kpi-label">
-              累计收入
+              AI 今日成本
             </div>
           </div>
           <div class="kpi-sub">
-            本周 {{ fmtMoney(dash.revenue.week) }}
+            <span>{{ dash.ai.today.calls }} 次调用</span>
+            <span v-if="dash.ai.today.calls">命中 {{ (dash.ai.today.cache_hit_rate * 100).toFixed(0) }}%</span>
           </div>
         </div>
-        <div v-if="(dash.orders.failed || 0) > 0" class="kpi-card">
-          <div class="kpi-icon ord">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+
+        <div
+          v-if="dash.orders.failed || dash.revenue.receivable > 0"
+          class="kpi-card"
+        >
+          <div
+            class="kpi-icon"
+            :class="dash.orders.failed ? 'ord' : 'rate'"
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            ><path d="M12 9v4M12 17h.01" /><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" /></svg>
           </div>
           <div class="kpi-body">
             <div class="kpi-val">
@@ -253,7 +376,7 @@ const statusChartHeight = computed(() =>
             </div>
           </div>
           <div class="kpi-sub">
-            今日 {{ dash.orders.today || 0 }} 单
+            <span>待收款 {{ fmtMoney(dash.revenue.receivable) }}</span>
           </div>
         </div>
       </div>
@@ -276,12 +399,108 @@ const statusChartHeight = computed(() =>
       </div>
 
       <div class="panel-row">
+        <div class="panel">
+          <div class="panel-head">
+            <h3>队列健康</h3>
+            <span :class="['status-tag', dash.queue.paused ? 'bad' : dash.queue.enabled ? 'ok' : 'warn']">
+              {{ dash.queue.paused ? '已暂停' : dash.queue.enabled ? '运行中' : '调度器停用' }}
+            </span>
+          </div>
+          <div class="q-workers">
+            <div class="q-workers-head">
+              <span>并发占用</span>
+              <span class="mono">{{ dash.queue.active_workers }} / {{ dash.queue.max_workers || '—' }}</span>
+            </div>
+            <div class="q-bar-bg">
+              <div
+                class="q-bar-fill"
+                :style="{ width: workersPct + '%' }"
+              />
+            </div>
+          </div>
+          <div class="q-grid">
+            <div class="q-cell">
+              <div class="q-val mono">{{ dash.queue.pending + dash.queue.retrying }}</div>
+              <div class="q-label">排队中</div>
+            </div>
+            <div class="q-cell">
+              <div class="q-val mono">{{ dash.queue.running }}</div>
+              <div class="q-label">执行中</div>
+            </div>
+            <div class="q-cell">
+              <div class="q-val mono">{{ dash.queue.completed }}</div>
+              <div class="q-label">已完成</div>
+            </div>
+            <div class="q-cell">
+              <div
+                class="q-val mono"
+                :class="{ bad: dash.queue.failed > 0 }"
+              >
+                {{ dash.queue.failed }}
+              </div>
+              <div class="q-label">失败</div>
+            </div>
+          </div>
+          <div
+            v-if="dash.queue.backlog_minutes > 0"
+            class="q-foot"
+          >
+            最早排队任务已等待 {{ dash.queue.backlog_minutes }} 分钟
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>AI 用量</h3>
+            <span class="panel-note">近7天 {{ fmtMoney((dash.recent_7_days || []).reduce((s: number, d: any) => s + (d.ai_cost || 0), 0)) }}</span>
+          </div>
+          <div class="ai-total">
+            <div class="ai-total-main">
+              <div class="ai-total-val mono">
+                {{ compact(dash.ai.total.prompt_tokens + dash.ai.total.completion_tokens) }}
+              </div>
+              <div class="ai-total-label">
+                累计 tokens
+              </div>
+            </div>
+            <div class="ai-total-side">
+              <div>累计调用 <b class="mono">{{ compact(dash.ai.total.calls) }}</b></div>
+              <div>累计成本 <b class="mono">{{ fmtMoney(dash.ai.total.cost) }}</b></div>
+              <div v-if="dash.ai.today.calls">
+                今日成功率 <b class="mono">{{ (dash.ai.today.success_rate * 100).toFixed(0) }}%</b>
+              </div>
+            </div>
+          </div>
+          <div
+            v-if="dash.ai.by_scene.length"
+            class="ai-scenes"
+          >
+            <div
+              v-for="s in dash.ai.by_scene"
+              :key="s.scene"
+              class="ai-scene"
+            >
+              <span class="ai-scene-name">{{ sceneNames[s.scene] || s.scene }}</span>
+              <span class="ai-scene-calls mono">{{ s.calls }} 次</span>
+              <span class="ai-scene-cost mono">{{ fmtMoney(s.cost) }}</span>
+            </div>
+          </div>
+          <div
+            v-else
+            class="empty-sm"
+          >
+            暂无 AI 调用记录
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-row">
         <div class="panel panel-wide">
           <div class="panel-head">
             <h3>订单状态分布</h3>
           </div>
           <v-chart
-            class="chart"
+            class="chart-slim"
             :style="{ height: statusChartHeight }"
             :option="statusOption"
             autoresize
@@ -317,8 +536,8 @@ const statusChartHeight = computed(() =>
                     :style="{ width: (p.count / totalPlatformOrders * 100) + '%', background: platColor(i) }"
                   />
                 </div>
-                <span class="plat-cnt">{{ p.count }}单</span>
-                <span class="plat-rev">{{ fmtMoney(p.revenue) }}</span>
+                <span class="plat-cnt mono">{{ p.count }}单</span>
+                <span class="plat-rev mono">{{ fmtMoney(p.revenue) }}</span>
               </div>
             </div>
           </div>
@@ -346,10 +565,10 @@ const statusChartHeight = computed(() =>
               <div class="tc-icon">
                 {{ taskTypeNames[td.task_type] || td.task_type }}
               </div>
-              <div class="tc-count">
+              <div class="tc-count mono">
                 {{ td.count }}单
               </div>
-              <div class="tc-rev">
+              <div class="tc-rev mono">
                 {{ fmtMoney(td.revenue) }}
               </div>
             </div>
@@ -384,7 +603,13 @@ const statusChartHeight = computed(() =>
               <span class="mt-col mt-uname">{{ o.username }}</span>
               <span class="mt-col">{{ getPlatformName(o.website_id) }}</span>
               <span class="mt-col">{{ taskTypeNames[o.task_type] || o.task_type }}</span>
-              <span class="mt-col mt-money">{{ fmtMoney(o.price) }}</span>
+              <span class="mt-col mt-money">
+                {{ fmtMoney(o.price) }}
+                <span
+                  v-if="!o.paid"
+                  class="mt-unpaid"
+                >未收</span>
+              </span>
               <span class="mt-col"><span :class="['status-tag', orderStatusClass[o.status]]">{{ orderStatusLabel[o.status] || o.status }}</span></span>
               <span class="mt-col mt-date">{{ fmtShortDate(o.created_at) }}</span>
             </div>
@@ -431,6 +656,40 @@ const statusChartHeight = computed(() =>
   gap: 20px;
 }
 
+/* ==================== 异常信号 ==================== */
+.alert-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.alert-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  border-radius: 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  animation: ov-in .35s cubic-bezier(.32, .72, .35, 1) both;
+}
+.alert-item.danger { background: var(--c-danger-bg); color: var(--c-danger); }
+.alert-item.warn { background: var(--c-warning-bg); color: var(--c-warning); }
+.alert-item.info { background: var(--c-bg); color: var(--c-text-secondary); }
+.alert-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.alert-title { font-weight: 700; flex-shrink: 0; }
+.alert-detail {
+  color: var(--c-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ==================== KPI 卡片 ==================== */
 .kpi-row {
   display: grid;
@@ -475,6 +734,7 @@ const statusChartHeight = computed(() =>
 .kpi-icon.ord { background: var(--c-primary-bg); color: var(--c-primary); }
 .kpi-icon.rate { background: var(--c-warning-bg); color: var(--c-warning); }
 .kpi-icon.agt { background: var(--c-info-bg); color: var(--c-info); }
+.kpi-icon.ai { background: var(--c-success-bg); color: var(--c-success); }
 .kpi-body { display: flex; flex-direction: column; gap: 3px; }
 .kpi-val {
   font-size: 26px;
@@ -486,11 +746,21 @@ const statusChartHeight = computed(() =>
 }
 .kpi-label { font-size: 12.5px; color: var(--c-text-secondary); font-weight: 500; }
 .kpi-sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 8px;
   font-size: 11.5px;
   color: var(--c-text-muted);
   border-top: 1px solid var(--c-border);
   padding-top: 8px;
 }
+/* 环比徽标：涨/跌/持平用同一个色族，不抢主数字的注意力 */
+.chg { font-weight: 600; }
+.chg.up { color: var(--c-success); }
+.chg.down { color: var(--c-danger); }
+.chg.flat { color: var(--c-text-muted); }
 
 /* ==================== 面板 ==================== */
 .panel-row {
@@ -522,6 +792,7 @@ const statusChartHeight = computed(() =>
   letter-spacing: -0.01em;
   color: var(--c-text);
 }
+.panel-note { font-size: 11.5px; color: var(--c-text-muted); }
 .legend-row { display: flex; gap: 14px; }
 .legend {
   font-size: 11.5px;
@@ -539,6 +810,103 @@ const statusChartHeight = computed(() =>
   width: 100%;
   height: 200px;
 }
+.chart-slim { width: 100%; }
+
+/* ==================== 队列健康 ==================== */
+.q-workers { margin-bottom: 18px; }
+.q-workers-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--c-text-secondary);
+  margin-bottom: 8px;
+}
+.mono { font-variant-numeric: tabular-nums; }
+.q-bar-bg {
+  height: 8px;
+  background: var(--c-bg);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.q-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--c-primary);
+  transition: width .4s cubic-bezier(.32, .72, .35, 1);
+}
+.q-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+.q-cell {
+  background: var(--c-bg);
+  border-radius: 12px;
+  padding: 12px;
+  text-align: center;
+}
+.q-val {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+  line-height: 1.2;
+}
+.q-val.bad { color: var(--c-danger); }
+.q-label { font-size: 11.5px; color: var(--c-text-muted); margin-top: 2px; }
+.q-foot {
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--c-warning);
+}
+
+/* ==================== AI 用量 ==================== */
+.ai-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--c-border);
+}
+.ai-total-val {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+  line-height: 1.1;
+}
+.ai-total-label { font-size: 12px; color: var(--c-text-secondary); margin-top: 2px; }
+.ai-total-side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--c-text-secondary);
+  text-align: right;
+}
+.ai-total-side b { color: var(--c-text); }
+.ai-scenes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 12px;
+}
+.ai-scene {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 6px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  transition: background .2s ease;
+}
+.ai-scene:hover { background: var(--c-bg); }
+.ai-scene-name { color: var(--c-text); }
+.ai-scene-calls { color: var(--c-text-muted); font-size: 11.5px; }
+.ai-scene-cost { color: var(--c-text-secondary); font-size: 11.5px; min-width: 62px; text-align: right; }
 
 /* ==================== 平台分布 ==================== */
 .plat-list { display: flex; flex-direction: column; gap: 12px; }
@@ -602,6 +970,12 @@ const statusChartHeight = computed(() =>
 }
 .mt-uname { font-weight: 600; color: var(--c-text); }
 .mt-money { font-weight: 600; font-variant-numeric: tabular-nums; }
+.mt-unpaid {
+  margin-left: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--c-warning);
+}
 .mt-date { color: var(--c-text-muted); font-size: 11.5px; }
 
 /* ==================== 状态标签 ==================== */
@@ -661,6 +1035,8 @@ const statusChartHeight = computed(() =>
   .panel-wide, .panel-wide-sm { grid-column: span 1; }
   .panel { padding: 18px; }
   .chart { height: 170px; }
+  .q-grid { grid-template-columns: repeat(2, 1fr); }
+  .alert-detail { white-space: normal; }
 }
 @media (max-width: 480px) {
   .kpi-row { gap: 8px; }

@@ -23,7 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
 use crate::exam;
-use crate::llm::cached_config;
+use crate::llm::{cached_config, configured_model, configured_thinking, effective_api_key};
 use crate::scan;
 use crate::AppState;
 
@@ -555,17 +555,30 @@ struct SolveRequest {
     item_type: String,
 }
 
-async fn solve_exam_api(Json(req): Json<SolveRequest>) -> Json<Value> {
-    if req.base_url.is_empty() || req.cookie_str.is_empty()
-        || req.work_id.is_empty() || req.api_key.is_empty()
-    {
-        return Json(json!({"success": false, "message": "base_url/cookie_str/work_id/api_key 不能为空"}));
+async fn solve_exam_api(State(state): State<AppState>, Json(req): Json<SolveRequest>) -> Json<Value> {
+    if req.base_url.is_empty() || req.cookie_str.is_empty() || req.work_id.is_empty() {
+        return Json(json!({"success": false, "message": "base_url/cookie_str/work_id 不能为空"}));
     }
-    let model = if req.model.is_empty() { "deepseek-v4-flash" } else { &req.model };
+    // API Key / 模型未显式传入时回退管理端配置（此前前端根本没有入口传这两个值，
+    // 只能靠调用方自己塞；而管理端"考试模型"配置项后端从不读取，属于死配置）
+    let api_key = if req.api_key.is_empty() {
+        effective_api_key(&state.db).await
+    } else {
+        req.api_key.clone()
+    };
+    if api_key.is_empty() {
+        return Json(json!({"success": false, "message": "DEEPSEEK_API_KEY 未配置"}));
+    }
+    let model = if req.model.is_empty() {
+        configured_model(&state.db, "deepseek_exam_model", crate::llm::MODEL_FLASH).await
+    } else {
+        req.model.clone()
+    };
+    let thinking = configured_thinking(&state.db).await;
     let item_type = if req.item_type.is_empty() { "work" } else { &req.item_type };
     match exam::solve_exam(&req.base_url, &req.cookie_str, &req.work_id,
-                           &req.course_id, &req.node_id, &req.api_key,
-                           model, item_type).await {
+                           &req.course_id, &req.node_id, &api_key,
+                           &model, item_type, thinking).await {
         Ok(r) => Json(r),
         Err(e) => Json(json!({"success": false, "error": format!("{e:#}")})),
     }
@@ -581,7 +594,10 @@ struct TestModelInput {
 
 async fn test_deepseek(State(state): State<AppState>,
                        body: Option<Json<TestModelInput>>) -> Json<Value> {
-    let test_model = body.and_then(|b| b.0.model).unwrap_or_else(|| "deepseek-chat".to_string());
+    // 默认用当前在售的 flash（deepseek-chat 已于 2026-07-24 弃用，
+    // 拿它做默认值会让"测试"永远返回 401）
+    let test_model = body.and_then(|b| b.0.model)
+        .unwrap_or_else(|| crate::llm::MODEL_FLASH.to_string());
     let mut result = json!({
         "openai_module": true, // Rust 直连 HTTP，恒 true（对齐 Python 的 openai 模块检查位）
         "api_key": "", "key_source": "", "api_ok": false,
@@ -610,37 +626,33 @@ async fn test_deepseek(State(state): State<AppState>,
         "****".to_string()
     });
 
-    // 直连测试（对齐：messages=[user "回复OK"], max_tokens=10, timeout=15）
-    let client = Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .expect("构建测试 client 失败");
+    // 真实请求：走统一 LlmClient（会自动归一化老模型名、按需带思考参数）。
+    // 这样"测试通过"与"实际答题能跑通"才是同一条件——此前测试用裸 reqwest、
+    // 答题走 LlmClient，两边参数不一致时测试通过也可能线上失败。
+    let thinking = configured_thinking(&state.db).await;
+    let client = crate::llm::LlmClient::new(&api_key, "");
     let t0 = std::time::Instant::now();
-    let resp = client.post("https://api.deepseek.com/chat/completions")
-        .header("Authorization", format!("Bearer {api_key}"))
-        .json(&json!({
-            "model": test_model,
-            "messages": [{"role": "user", "content": "回复OK"}],
-            "max_tokens": 10,
-        }))
-        .send().await;
+    let req = crate::llm::ChatRequest::new("selftest", &test_model, "回复OK")
+        .max_tokens(16);
+    let req = match thinking {
+        Some(t) => req.thinking(t),
+        None => req,
+    };
+    let resp = client.chat(req).await;
     let latency = t0.elapsed().as_millis() as u64;
     result["latency_ms"] = json!(latency);
     match resp {
-        Ok(r) if r.status().as_u16() == 200 => {
+        Ok(reply) => {
             result["api_ok"] = json!(true);
-            let v: Value = r.json().await.unwrap_or(json!({}));
-            result["model"] = json!(v["model"].as_str().unwrap_or("deepseek-chat"));
-        }
-        Ok(r) => {
-            let status = r.status().as_u16();
-            let text = r.text().await.unwrap_or_default();
-            let err = format!("HTTP {status}: {text}");
-            result["error"] = json!(classify_deepseek_error(&err));
+            let (actual, _) = crate::llm::resolve_model(&test_model);
+            result["model"] = json!(actual);
+            result["reply"] = json!(reply.content.chars().take(40).collect::<String>());
+            if let Some(u) = &reply.usage {
+                result["usage"] = json!(u);
+            }
         }
         Err(e) => {
-            result["error"] = json!(classify_deepseek_error(&format!("{e}")));
+            result["error"] = json!(classify_deepseek_error(&format!("{e:#}")));
         }
     }
     Json(json!({"code": 0, "data": result}))

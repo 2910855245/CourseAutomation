@@ -8,10 +8,10 @@
 use regex::Regex;
 use serde_json::{json, Value};
 
-use crate::llm::LlmClient;
+use crate::llm::{ChatRequest, LlmClient};
 
-/// quiz 专用 system prompt（对齐 quiz.py）
-const QUIZ_SYSTEM: &str = "你是学习通答题助手。直接给出正确答案，用JSON格式输出。判断题答案为true（对）或false（错），单选题答案为A/B/C/D，多选题答案如AB/ACD。必须用JSON数组格式输出，每题一个对象。";
+/// quiz 专用 system prompt（对齐 quiz.py，并按官方 JSON Output 要求显式声明 json 与样例）
+const QUIZ_SYSTEM: &str = "你是学习通答题助手。直接给出正确答案，用JSON格式输出。判断题答案为true（对）或false（错），单选题答案为A/B/C/D，多选题答案如AB/ACD。必须用JSON数组格式输出，每题一个对象，格式样例：[{\"num\": 1, \"answer\": \"A\"}, {\"num\": 2, \"answer\": \"true\"}]";
 
 /// 构造批量答题 prompt（对齐 quiz.py：题干 + 选项去前缀 + JSON 输出要求）
 fn build_quiz_prompt(questions: &[Value]) -> String {
@@ -37,12 +37,19 @@ fn build_quiz_prompt(questions: &[Value]) -> String {
 
 /// 批量答题（对齐 quiz.py：temperature=0.1，一次请求多题，返回 [{qid, answer}]）
 /// questions: [{"qid": "...", "text": "...", "options": [...]}]
+/// 走官方 JSON Output（response_format=json_object），比正则抓取更稳；偶发空响应由客户端重试。
 pub async fn ask_deepseek(llm: &LlmClient, questions: &[Value], model: &str) -> Vec<Value> {
     if questions.is_empty() || llm.api_key.is_empty() {
         return Vec::new();
     }
     let prompt = build_quiz_prompt(questions);
-    match llm.chat(model, QUIZ_SYSTEM, &prompt, 0.1, 4096, false).await {
+    match llm.chat(
+        ChatRequest::new("quiz", model, &prompt)
+            .system(QUIZ_SYSTEM)
+            .temperature(0.1)
+            .max_tokens(4096)
+            .json(true),
+    ).await {
         Ok(reply) => extract_json_answers(&reply.content, questions),
         Err(e) => {
             tracing::warn!(error = %e, "学习通测验 AI 调用失败");
@@ -125,7 +132,11 @@ pub async fn generate_discussion(llm: &LlmClient, course_name: &str,
     let prompt = format!(
         "请为以下课程知识点写一段学习讨论内容。\n课程：{course_name}\n知识点：{knowledge_name}\n\n要求：\n1. 标题简洁（10-20字）\n2. 内容积极正面，体现学习收获（100-200字）\n3. 直接输出，格式如下：\n标题：xxx\n内容：xxx"
     );
-    let reply = match llm.chat("deepseek-chat", "", &prompt, 0.8, 200, false).await {
+    let reply = match llm.chat(
+        ChatRequest::new("discussion", crate::llm::MODEL_FLASH, &prompt)
+            .temperature(0.8)
+            .max_tokens(400),
+    ).await {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, "讨论生成失败，使用降级文案");

@@ -12,7 +12,7 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use std::sync::LazyLock;
 
-use crate::llm::{confidence_heuristic, LlmClient};
+use crate::llm::{confidence_heuristic, ChatRequest, LlmClient};
 
 fn make_client() -> Client {
     crate::platform_client::build_client_with_ua(
@@ -22,15 +22,49 @@ fn make_client() -> Client {
 /// 题级答案缓存（对齐 AIAnswerer._cache：key = 题干前 100 字符）
 static ANSWER_CACHE: LazyLock<DashMap<String, String>> = LazyLock::new(DashMap::new);
 
+/// 置信度低于该值时触发思考模式复核。
+/// 0.6 取自启发式的"不确定"档（confidence_heuristic 里格式可疑的选择题就是 0.6），
+/// 也就是"格式没对上、模型多半在蒙"的那些题。
+const REVIEW_THRESHOLD: f64 = 0.6;
+
+/// 低置信度复核：用思考模式（reasoning）重算一题。
+///
+/// 思考模式在复杂推理上更稳，官方文档明确它不支持 temperature/logprobs，
+/// 所以这里拿不到置信度、也不做二次比较——只要复核给出非空答案就采纳它。
+/// 返回 None 表示复核失败（调用方保留第一次的答案，不会因此丢题）。
+async fn review_low_confidence(llm: &LlmClient, model: &str, topic: &Value) -> Option<(String, f64)> {
+    match ask_deepseek_with(llm, model, topic, Some(true)).await {
+        Ok((ans, conf)) if !ans.is_empty() => Some((ans, conf)),
+        Ok(_) => None,
+        Err(e) => {
+            tracing::warn!(error = %e, "低置信度复核失败，保留首次答案");
+            None
+        }
+    }
+}
+
 /// DeepSeek 单题调用（对齐 AIAnswerer.ask_one_topic：
-/// temperature=0.1, max_tokens=1024, logprobs=true/top_logprobs=5, timeout=30）
+/// temperature=0.1, max_tokens=1024, logprobs=true/top_logprobs=5）
 /// 返回 (answer, confidence)
 pub async fn ask_deepseek(llm: &LlmClient, model: &str, topic: &Value) -> Result<(String, f64)> {
+    ask_deepseek_with(llm, model, topic, None).await
+}
+
+/// 同上，但可显式指定是否走思考模式（None=由模型名语义决定）
+pub async fn ask_deepseek_with(llm: &LlmClient, model: &str, topic: &Value,
+                               thinking: Option<bool>) -> Result<(String, f64)> {
     let q_type = topic["q_type"].as_str().unwrap_or("");
     let is_choice = q_type.contains("单选") || q_type.contains("多选") || q_type.contains("判断");
     let prompt = build_prompt(topic);
-    // 走 LlmClient.chat（system 为空时只发 user 消息，与 Python 单消息一致）
-    let reply = llm.chat(model, "", &prompt, 0.1, 1024, true).await?;
+    // logprobs 用于置信度；解析失败由 llm 内部重试（429/5xx/空响应）
+    let mut req = ChatRequest::new("exam", model, &prompt)
+        .temperature(0.1)
+        .max_tokens(1024)
+        .logprobs(true);
+    if let Some(t) = thinking {
+        req = req.thinking(t);
+    }
+    let reply = llm.chat(req).await?;
     let answer = extract_answer(&reply.content, is_choice);
     // 置信度：优先 logprobs（chat 内部已算），拿不到走启发式（对齐 _calc_confidence）
     let mut confidence = reply.confidence;
@@ -393,10 +427,12 @@ async fn final_submit(client: &Client, cookie: &str, base_url: &str,
 }
 
 /// 完整答题（对齐 ai_service.solve_exam 全流程）
+/// `thinking`：None=按模型名语义决定；Some(true/false)=强制开关思考模式。
+/// 低置信度复核（见 review_low_confidence）只在第一次作答置信度 < 0.6 时触发。
 pub async fn solve_exam(base_url: &str, cookie_str: &str,
                         work_id: &str, course_id: &str, node_id: &str,
                         api_key: &str, model: &str,
-                        item_type: &str) -> Result<Value> {
+                        item_type: &str, thinking: Option<bool>) -> Result<Value> {
     if api_key.is_empty() {
         bail!("DEEPSEEK_API_KEY 未配置");
     }
@@ -416,6 +452,7 @@ pub async fn solve_exam(base_url: &str, cookie_str: &str,
 
     // 逐题 AI 作答（带题级缓存，对齐 AIAnswerer._cache）
     let mut answers: Vec<(String, String)> = Vec::new(); // (answer_id, answer)
+    let mut reviewed = 0usize;
     for topic in &topics {
         let answer_id = topic["answer_id"].as_str().unwrap_or("").to_string();
         let cache_key: String = topic["question"].as_str().unwrap_or("")
@@ -428,7 +465,7 @@ pub async fn solve_exam(base_url: &str, cookie_str: &str,
         let mut answer = String::new();
         let mut confidence = 0.0f64;
         for _attempt in 0..3 {
-            match ask_deepseek(&llm, model, topic).await {
+            match ask_deepseek_with(&llm, model, topic, thinking).await {
                 Ok((ans, conf)) => {
                     answer = ans;
                     confidence = conf;
@@ -440,6 +477,17 @@ pub async fn solve_exam(base_url: &str, cookie_str: &str,
             }
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
+        // 低置信度复核：快模型答得没把握时，用思考模式再算一遍（仅此一处额外开销）
+        if !answer.is_empty() && confidence < REVIEW_THRESHOLD && thinking != Some(true) {
+            if let Some((better, _)) = review_low_confidence(&llm, model, topic).await {
+                if !better.is_empty() {
+                    tracing::info!(number = %topic["number"], from = %answer, to = %better,
+                                   confidence, "低置信度已由思考模式复核");
+                    reviewed += 1;
+                    answer = better;
+                }
+            }
+        }
         if answer.is_empty() {
             tracing::warn!(number = %topic["number"], "AI 未返回答案");
         } else {
@@ -449,6 +497,9 @@ pub async fn solve_exam(base_url: &str, cookie_str: &str,
                        "第{}题作答完成", topic["number"]);
         answers.push((answer_id, answer));
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    }
+    if reviewed > 0 {
+        tracing::info!(reviewed, "低置信度复核完成");
     }
 
     // 逐题提交（空答案跳过，失败重试 3 次）

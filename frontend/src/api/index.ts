@@ -72,14 +72,48 @@ export interface OrderItem {
   speed_mode?: string;
   created_at: string; updated_at?: string; accepted_at?: string; started_at?: string; finished_at?: string;
 }
+export interface DashboardAlert {
+  level: 'info' | 'warn' | 'danger'
+  title: string
+  detail: string
+}
 export interface DashboardStats {
-  orders: { total: number; today: number; week: number; completed: number; pending: number; running: number; failed: number; completion_rate: number }
-  revenue: { total: number; today: number; week: number }
+  orders: {
+    total: number; today: number; yesterday: number; week: number
+    completed: number; pending: number; running: number; failed: number
+    cancelled: number; paid: number
+    completion_rate: number; avg_delivery_hours: number
+    stuck: number; long_running: number
+    /** 今日环比昨日（昨日为 0 时后端返回 null，避免除零） */
+    today_change: number | null
+    today_diff: number
+  }
+  revenue: {
+    total: number; today: number; yesterday: number; week: number
+    receivable: number; refund_due: number; avg_order: number
+    today_change: number | null; today_diff: number
+  }
+  queue: {
+    enabled: boolean; paused: boolean
+    active_workers: number; max_workers: number
+    pending: number; retrying: number; running: number
+    waiting: number; failed: number; completed: number
+    backlog_minutes: number
+  }
+  ai: {
+    today: {
+      calls: number; ok: number; prompt_tokens: number; completion_tokens: number
+      cache_hit_tokens: number; cost: number; cache_hit_rate: number; success_rate: number
+    }
+    total: { calls: number; ok: number; prompt_tokens: number; completion_tokens: number; cache_hit_tokens: number; cost: number }
+    by_scene: { scene: string; calls: number; cost: number }[]
+  }
+  alerts: DashboardAlert[]
   platform_distribution: { website_id: number; count: number; revenue: number }[]
   task_type_distribution: { task_type: string; count: number; revenue: number }[]
   status_distribution: { status: string; count: number }[]
-  recent_7_days: { date: string; orders: number; revenue: number }[]
-  recent_orders: { order_id: string; username: string; website_id: number; task_type: string; price: number; status: string; created_at: string }[]
+  recent_7_days: { date: string; orders: number; revenue: number; failed: number; ai_calls: number; ai_cost: number }[]
+  recent_orders: { order_id: string; username: string; website_id: number; task_type: string; price: number; status: string; created_at: string; paid: boolean }[]
 }
 
 
@@ -142,7 +176,7 @@ export const api = {
   adminConfig: {
     all: () => get<ApiResponse<Record<string, string>>>('/api/admin/config'),
     set: (key: string, value: string) => post<ApiResponse<any>>('/api/admin/config', { key, value }),
-    testDeepseek: (model?: string) => post<ApiResponse<any>>('/api/admin/config/test-deepseek', { model: model || 'deepseek-chat' }),
+    testDeepseek: (model?: string) => post<ApiResponse<any>>('/api/admin/config/test-deepseek', { model: model || 'deepseek-flash' }),
   },
   // 说明：proxy（3 个）与 adminDomainMonitor（8 个）两段已删除 ——
   // 后端从未注册这些路由，对应的两个后台页面（网络代理 / 风险监控）

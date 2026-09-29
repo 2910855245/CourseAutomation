@@ -153,6 +153,9 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("打开数据库失败: {db_path}"))?;
     tracing::info!(db_path, "SQLite 就绪");
 
+    // LLM 用量记账需要一个库句柄（后台看板的 AI 成本统计依赖它）
+    llm::init_usage_db(database.clone());
+
     let (progress_tx, _) = tokio::sync::broadcast::channel::<progress::Envelope>(256);
     let state = AppState {
         tasks: Arc::new(DashMap::new()),
