@@ -1,7 +1,8 @@
-//! 实时进度：WebSocket 中枢（Rust 版）
+//! 实时进度：推送中枢（Rust 版）
 //!
 //! - POST /api/progress/live/push：worker 推送 → 统一封装后广播
-//! - GET  /api/progress/ws/live：前端 WS 订阅
+//! - GET  /api/progress/ws/live：管理后台 WS 订阅（需要首帧 auth/sub 控制帧）
+//! - GET  /api/progress/sse/live：客户端 SSE 长连接订阅（订单进度，见下）
 //! - 推送鉴权：X-Worker-Token
 //!
 //! ## 消息封装（envelope，v=1）
@@ -15,15 +16,32 @@
 //! topic：`order:{order_id}` / `payment:{trade_no}` / `queue` / `dashboard`
 //! 控制帧：`auth` / `authenticated` / `sub` / `subscribed` / `error` / `heartbeat` / `pong`
 //!
-//! ## 鉴权（开关 AUTH_WS_REQUIRED，**默认开启**）
+//! ## 双通道分工
+//!
+//! - **管理后台走 WS**：需要 `auth`（管理员令牌）与 `sub`（多订单凭证）两种表态，
+//!   且后台在桌面端，WS 的双向帧能力用来传控制帧最直接。
+//! - **客户端（手机端订单页）走 SSE**：只需单向推送，用原生 `EventSource` 即可，
+//!   浏览器自带重连（含退避），前端不必实现 ping / 半开检测 / 指数退避；
+//!   鉴权放在查询串里（订单凭证本来就以查询串传递，未新增暴露面），
+//!   服务端仍逐条比对 `view_token`，只放行校验通过的 topic。
+//! - SSE 关闭时机由前端掌握：页面不可见或订单全部终态即断开，避免手机端
+//!   在后台维持长连接空耗电。
+//!
+//! ## 鉴权
+//!
+//! WS 通道（管理后台，开关 `AUTH_WS_REQUIRED`，**默认开启**）：
 //!
 //! - 首帧 `{"type":"auth","token":"<admin JWT>"}` → `allowed=["*"]`
 //! - 首帧 `{"type":"sub","orders":[{"order_id":..,"view_token":..}]}` → 逐条与
 //!   [`crate::order::view_token`] 比对 → 只放行校验通过的 topic；失败只回 `error`
 //!   帧不关连接（游客页可能同时持有效+失效订单）；5s 未表态则关闭（4401）。
+//! - 设 `AUTH_WS_REQUIRED=false` 可退回全量广播（仅用于排查问题）。
+//!
+//! SSE 通道：凭证只能走查询串，因此**不提供**关闭过滤的开关 —— 没有有效
+//! view_token 直接 401，不会因为环境变量配错而把全站广播暴露给任何人。
+//!
 //! - **topic 过滤在服务端做**：不是性能考虑而是隐私 —— 载荷里含 `message` 文本，
 //!   若在客户端过滤，任何人开 DevTools 就能看到别人订单的进度与 order_id。
-//! - 设 `AUTH_WS_REQUIRED=false` 可退回全量广播（仅用于排查问题）。
 
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
@@ -31,7 +49,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
+use axum::extract::{Query, State};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
@@ -121,6 +140,83 @@ pub async fn push_progress(
     };
     broadcast(&state, &topic, &kind, payload);
     Json(json!({"success": true, "message": "已推送"})).into_response()
+}
+
+/// 解析 `orders=OID:token,OID:token` → 允许的 topic 集合。
+/// 与 WS 的 `sub` 帧同一套规则：逐条比对 `view_token`，无效条目直接忽略。
+fn orders_scope(spec: &str) -> HashSet<String> {
+    let mut allowed = HashSet::new();
+    for pair in spec.split(',') {
+        let Some((order_id, token)) = pair.split_once(':') else { continue };
+        let order_id = order_id.trim();
+        if order_id.is_empty() {
+            continue;
+        }
+        if crate::crypto::ct_eq(token.trim().as_bytes(),
+                               crate::order::view_token(order_id).as_bytes()) {
+            allowed.insert(format!("order:{order_id}"));
+        }
+    }
+    allowed
+}
+
+/// SSE 订阅：`GET /api/progress/sse/live?orders=OID:token,OID:token`
+///
+/// 客户端（手机端订单页）专用长连接：只推 `order:{order_id}` 帧，
+/// 没有有效凭证直接 401。连接的生命周期由前端掌握（不可见/全部终态就断开）。
+pub async fn sse_live(
+    State(state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let allowed = orders_scope(params.get("orders").map(String::as_str).unwrap_or(""));
+    if allowed.is_empty() {
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            Json(json!({"success": false, "message": "缺少有效的订单凭证"})),
+        )
+            .into_response();
+    }
+
+    let rx = state.progress_tx.subscribe();
+    let allowed = Arc::new(allowed);
+    // 用 unfold 手写流而不是引入 tokio-stream：这里只需要「按 topic 过滤 +
+    // 掉帧时提示重同步」两件事，不值得为它多一个依赖
+    let stream = futures_util::stream::unfold(rx, move |mut rx| {
+        let allowed = allowed.clone();
+        async move {
+            loop {
+                match rx.recv().await {
+                    Ok(env) => {
+                        if !allowed.contains(env.topic.as_ref()) {
+                            continue;
+                        }
+                        return Some((Ok::<_, std::convert::Infallible>(
+                            Event::default().data(&*env.body)), rx));
+                    }
+                    // 广播缓冲被冲掉：静默丢帧会让界面停在旧状态，让前端重拉一次
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        return Some((Ok(Event::default().event("resync").data("{}")), rx));
+                    }
+                    Err(broadcast::error::RecvError::Closed) => return None,
+                }
+            }
+        }
+    });
+    // 心跳 40s：既压住反代的 60s 空闲超时，又不至于让手机基带频繁醒来
+    let mut resp = Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(40)).text("ka"))
+        .into_response();
+    // 反代（nginx/Caddy）默认会缓冲响应体，那会把 SSE 帧憋在缓冲区里，
+    // 表现为"连上了但永远收不到消息"。这两个头是给反代和缓存看的通行做法。
+    resp.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+    resp.headers_mut().insert(
+        axum::http::HeaderName::from_static("x-accel-buffering"),
+        axum::http::HeaderValue::from_static("no"),
+    );
+    resp
 }
 
 /// 订阅范围。`allowed = None` 表示尚未表态（鉴权模式下的初始态，不放行任何消息）。
@@ -287,4 +383,27 @@ async fn handle_control(
 
 async fn send_json(socket: &mut WebSocket, value: Value) -> Result<(), axum::Error> {
     socket.send(Message::Text(value.to_string().into())).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_orders_scope_accepts_only_valid_tokens() {
+        let oid = "ORD-ABC123";
+        let good = crate::order::view_token(oid);
+        let spec = format!("{oid}:{good},ORD-BAD:wrongtoken,broken");
+        let allowed = orders_scope(&spec);
+        assert_eq!(allowed.len(), 1, "只应放行凭证正确的那一条：{allowed:?}");
+        assert!(allowed.contains(&format!("order:{oid}")));
+    }
+
+    #[test]
+    fn test_orders_scope_empty_is_unauthorized_basis() {
+        // 空串/缺参数/只有无效条目 → 集合为空 → handler 直接 401
+        assert!(orders_scope("").is_empty());
+        assert!(orders_scope("ORD-1:").is_empty());
+        assert!(orders_scope(":token").is_empty());
+    }
 }

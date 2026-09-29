@@ -1284,75 +1284,13 @@ useAdminStore().init({
 .status-tag.inactive { background: var(--c-surface-3); color: var(--c-text-muted); }
 .status-tag:hover { opacity: .8; }
 
-/* 风险监控 */
-.risk-tab { width: 100%; display: flex; flex-direction: column; gap: 16px; }
-
-.risk-gauge.level-good .risk-gauge-score { color: var(--c-success); }
-.risk-gauge.level-warn .risk-gauge-score { color: var(--c-warning); }
-.risk-gauge.level-bad .risk-gauge-score { color: var(--c-danger); }
-
-.risk-gauge-title.level-good { color: var(--c-success); }
-.risk-gauge-title.level-warn { color: var(--c-warning); }
-.risk-gauge-title.level-bad { color: var(--c-danger); }
-
-.risk-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
-
-.health-account-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 13px; border-bottom: 1px solid var(--border, var(--c-border)); }
-.health-account-item:last-child { border-bottom: none; }
-.health-account-item.active { background: color-mix(in srgb, var(--primary, #3b82f6) 8%, transparent); }
-
-@keyframes risk-spin { to { transform: rotate(360deg); } }
-
-.risk-check-item { background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 12px; cursor: pointer; transition: border-color .15s, box-shadow .15s; }
-.risk-check-item:hover { border-color: var(--c-border); box-shadow: 0 2px 8px rgba(20,20,24,.06); }
-
-.risk-check-icon.pass { color: var(--c-success); }
-.risk-check-icon.warn { color: var(--c-warning); }
-.risk-check-icon.fail { color: var(--c-danger); }
-
-.risk-check-status.pass { background: var(--c-success-bg); color: var(--c-success); }
-.risk-check-status.warn { background: var(--c-warning-bg); color: var(--c-warning); }
-.risk-check-status.fail { background: var(--c-danger-bg); color: var(--c-danger); }
-
-.risk-check-arrow.open { transform: rotate(180deg); }
-
-.risk-health-card { padding: 12px 14px; border-radius: 8px; border: 1px solid var(--c-border); background: var(--c-surface); }
-.risk-health-card.health-ok { border-left: 3px solid #10b981; }
-.risk-health-card.health-bad { border-left: 3px solid var(--c-danger); }
-
-.health-dot.dot-ok { background: #10b981; }
-.health-dot.dot-bad { background: var(--c-danger); }
-.empty-sm { padding: 16px; text-align: center; color: var(--c-text-muted); font-size: 13px; }
-.data-table-sm { font-size: 12px; }
-.data-table-sm th, .data-table-sm td { padding: 8px 10px; }
-
-.risk-interval-input { width: 100px; padding: 6px 10px; border: 1px solid var(--c-border); border-radius: 8px; font-size: 13px; }
-
-/* 风险监控 - 手机端适配 */
+/* 窄屏（手机）关掉常驻实时模糊：粘顶栏滚动时每帧都要重算模糊，
+   是移动端最明显的 GPU 耗电点，改成不透明底色视觉上几乎无差 */
 @media (max-width: 768px) {
-  
-  
-  
-  
-  
-  
-  
-  
-  .risk-actions {
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 8px;
+  .content-topbar {
+    background: var(--c-surface);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
 }
 </style>

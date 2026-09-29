@@ -249,6 +249,14 @@ const roleBadge = computed(() => (isAdmin.value ? '管理员' : ''))
 .slide-down-enter-from, .slide-down-leave-to { opacity: 0; transform: translateY(-8px); }
 
 @media (max-width: 768px) {
+  /* 粘顶栏在手机上每滚动一帧都要重算一次背景模糊（GPU 常驻开销），
+     是移动端最明显的耗电点之一；换成不透明底色，视觉上几乎无差 */
+  .topbar {
+    background: var(--c-bg);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
   .topbar-inner { padding: 0 var(--space-4); }
   .desktop-nav { display: none; }
   .hamburger { display: flex; }

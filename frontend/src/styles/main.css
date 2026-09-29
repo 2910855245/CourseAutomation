@@ -1716,16 +1716,24 @@ input:disabled {
   text-transform: uppercase;
 }
 
-.health-account-item,
-.risk-check-item,
-.risk-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
 /* ==================== 响应式基线 ==================== */
 @media (max-width: 768px) {
+
+  /* 粘顶栏 / 固定底栏的实时模糊在手机上每滚动一帧都要重算（GPU 常驻开销），
+     是移动端最明显的耗电点之一；改为不透明底色，视觉上几乎无差 */
+  .topbar,
+  .mobile-bottom-nav {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .topbar {
+    background: var(--c-bg);
+  }
+
+  .mobile-bottom-nav {
+    background: var(--c-surface);
+  }
 
   .content-wrapper,
   .topbar-inner {

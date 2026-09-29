@@ -191,6 +191,8 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/api/progress/live/push", post(progress::push_progress))
         .route("/api/progress/ws/live", get(progress::ws_live))
+        // 客户端（手机端订单页）SSE 长连接：单向推送用 EventSource 就够了
+        .route("/api/progress/sse/live", get(progress::sse_live))
         .merge(api::router(state.clone()))
         .merge(school_exam::router())
         .merge(pay_routes::router())

@@ -22,7 +22,7 @@ const {
   startScan, resetScan, rescan, openReloginDialog, closeReloginDialog, submitRelogin,
   fetchBackendPrices, saveSession,
   paying, showPayModal, payTotal, submitSuccess, payError, payQrCode, payPollTimer,
-  selectedPayMethod, payOrders, payQrCodes, payReallyPrices, payBatchIds, payBatchOutTradeNos,
+  selectedPayMethod,
   payBatchId, payBatchOutTradeNo, showPaySuccess, paySuccessAmount, payTimedOut,
   payPhase, payRemaining, payRechecking, recheckPayment, retryPayment,
   handleOrderSuccess, goToOrders, submitAndPay, onPaySuccessDone, closePay, savePayQr, switchPayMethod,

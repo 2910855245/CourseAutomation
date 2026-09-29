@@ -360,7 +360,7 @@ export function useHomeState() {
     password.value = ''
     countdown.value = 3; loginErrorCountdown.value = 3
     showPayModal.value = false; payTimedOut.value = false; payQrCode.value = ''
-    payOrders.value = []; payQrCodes.value = {}; payBatchIds.value = {}; payBatchOutTradeNos.value = {}
+    payQrCodes.value = {}; payBatchIds.value = {}; payBatchOutTradeNos.value = {}
     payBatchId.value = ''; payBatchOutTradeNo.value = ''
   }
 
@@ -399,7 +399,6 @@ export function useHomeState() {
   const payQrCode = ref('')
   const payPollTimer = ref<ReturnType<typeof setInterval> | null>(null)
   const selectedPayMethod = ref('ypay_wxpay')
-  const payOrders = ref<any[]>([])
   const payQrCodes = ref<Record<string, string>>({})
   const payReallyPrices = ref<Record<string, number>>({})
   const payBatchIds = ref<Record<string, string>>({})
@@ -494,7 +493,7 @@ export function useHomeState() {
       const orderPassword = isChaoxing ? chaoxingPassword.value.trim() : password.value.trim()
       const batchRes = await api.orders.batch({ username: orderUsername, password: orderPassword, orders })
       submitSuccess.value = true
-      const allOrders = (batchRes?.data?.orders) || []; payOrders.value = allOrders
+      const allOrders = (batchRes?.data?.orders) || []
       const newIds = allOrders.map((o: any) => o.order_id).join(',')
       const existingIds = sessionStorage.getItem('last_order_ids') || ''
       const allIds = existingIds ? existingIds + ',' + newIds : newIds
@@ -627,7 +626,7 @@ export function useHomeState() {
 
   function closePay() {
     showPayModal.value = false; showPaySuccess.value = false; payTimedOut.value = false; payError.value = ''
-    payQrCode.value = ''; payOrders.value = []; payQrCodes.value = {}; payBatchIds.value = {}; payBatchOutTradeNos.value = {}
+    payQrCode.value = ''; payQrCodes.value = {}; payBatchIds.value = {}; payBatchOutTradeNos.value = {}
     payBatchId.value = ''; payBatchOutTradeNo.value = ''
     if (payPollTimer.value) { clearInterval(payPollTimer.value); payPollTimer.value = null }
   }
@@ -709,7 +708,7 @@ export function useHomeState() {
     fetchBackendPrices, saveSession, clearSaved,
     // Payment
     paying, showPayModal, payTotal, submitSuccess, payError, payQrCode, payPollTimer,
-    selectedPayMethod, payOrders, payQrCodes, payReallyPrices, payBatchIds, payBatchOutTradeNos,
+    selectedPayMethod,
     payBatchId, payBatchOutTradeNo, showPaySuccess, paySuccessAmount, payTimedOut,
     payPhase, payRemaining, payRechecking, recheckPayment, retryPayment,
     handleOrderSuccess, goToOrders, submitAndPay, startPollPayment, onPaySuccessDone, closePay, savePayQr, switchPayMethod,

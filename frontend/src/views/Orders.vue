@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { api, type OrderItem } from '@/api'
@@ -96,8 +96,64 @@ async function load() {
   }
 }
 
-// 轮询：页面可见 + 还有没跑完的单才发请求，全部跑完自动停（对齐参考项目的做法）
-let pollTimer: number | null = null
+// ── 实时更新：SSE 长连接（替代 10s 轮询）──
+//
+// 手机端最在意的是耗电：轮询是「每 10 秒 × N 单」的固定唤醒，而 SSE 只在
+// 服务端真的有变化时推一帧，空闲时链路完全静默（服务端每 40s 一个保活注释）。
+// 连接只在「页面可见 + 还有没跑完的单」时维持，其余时间一律断开：
+// 后台挂着的连接、以及全部订单已终态后的连接，都只是耗电没有收益。
+let es: EventSource | null = null
+let streamFails = 0
+
+const TERMINAL = ['completed', 'failed', 'cancelled']
+
+function closeStream() {
+  if (es) { es.close(); es = null }
+}
+
+function openStream() {
+  if (es || orderIds.value.length === 0) return
+  const spec = orderIds.value.map(id => `${id}:${orderTokens[id] || ''}`).join(',')
+  es = new EventSource('/api/progress/sse/live?orders=' + encodeURIComponent(spec))
+  // 首次建连与浏览器自动重连都会触发 onopen：都补拉一次，
+  // 把断线/切后台期间错过的状态变化补齐
+  es.onopen = () => { streamFails = 0; load() }
+  es.onmessage = (ev) => {
+    let msg: any
+    try { msg = JSON.parse(ev.data) } catch { return }
+    patchOrder(msg)
+  }
+  // 服务端广播缓冲被冲掉时会发 resync：整页重拉一次
+  es.addEventListener('resync', () => { load() })
+  es.onerror = () => {
+    // EventSource 自带重连，但默认约 3 秒一次且不封顶：对端持续异常时会变成
+    // 比轮询更费电的重连风暴，连续失败 3 次就放弃（下次切前台再重试）
+    streamFails++
+    if (streamFails >= 3 || es?.readyState === EventSource.CLOSED) closeStream()
+  }
+}
+
+/** 把推送帧就地打进列表（引用不改，详情抽屉共享同一对象） */
+function patchOrder(msg: any) {
+  const d = msg?.data
+  const oid = d?.order_id
+  if (!oid) return
+  const target = orders.value.find(o => o.order_id === oid)
+  if (!target) { load(); return }
+  if (d.status) target.status = d.status
+  if (d.progress != null) target.progress = d.progress
+  // 终态补一次拉取：拿 finished_at 等收尾字段
+  if (TERMINAL.includes(d.status)) load()
+}
+
+/** 可见 + 有未跑完的单，才维持长连接 */
+function syncStream() {
+  if (document.hidden || !hasPending.value) closeStream()
+  else openStream()
+}
+
+// 首屏拉一次全量，随后交给 SSE 推送；轮询只在 SSE 连不上时才有一点点意义，
+// 所以这里不再保留定时器
 onMounted(async () => {
   loadPlatformNames()
   const routeId = (route.params.id as string) || ''
@@ -107,20 +163,20 @@ onMounted(async () => {
   if (idsStr) orderIds.value = idsStr.split(',').filter(Boolean)
   loadStoredIds()
   await load()
+  syncStream()
+  document.addEventListener('visibilitychange', syncStream)
 
   if (routeId) {
     const target = orders.value.find(o => o.order_id === routeId)
     if (target) detailOrder.value = target
   }
-
-  pollTimer = window.setInterval(() => {
-    if (document.hidden || !hasPending.value) return
-    load()
-  }, 10_000)
 })
 
+watch(hasPending, syncStream)
+
 onUnmounted(() => {
-  if (pollTimer !== null) { clearInterval(pollTimer); pollTimer = null }
+  closeStream()
+  document.removeEventListener('visibilitychange', syncStream)
 })
 
 function copyId(id: string) {
