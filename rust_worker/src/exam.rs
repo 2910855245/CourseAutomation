@@ -27,11 +27,8 @@ static ANSWER_CACHE: LazyLock<DashMap<String, String>> = LazyLock::new(DashMap::
 /// 也就是"格式没对上、模型多半在蒙"的那些题。
 const REVIEW_THRESHOLD: f64 = 0.6;
 
-/// 低置信度复核：用思考模式（reasoning）重算一题。
-///
-/// 思考模式在复杂推理上更稳，官方文档明确它不支持 temperature/logprobs，
-/// 所以这里拿不到置信度、也不做二次比较——只要复核给出非空答案就采纳它。
-/// 返回 None 表示复核失败（调用方保留第一次的答案，不会因此丢题）。
+/// 低置信度复核：用思考模式重算一题（思考模式下官方不支持 logprobs，
+/// 所以不做二次比较，复核给出非空答案就采纳）。None = 复核失败，保留首次答案。
 async fn review_low_confidence(llm: &LlmClient, model: &str, topic: &Value) -> Option<(String, f64)> {
     match ask_deepseek_with(llm, model, topic, Some(true)).await {
         Ok((ans, conf)) if !ans.is_empty() => Some((ans, conf)),

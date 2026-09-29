@@ -435,7 +435,7 @@ function closeDetail() { detailOrder.value = null }
           </svg>
         </div>
         <p class="empty-title">暂无订单</p>
-        <p class="empty-sub">提交任务后，可在这里实时查看处理进度</p>
+        <p class="empty-sub">提交任务后可在此查看进度</p>
         <router-link to="/" class="btn btn-primary">去下单</router-link>
       </div>
 

@@ -557,17 +557,10 @@ async fn order_get(
 
 /// 后台数据看板。
 ///
-/// 口径说明（与订单列表/队列监控保持一致，避免同一屏上两个数字对不上）：
-///   - 「今日/昨日/近 7 天」按本地时间（北京时间）日期前缀；时间戳统一由
-///     queue::now_str() 写入，见 queue::LOCAL_OFFSET_SECS。
-///   - 收入 = 已收款（paid=1 或已记 payment_time）且未取消的订单金额；
-///     未收款金额单列 `receivable`，两者相加才等于订单总额。此前收入把
-///     未付款、已取消的单全部计入，财务报表数字虚高。
-///   - 完成率分母为已进入终态的订单（完成 + 失败 + 取消），不含仍在流转的单，
-///     否则"刚下单还没跑"会稀释完成率，看着像系统在变差。
-///
-/// 聚合次数：订单 1 次全表条件聚合 + 7 天分组 1 次 + 队列 2 次 + AI 用量 3 次，
-/// 替代此前「7 次 COUNT + 3 次 SUM + 每日 2 次 ×7 天」的 24 次扫描。
+/// 口径（与订单列表、队列监控保持一致，同屏数字必须能互相对上）：
+///   - 时间按本地（北京时间）日期前缀；收入只算已收款且未取消的订单，
+///     未收款与"已收款但已取消（待退款）"各自单列。
+///   - 完成率分母为终态订单，避免被刚下单还没跑的单稀释。
 async fn admin_dashboard(State(state): State<AppState>) -> Json<Value> {
     let db = state.db.clone_pool();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
@@ -623,7 +616,7 @@ async fn admin_dashboard(State(state): State<AppState>) -> Json<Value> {
             ).unwrap_or((0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                          0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0.0));
 
-        // 近 7 天趋势：一次分组查询取回订单/收入/失败，避免每天 2 次 COUNT
+        // 近 7 天趋势：一次分组查询取回订单/收入/失败
         let mut day_rows: std::collections::HashMap<String, (i64, f64, i64)> =
             std::collections::HashMap::new();
         {

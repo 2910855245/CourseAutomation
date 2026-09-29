@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useAdminStore } from '@/stores/admin'
 const { changeAdminPassword, changingPw, currentRole, pwForm } = useAdminStore().state().auth
-const { DEEPSEEK_MODELS, chaoxingModel, clearDeepseekKey, deepseekApiKey, deepseekKeyMasked, deepseekTestResult, finalExamModel, homeworkModel, pricingModel, saveDeepseekKey, saveModels, savingDeepseekKey, savingModels, showDeepseekKey, testDeepseekApi, testModelApi, testingDeepseek, testingModel, thinkingMode, visionOcr, savingAiOptions, saveAiOptions } = useAdminStore().state().sysConfig
+const { DEEPSEEK_MODELS, clearDeepseekKey, deepseekApiKey, deepseekKeyMasked, deepseekTestResult, aiModel, saveDeepseekKey, saveModels, savingDeepseekKey, savingModels, showDeepseekKey, testDeepseekApi, testModelApi, testingDeepseek, testingModel, thinkingMode, visionOcr, savingAiOptions, saveAiOptions } = useAdminStore().state().sysConfig
 </script>
 
 <template>
@@ -84,26 +84,15 @@ const { DEEPSEEK_MODELS, chaoxingModel, clearDeepseekKey, deepseekApiKey, deepse
         </div>
       </div>
 
-      <!-- 模型分配 -->
+      <!-- 模型：全站只有一个（此前按业务拆了 4 个下拉，但后端只读考试那个） -->
       <div class="ai-section">
         <div class="ai-section-label">
-          模型分配
+          答题模型
         </div>
         <div class="ai-model-grid">
           <div class="ai-model-card">
-            <div class="ai-model-head">
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              ><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" /></svg>
-              期末考试
-            </div>
             <select
-              v-model="finalExamModel"
+              v-model="aiModel"
               class="ai-model-select"
             >
               <option
@@ -115,110 +104,13 @@ const { DEEPSEEK_MODELS, chaoxingModel, clearDeepseekKey, deepseekApiKey, deepse
               </option>
             </select>
             <div class="ai-model-foot">
-              <span class="ai-model-desc">{{ DEEPSEEK_MODELS.find(m => m.value === finalExamModel)?.desc }}</span>
+              <span class="ai-model-desc">{{ DEEPSEEK_MODELS.find(m => m.value === aiModel)?.desc }}</span>
               <button
                 class="btn-link"
-                :disabled="testingModel === finalExamModel"
-                @click="testModelApi(finalExamModel)"
+                :disabled="testingModel === aiModel"
+                @click="testModelApi(aiModel)"
               >
-                {{ testingModel === finalExamModel ? '...' : '测试' }}
-              </button>
-            </div>
-          </div>
-          <div class="ai-model-card">
-            <div class="ai-model-head">
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              ><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" /></svg>
-              平时作业
-            </div>
-            <select
-              v-model="homeworkModel"
-              class="ai-model-select"
-            >
-              <option
-                v-for="m in DEEPSEEK_MODELS"
-                :key="m.value"
-                :value="m.value"
-              >
-                {{ m.label }}
-              </option>
-            </select>
-            <div class="ai-model-foot">
-              <span class="ai-model-desc">{{ DEEPSEEK_MODELS.find(m => m.value === homeworkModel)?.desc }}</span>
-              <button
-                class="btn-link"
-                :disabled="testingModel === homeworkModel"
-                @click="testModelApi(homeworkModel)"
-              >
-                {{ testingModel === homeworkModel ? '...' : '测试' }}
-              </button>
-            </div>
-          </div>
-          <div class="ai-model-card">
-            <div class="ai-model-head">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10.5V6a2 2 0 00-2-2H4a2 2 0 00-2 2v12a2 2 0 002 2h7"/><path d="M22 10.5L12 16l-3-1.7"/><path d="M12 16v5"/><path d="M22 10.5V12"/></svg>
-              学习通
-            </div>
-            <select v-model="chaoxingModel" class="ai-model-select">
-              <option v-for="m in DEEPSEEK_MODELS" :key="m.value" :value="m.value">
-{{ m.label }}
-</option>
-            </select>
-            <div class="ai-model-foot">
-              <span class="ai-model-desc">{{ DEEPSEEK_MODELS.find(m => m.value === chaoxingModel)?.desc }}</span>
-              <button class="btn-link" :disabled="testingModel === chaoxingModel" @click="testModelApi(chaoxingModel)">
-{{ testingModel === chaoxingModel ? '...' : '测试' }}
-</button>
-            </div>
-          </div>
-          <div class="ai-model-card">
-            <div class="ai-model-head">
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              ><path d="M12 2a5 5 0 015 5v3H7V7a5 5 0 015-5z" /><rect
-                x="3"
-                y="10"
-                width="18"
-                height="12"
-                rx="2"
-              /><circle
-                cx="12"
-                cy="16"
-                r="2"
-              /></svg>
-              定价顾问
-            </div>
-            <select
-              v-model="pricingModel"
-              class="ai-model-select"
-            >
-              <option
-                v-for="m in DEEPSEEK_MODELS"
-                :key="m.value"
-                :value="m.value"
-              >
-                {{ m.label }}
-              </option>
-            </select>
-            <div class="ai-model-foot">
-              <span class="ai-model-desc">{{ DEEPSEEK_MODELS.find(m => m.value === pricingModel)?.desc }}</span>
-              <button
-                class="btn-link"
-                :disabled="testingModel === pricingModel"
-                @click="testModelApi(pricingModel)"
-              >
-                {{ testingModel === pricingModel ? '...' : '测试' }}
+                {{ testingModel === aiModel ? '...' : '测试' }}
               </button>
             </div>
           </div>
@@ -239,7 +131,7 @@ const { DEEPSEEK_MODELS, chaoxingModel, clearDeepseekKey, deepseekApiKey, deepse
                 思考模式
               </div>
               <div class="ai-option-desc">
-                开启后模型先推理再作答，难题正确率更高、耗时与费用也更高；自动=按模型默认（Flash 非思考）。
+                开启后先推理再作答，难题更准，也更慢更贵。
               </div>
             </div>
             <select
@@ -263,7 +155,7 @@ const { DEEPSEEK_MODELS, chaoxingModel, clearDeepseekKey, deepseekApiKey, deepse
                 验证码视觉兜底
               </div>
               <div class="ai-option-desc">
-                本地 OCR 三次都识别不出时，改用模型看图（deepseek-flash 图像理解），只在这时产生费用。
+                本地 OCR 识别不出时改用模型看图，仅失败路径产生费用。
               </div>
             </div>
             <select
@@ -501,21 +393,6 @@ const { DEEPSEEK_MODELS, chaoxingModel, clearDeepseekKey, deepseekApiKey, deepse
   transform: translateY(-2px);
   box-shadow: var(--shadow-sm);
   border-color: transparent;
-}
-
-.ai-model-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--c-text);
-  margin-bottom: 10px;
-}
-
-.ai-model-head svg {
-  color: var(--c-primary);
-  flex-shrink: 0;
 }
 
 .ai-model-select {

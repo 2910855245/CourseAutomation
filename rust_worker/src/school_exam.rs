@@ -559,8 +559,7 @@ async fn solve_exam_api(State(state): State<AppState>, Json(req): Json<SolveRequ
     if req.base_url.is_empty() || req.cookie_str.is_empty() || req.work_id.is_empty() {
         return Json(json!({"success": false, "message": "base_url/cookie_str/work_id 不能为空"}));
     }
-    // API Key / 模型未显式传入时回退管理端配置（此前前端根本没有入口传这两个值，
-    // 只能靠调用方自己塞；而管理端"考试模型"配置项后端从不读取，属于死配置）
+    // API Key / 模型未显式传入时回退管理端配置（此前"考试模型"配置项后端从不读取）
     let api_key = if req.api_key.is_empty() {
         effective_api_key(&state.db).await
     } else {
@@ -570,7 +569,7 @@ async fn solve_exam_api(State(state): State<AppState>, Json(req): Json<SolveRequ
         return Json(json!({"success": false, "message": "DEEPSEEK_API_KEY 未配置"}));
     }
     let model = if req.model.is_empty() {
-        configured_model(&state.db, "deepseek_exam_model", crate::llm::MODEL_FLASH).await
+        configured_model(&state.db, "deepseek_model", crate::llm::MODEL_FLASH).await
     } else {
         req.model.clone()
     };
@@ -626,9 +625,8 @@ async fn test_deepseek(State(state): State<AppState>,
         "****".to_string()
     });
 
-    // 真实请求：走统一 LlmClient（会自动归一化老模型名、按需带思考参数）。
-    // 这样"测试通过"与"实际答题能跑通"才是同一条件——此前测试用裸 reqwest、
-    // 答题走 LlmClient，两边参数不一致时测试通过也可能线上失败。
+    // 走统一 LlmClient，让"测试通过"与"答题能跑通"是同一条件
+    // （此前测试用裸 reqwest，两边参数不一致时可能测试通过而线上失败）
     let thinking = configured_thinking(&state.db).await;
     let client = crate::llm::LlmClient::new(&api_key, "");
     let t0 = std::time::Instant::now();

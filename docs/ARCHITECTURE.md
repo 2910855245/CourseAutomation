@@ -162,13 +162,9 @@ homework_only_price = ¥3  # 可配置
 统一由 `rust_worker/src/llm.rs` 的 `LlmClient` 发出（超时/重试/记账集中一处）。
 
 #### 模型配置
-| 用途 | 默认模型 | 配置项 |
-|------|----------|--------|
-| 期末考试 | deepseek-flash | `deepseek_final_exam_model` |
-| 平时作业 | deepseek-flash | `deepseek_homework_model` |
-| 学习通测验 | deepseek-flash | `deepseek_chaoxing_model` |
-| 定价顾问 | deepseek-v4-pro | `deepseek_pricing_model` |
-| 考试答题 | deepseek-flash | `deepseek_exam_model` |
+答题/测验/讨论共用同一个模型，键名 `deepseek_model`（默认 `deepseek-flash`），
+在「安全中心 → 答题模型」里选。管理端另有 `deepseek_thinking`（思考模式）、
+`deepseek_vision_ocr`（验证码视觉兜底）两个开关。
 
 在售模型只有 `deepseek-flash`（V4.1-Flash）与 `deepseek-v4-pro`。
 旧的 `deepseek-chat` / `deepseek-reasoner` 已于 2026-07-24 弃用；
@@ -177,11 +173,10 @@ reasoner→flash 思考），不需要人工改配置。
 
 #### 用到的官方能力
 - **思考模式**：`thinking:{type:enabled}` + `reasoning_effort`。考试答题首次
-  作答置信度 < 0.6 时，用思考模式复核一遍（`exam::review_low_confidence`）；
-  管理端「思考模式」开关可强制开/关（`deepseek_thinking`）。
+  作答置信度 < 0.6 时，用思考模式复核一遍（`exam::review_low_confidence`）。
 - **JSON Output**：`response_format:{type:json_object}`，学习通批量答题用它替代正则抓取。
 - **图像理解**：验证码在本地 OCR 连续三次识别不出时，用 `deepseek-flash` 看图兜底
-  （`llm::recognize_captcha_vision`，开关 `deepseek_vision_ocr`，默认开）。
+  （`llm::recognize_captcha_vision`）。
 - **上下文硬盘缓存**：前缀命中部分单价只有未命中的 1/50，因此 system prompt 保持固定前缀。
 - **分时计价**：周一至周五 9-12 / 14-18（北京时间）为高峰，其余半价。
 

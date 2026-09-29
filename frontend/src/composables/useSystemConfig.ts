@@ -15,18 +15,14 @@ export function useSystemConfig() {
   const showDeepseekKey = ref(false)
   const testingDeepseek = ref(false)
   const deepseekTestResult = ref<any>(null)
-  const examModel = ref('deepseek-flash')
-  const finalExamModel = ref('deepseek-flash')
-  const homeworkModel = ref('deepseek-flash')
-  const pricingModel = ref('deepseek-v4-pro')
-  const chaoxingModel = ref('deepseek-flash')
+  const aiModel = ref('deepseek-flash')
   const savingModels = ref(false)
   const testingModel = ref('')
   // 当前在售模型（deepseek-chat / deepseek-reasoner 已于 2026-07-24 弃用；
   // 老配置里的旧名字后端会自动归一化，这里只提供在售选项）
   const DEEPSEEK_MODELS = [
-    { value: 'deepseek-flash', label: 'deepseek-flash', desc: 'V4.1-Flash，答题/测验首选，快且便宜' },
-    { value: 'deepseek-v4-pro', label: 'deepseek-v4-pro', desc: 'V4-Pro，复杂推理与分析' },
+    { value: 'deepseek-flash', label: 'deepseek-flash', desc: '快、便宜，答题首选' },
+    { value: 'deepseek-v4-pro', label: 'deepseek-v4-pro', desc: '推理更强，更慢更贵' },
   ]
 
   async function loadDeepseekKey() {
@@ -37,11 +33,7 @@ export function useSystemConfig() {
       deepseekKeyMasked.value = key ? key.slice(0, 6) + '****' + key.slice(-4) : ''
       deepseekApiKey.value = ''
       showDeepseekKey.value = false
-      if (configs.deepseek_exam_model) examModel.value = configs.deepseek_exam_model
-      if (configs.deepseek_final_exam_model) finalExamModel.value = configs.deepseek_final_exam_model
-      if (configs.deepseek_homework_model) homeworkModel.value = configs.deepseek_homework_model
-      if (configs.deepseek_chaoxing_model) chaoxingModel.value = configs.deepseek_chaoxing_model
-      if (configs.deepseek_pricing_model) pricingModel.value = configs.deepseek_pricing_model
+      if (configs.deepseek_model) aiModel.value = configs.deepseek_model
       const t = configs.deepseek_thinking
       thinkingMode.value = t === '1' || t === 'true' ? 'on' : t === '0' || t === 'false' ? 'off' : 'auto'
       // 未配置时默认开启（与后端默认值一致）
@@ -90,11 +82,7 @@ export function useSystemConfig() {
   async function saveModels() {
     savingModels.value = true
     try {
-      await api.adminConfig.set('deepseek_exam_model', examModel.value)
-      await api.adminConfig.set('deepseek_final_exam_model', finalExamModel.value)
-      await api.adminConfig.set('deepseek_homework_model', homeworkModel.value)
-      await api.adminConfig.set('deepseek_pricing_model', pricingModel.value)
-      await api.adminConfig.set('deepseek_chaoxing_model', chaoxingModel.value)
+      await api.adminConfig.set('deepseek_model', aiModel.value)
       store.toast('模型配置已保存', 'success')
     } catch (e: any) { store.toast(e?.message || '保存失败', 'error') }
     finally { savingModels.value = false }
@@ -214,7 +202,7 @@ export function useSystemConfig() {
   return {
     // DeepSeek
     deepseekApiKey, deepseekKeyMasked, savingDeepseekKey, showDeepseekKey, testingDeepseek,
-    deepseekTestResult, examModel, finalExamModel, homeworkModel, pricingModel, chaoxingModel, savingModels,
+    deepseekTestResult, aiModel, savingModels,
     testingModel, DEEPSEEK_MODELS,
     loadDeepseekKey, saveDeepseekKey, clearDeepseekKey, testDeepseekApi, saveModels, testModelApi,
     // AI 能力开关

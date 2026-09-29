@@ -65,7 +65,7 @@ onMounted(loadAnnouncement)
         <div class="card-title-wrap">
           <h3>系统公告</h3>
           <p class="settings-hint">
-            发布公告后，用户打开首页会弹窗提示，确认后不再重复弹出。更新公告内容会重新触发弹窗。
+            改内容会重新弹一次；用户看到后不再重复弹。
           </p>
         </div>
         <span

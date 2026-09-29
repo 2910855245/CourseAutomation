@@ -170,7 +170,7 @@ const schedulerOff = computed(() => queueStats.value?.scheduler_enabled === fals
           </div>
           <div
             class="qkpi-label"
-            title="进程内同时在刷的视频会话总数上限（跨订单共享）。它才是贴着平台风控的旋钮，调大 worker 数不会突破它。"
+            title="进程内同时在刷的视频会话数上限，调大工作线程不会突破它"
           >
             全局会话上限
           </div>

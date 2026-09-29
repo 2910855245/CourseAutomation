@@ -1,17 +1,13 @@
-//! DeepSeek 共享客户端
+//! DeepSeek 共享客户端（对齐 2026-09 官方文档）
 //!
-//! 对齐 2026-09 的 DeepSeek 官方文档：
-//!   - 模型名：`deepseek-flash`（DeepSeek-V4.1-Flash）/ `deepseek-v4-pro`。
-//!     旧的 `deepseek-chat` / `deepseek-reasoner` 已于 2026-07-24 弃用，
-//!     老配置库里存的名字由 [`resolve_model`] 自动归一化，不需要人工改配置。
-//!   - 思考模式：`thinking: {type: enabled|disabled}` + `reasoning_effort`，
-//!     思考模式下 temperature/top_p 等参数会被忽略（不再下发，避免误解）。
-//!   - JSON Output：`response_format: {type: json_object}`（prompt 中必须含 "json"）。
-//!   - 图像理解：`content` 传多模态数组（仅 deepseek-flash 支持）。
-//!   - 上下文硬盘缓存：命中/未命中 tokens 在 `usage` 中返回，命中价是未命中的 1/50。
-//!   - 分时计价：周一至周五 9-12 / 14-18（北京时间）为高峰，其余为空闲（半价）。
-//!
-//! 每次调用结束后把 tokens 与估算费用写入 `ai_usage` 表（后台看板的 AI 成本来源）。
+//! - 在售模型：`deepseek-flash` / `deepseek-v4-pro`。旧的 `deepseek-chat` /
+//!   `deepseek-reasoner` 已于 2026-07-24 弃用，老配置里的名字由 [`resolve_model`]
+//!   自动归一化，不需要人工改配置。
+//! - 思考模式：`thinking:{type}` + `reasoning_effort`（此模式下 temperature 不生效，
+//!   故不下发）。JSON Output：`response_format:{type:json_object}`。
+//!   图像理解：content 传多模态数组（仅 flash 支持）。
+//! - 费用按官方分时单价（工作日 9-12/14-18 为高峰）估算，命中缓存的部分是 1/50 价。
+//! - 每次调用后的 tokens 与费用写入 `ai_usage` 表（看板的 AI 成本来源）。
 
 use anyhow::{anyhow, Context, Result};
 use dashmap::DashMap;
@@ -43,9 +39,8 @@ fn make_client() -> Client {
 
 /// 归一化模型名 → (实际请求的模型, 是否默认走思考模式)
 ///
-/// 老库里的 `deepseek-chat`/`deepseek-reasoner`/`deepseek-v4-flash` 现在都已
-/// 下线或改名，直接照发会 401/404。统一在这里映射：chat→flash 非思考，
-/// reasoner→flash 思考（旧语义就是"推理"，保留行为）。
+/// 老库里的 `deepseek-chat`/`deepseek-reasoner`/`deepseek-v4-flash` 均已下线或改名，
+/// 照发会 401。chat→flash 非思考、reasoner→flash 思考，保留旧语义。
 pub fn resolve_model(name: &str) -> (String, bool) {
     let n = name.trim().to_ascii_lowercase();
     match n.as_str() {
@@ -437,14 +432,9 @@ pub async fn effective_api_key(db: &Db) -> String {
     std::env::var("DEEPSEEK_API_KEY").unwrap_or_default()
 }
 
-/// 验证码视觉识别兜底。
-///
-/// 本地 ddddocr 是首选（免费、毫秒级）；但它的输出是"尽力而为"——遇到扭曲、
-/// 粘连、低对比度的验证码会给出非法结果，此时登录直接失败。这里用
-/// deepseek-flash 的图像理解（官方支持 base64 data URL）再读一次。
-/// 只在本地 OCR 连续判不出可信结果时调用，因此正常路径零成本、零延迟。
-///
-/// 开关：系统配置 `deepseek_vision_ocr`（默认开），置 "0" 可关闭。
+/// 验证码视觉识别兜底：本地 OCR 是首选（免费、毫秒级），三次都判不出可信结果时
+/// 才走这里（flash 的图像理解），因此正常路径零成本零延迟。
+/// 开关：系统配置 `deepseek_vision_ocr`（默认开），置 "0" 关闭。
 pub async fn recognize_captcha_vision(img: &[u8], mime: &str) -> Option<String> {
     let db = USAGE_DB.get()?;
     if cached_config(db, "deepseek_vision_ocr", "1").await.trim() == "0" {

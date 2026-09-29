@@ -1654,18 +1654,6 @@ input:disabled {
   opacity: .82;
 }
 
-.bs-points {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: var(--space-8);
-}
-
-.bs-foot {
-  font-size: var(--fs-xs);
-  opacity: .6;
-}
-
 .login-card {
   padding: var(--space-8);
   display: flex;
