@@ -14,7 +14,6 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::study::{run_study, TaskInput, Video};
 
@@ -42,7 +41,6 @@ pub struct ScanTaskInput {
     pub cookie_str: String,
     #[serde(default)]
     pub course_ids: Vec<String>, // "courseId" 或 "courseId:classId"
-    pub status_file: String,
     #[serde(default)]
     pub push_ws: bool,
     /// 刷课节奏档位（turbo/balanced/gentle；缺省/未知 → 均衡）
@@ -69,10 +67,6 @@ pub struct CourseItem {
     /// .name a 的 href（detail_link，对齐 get_courses）
     #[allow(dead_code)]
     pub detail_link: String,
-}
-
-fn now_ms() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
 }
 
 /// 学校平台 base_url 映射（对齐 config/platforms.py WEBSITES）
@@ -268,29 +262,6 @@ pub async fn fetch_course_videos(client: &Client, cookie: &str, base_url: &str,
     Ok(videos)
 }
 
-async fn write_scan_status(status_file: &str, phase: &str, message: &str,
-                           done_flag: Option<bool>, success: Option<bool>,
-                           extra: &[(&str, Value)]) {
-    let mut map = serde_json::Map::new();
-    map.insert("phase".into(), phase.into());
-    map.insert("message".into(), message.into());
-    map.insert("updated_at".into(), json!(now_ms() as f64 / 1000.0));
-    for (k, v) in extra {
-        map.insert(k.to_string(), v.clone());
-    }
-    if let Some(d) = done_flag {
-        map.insert("done".into(), d.into());
-    }
-    if let Some(s) = success {
-        map.insert("success".into(), s.into());
-    }
-    let body = Value::Object(map).to_string();
-    let tmp = format!("{}.tmp", status_file);
-    if tokio::fs::write(&tmp, body).await.is_ok() {
-        let _ = tokio::fs::rename(&tmp, status_file).await;
-    }
-}
-
 /// 完整任务：扫描全部课程视频 → 链式进入刷课
 pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
                                 push_token: &str) -> Result<()> {
@@ -304,8 +275,6 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
         .filter(|c| !c.is_empty())
         .collect();
 
-    write_scan_status(&task.status_file, "crawl", "正在获取课程...", None, None,
-                      &[]).await;
     let courses = fetch_course_list(&client, &task.cookie_str, &base_url).await?;
     let selected: Vec<&CourseItem> = courses.iter()
         .filter(|c| filter.is_empty() || filter.contains(&c.course_id))
@@ -315,13 +284,8 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
         .map(|c| (c.course_id.clone(), c.name.clone()))
         .collect();
     if selected.is_empty() {
-        write_scan_status(&task.status_file, "error", "未找到课程", Some(true), Some(false),
-                          &[]).await;
         anyhow::bail!("未找到课程");
     }
-    write_scan_status(&task.status_file, "crawl",
-                      &format!("获取到 {} 门课程", selected.len()), None, None,
-                      &[]).await;
 
     // 并发扫描各课程视频（每课程一个 tokio task）。
     // 并发度与错峰由档位决定：急速档全量并行，温柔档一次只扫 1~2 门并长间隔错开。
@@ -374,17 +338,14 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
             }
         }
     }
-    write_scan_status(&task.status_file, "crawl",
-                      &format!("扫描完成 视频={} 失败课程={}", all_videos.len(), scan_failed),
-                      None, None, &[]).await;
-
+    if scan_failed > 0 {
+        tracing::warn!(scan_failed, total = all_videos.len(), "部分课程扫描失败（其余课程照常刷课）");
+    }
     if all_videos.is_empty() {
-        write_scan_status(&task.status_file, "error", "未找到任何视频",
-                          Some(true), Some(false), &[]).await;
         anyhow::bail!("未找到任何视频");
     }
 
-    // 链式进入刷课（复用 study::run_study；cookies/状态文件原样传递）
+    // 链式进入刷课（复用 study::run_study）
     let study_task = TaskInput {
         order_id: task.order_id.clone(),
         username: task.username.clone(),
@@ -398,7 +359,6 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
             })
         }).collect(),
         videos: all_videos,
-        status_file: task.status_file.clone(),
         concurrency: 0,
         push_ws: task.push_ws,
         speed_mode: task.speed_mode.clone(),
@@ -451,9 +411,6 @@ async fn solve_exams(task: &ScanTaskInput, client: &Client, base_url: &str,
                 continue;
             }
             total += 1;
-            // 把考试进度写进状态文件（管理端进度条读的就是它）
-            write_scan_status(&task.status_file, "exam",
-                              &format!("考试 {} / {}", ok, total), None, None, &[]).await;
             match crate::exam::solve_exam(base_url, &task.cookie_str, work_id, course_id, node_id,
                                           &task.api_key, &task.ai_model, "exam", None).await {
                 Ok(r) if r["success"].as_bool() == Some(true) => {
@@ -480,7 +437,7 @@ async fn solve_exams(task: &ScanTaskInput, client: &Client, base_url: &str,
         return Ok(());
     }
     if failed.is_empty() {
-        tracing::info!(order_id = %task.order_id, total, "全部考试已完成");
+        tracing::info!(order_id = %task.order_id, total, passed = ok, "全部考试已完成");
         return Ok(());
     }
     anyhow::bail!("{} 场考试未完成（共 {} 场）：{}", failed.len(), total, failed.join("；"))

@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Multi-project workspace for an online course automation SaaS platform. The primary project is **Anti-Course Cheating Plugin** — a Rust (axum) + Vue3 full-stack system that automates video watching and exam completion for online course platforms (粟湾平台, 劳动教育平台, 中嘉鑫盛, 学习通). Supports multi-user accounts, aggregated payment processing, and in-process background task workers. **Python 后端已彻底移除，唯一服务进程是 `rust_worker`。**
+Multi-project workspace for an online course automation platform. The primary project is **Anti-Course Cheating Plugin** — a Rust (axum) + Vue3 full-stack system that automates video watching and exam completion for online course platforms (学校平台 1/2/3, 学习通). 单人运营：只有管理员账号，下单用户为游客（凭 view_token 查单），聚合支付收款。**Python 后端已彻底移除，唯一服务进程是 `rust_worker`。**
+
+产品文档见 `README.md`，架构细节（含实时通道、单视频时间轴、三档节奏）见 `docs/ARCHITECTURE.md`。
 
 ## Sub-Projects
 
@@ -73,8 +75,9 @@ Vue3 SPA with Pinia, Vue Router, TypeScript. Views: Home (scan + order + pay), A
 - **Multi-website support**: `WEBSITES` 静态数据在 Rust 侧（`scan.rs` 平台表常量）. User data isolated per `data/accounts/<username>/`
 - **Dual task queues**: `school_queue` (school platforms) and `chaoxing_queue` (学习通) independent, each backed by SQLite task tables
 - **Payment**: YPay integration + HMAC verification; VMQ protocol for WeChat/Alipay monitoring; Android APP (`static/ypay-monitor.apk`) for real-time payment detection
-- **Tunnel proxy**: Configured via admin panel, applied to outbound HTTP requests to prevent IP bans
-- **Anti-detection**: TLS fingerprint handling for 学习通, random user agents, semaphore-limited concurrency, randomized delays
+- **Realtime**: `progress.rs` 是唯一广播入口；管理后台用 WS（首帧 auth/sub 控制帧），客户端订单页用 SSE（`/api/progress/sse/live?orders=OID:token`，服务端按 view_token 过滤）。两条通道的心跳/鉴权差异见架构文档
+- **反检测**：随机 user agent、信号量限并发、请求间隔闸门（platform_client::wait_rate_limit）、三档错峰；任何档位并发不得超过 8（有单测）
+- **凭据**：平台密码 AES-256-GCM 加密存 `credentials` 表（`crypto::store`/`load_password`），`orders` 表不落明文
 
 ### Configuration
 
@@ -104,4 +107,3 @@ data/
 - HTTP client: reqwest (rustls); ONNX Runtime via `ort` crate for captcha OCR
 - Sidecar services (systemd units in deploy/):
   - `rust-study-daemon.service` — the one and only backend service (API + SPA + OCR + study)
-- Platform passwords stored in plaintext (no encryption)

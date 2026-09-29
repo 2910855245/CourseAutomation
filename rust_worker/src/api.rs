@@ -419,6 +419,16 @@ async fn ypay_status(State(state): State<AppState>) -> Json<Value> {
 
 // ── 读路径（与 Python 逐字段对齐）──────────────────────────
 
+/// orders 表在 API 层的列清单。**顺序即 [`order_row_to_json`] 的位置索引**。
+///
+/// 此前这段列清单在 5 处各拷一份（列表/单条/管理端分页…），加一列时漏改任何一处，
+/// 该接口的字段就会静默错位（上一轮 `vid` 漏选就是这么来的）。收敛成唯一真源。
+const ORDER_SELECT: &str = "order_id, out_trade_no, ezfpy_trade_no, payment_channel, payment_time,
+        paid_processed, user_id, customer_name, customer_contact, username,
+        website_id, task_type, course_ids, video_count, exam_count, price,
+        notes, status, paid, task_id, admin_note, created_at, updated_at,
+        accepted_at, started_at, finished_at, speed_mode";
+
 fn order_row_to_json(r: &rusqlite::Row, course_ids: &str) -> rusqlite::Result<Value> {
     Ok(json!({
         "order_id": r.get::<_, String>(0)?,
@@ -539,14 +549,10 @@ async fn orders_list(
                 let total: i64 = conn.query_row(
                     "SELECT COUNT(*) FROM orders WHERE status=?1 AND deleted_at IS NULL",
                     rusqlite::params![st], |r| r.get(0))?;
-                let mut stmt = conn.prepare(
-                    "SELECT order_id, out_trade_no, ezfpy_trade_no, payment_channel, payment_time,
-                            paid_processed, user_id, customer_name, customer_contact, username,
-                            website_id, task_type, course_ids, video_count, exam_count, price,
-                            notes, status, paid, task_id, admin_note, created_at, updated_at,
-                            accepted_at, started_at, finished_at, speed_mode
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT {ORDER_SELECT}
                      FROM orders WHERE status=?1 AND deleted_at IS NULL
-                     ORDER BY created_at DESC LIMIT ?2")?;
+                     ORDER BY created_at DESC LIMIT ?2"))?;
                 let mut rows: Vec<Value> = stmt.query_map(rusqlite::params![st, limit], |r| {
                     let cids: String = r.get(12)?;
                     order_row_to_json(r, &cids)
@@ -557,14 +563,10 @@ async fn orders_list(
             None => {
                 let total: i64 = conn.query_row(
                     "SELECT COUNT(*) FROM orders WHERE deleted_at IS NULL", [], |r| r.get(0))?;
-                let mut stmt = conn.prepare(
-                    "SELECT order_id, out_trade_no, ezfpy_trade_no, payment_channel, payment_time,
-                            paid_processed, user_id, customer_name, customer_contact, username,
-                            website_id, task_type, course_ids, video_count, exam_count, price,
-                            notes, status, paid, task_id, admin_note, created_at, updated_at,
-                            accepted_at, started_at, finished_at, speed_mode
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT {ORDER_SELECT}
                      FROM orders WHERE deleted_at IS NULL
-                     ORDER BY created_at DESC LIMIT ?1")?;
+                     ORDER BY created_at DESC LIMIT ?1"))?;
                 let mut rows: Vec<Value> = stmt.query_map(rusqlite::params![limit], |r| {
                     let cids: String = r.get(12)?;
                     order_row_to_json(r, &cids)
@@ -604,12 +606,8 @@ async fn order_get(
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Value>> {
         let conn = db.get()?;
         let row = conn.query_row(
-            "SELECT order_id, out_trade_no, ezfpy_trade_no, payment_channel, payment_time,
-                    paid_processed, user_id, customer_name, customer_contact, username,
-                    website_id, task_type, course_ids, video_count, exam_count, price,
-                    notes, status, paid, task_id, admin_note, created_at, updated_at,
-                    accepted_at, started_at, finished_at, speed_mode
-             FROM orders WHERE order_id=?1 AND deleted_at IS NULL",
+            &format!("SELECT {ORDER_SELECT}
+             FROM orders WHERE order_id=?1 AND deleted_at IS NULL"),
             rusqlite::params![order_id],
             |r| {
                 let cids: String = r.get(12)?;
@@ -1306,12 +1304,8 @@ fn log_event(conn: &rusqlite::Connection, event_type: &str, operator: &str,
 /// 单条订单（含 course_ids 解析），供管理端动作复用
 fn fetch_order(conn: &rusqlite::Connection, order_id: &str) -> rusqlite::Result<Option<Value>> {
     conn.query_row(
-        "SELECT order_id, out_trade_no, ezfpy_trade_no, payment_channel, payment_time,
-                paid_processed, user_id, customer_name, customer_contact, username,
-                website_id, task_type, course_ids, video_count, exam_count, price,
-                notes, status, paid, task_id, admin_note, created_at, updated_at,
-                accepted_at, started_at, finished_at, speed_mode
-         FROM orders WHERE order_id=?1 AND deleted_at IS NULL",
+        &format!("SELECT {ORDER_SELECT}
+         FROM orders WHERE order_id=?1 AND deleted_at IS NULL"),
         rusqlite::params![order_id],
         |r| {
             let cids: String = r.get(12)?;
@@ -1353,11 +1347,7 @@ async fn admin_orders_list(
             |r| r.get(0),
         )?;
         let mut stmt = conn.prepare(&format!(
-            "SELECT order_id, out_trade_no, ezfpy_trade_no, payment_channel, payment_time,
-                    paid_processed, user_id, customer_name, customer_contact, username,
-                    website_id, task_type, course_ids, video_count, exam_count, price,
-                    notes, status, paid, task_id, admin_note, created_at, updated_at,
-                    accepted_at, started_at, finished_at, speed_mode
+            "SELECT {ORDER_SELECT}
              FROM orders WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         ))?;
         let page_args: Vec<String> = args.iter().cloned()
@@ -1574,8 +1564,6 @@ async fn admin_order_execute(State(state): State<AppState>, Path(order_id): Path
                 return;
             }
         };
-        let tmpdir = std::env::temp_dir().join(format!("task_{oid_task}"));
-        let _ = tokio::fs::create_dir_all(&tmpdir).await;
         // 手动执行也要能跑考试环节：与队列路径同一套取配置方式
         let api_key = crate::llm::effective_api_key(&state2.db).await;
         let ai_model = crate::llm::configured_model(&state2.db, "deepseek_model",
@@ -1589,7 +1577,6 @@ async fn admin_order_execute(State(state): State<AppState>, Path(order_id): Path
             base_url,
             cookie_str: session.cookie_str,
             course_ids,
-            status_file: tmpdir.join("status.json").to_string_lossy().to_string(),
             push_ws: true,
             speed_mode,
             task_type,
@@ -1605,7 +1592,6 @@ async fn admin_order_execute(State(state): State<AppState>, Path(order_id): Path
         if let Err(e) = result {
             tracing::warn!(order_id = %oid_task, error = %e, "手动执行任务失败");
         }
-        let _ = tokio::fs::remove_dir_all(&tmpdir).await;
         tasks.remove(&oid_task);
     });
     state.tasks.insert(oid_resp.clone(), handle.abort_handle());

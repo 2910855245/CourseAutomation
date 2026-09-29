@@ -20,6 +20,27 @@ use crate::speed::{SpeedMode, SpeedProfile};
 /// 三档均不改动该比率 —— 提速来自并发与错峰，而不是压缩单个视频的安全等待。
 const MIN_RATIO: f64 = 2.1;
 
+/// studyTime 报满后的续报间隔（秒）。见 [`next_tick_secs`]。
+const TAIL_TICK_SECS: f64 = 30.0;
+
+/// 一次循环该睡多久（秒）。
+///
+/// 视频的时间轴分两段：
+/// - `0 → actual_target`：studyTime 需要逐秒逼近目标，维持 1s 粒度；
+/// - `actual_target → 2.1×时长`：studyTime 已报满，这段只是把墙钟撑满。
+///
+/// 原实现第二段仍按 1s 粒度空转并重复上报同一个 studyTime —— 一个 45 分钟的
+/// 视频要多发约 3000 次内容完全相同的请求，且"1 秒不差"的节奏本身就是机器特征。
+/// 改成 30s 一续报、最后一段按剩余时间精确睡到终点：请求数降两个数量级，
+/// 末次上报仍落在墙钟终点（平台按首末上报的时间跨度判完成）。
+fn next_tick_secs(past_target: bool, wall_left: f64) -> f64 {
+    if !past_target {
+        1.0
+    } else {
+        wall_left.clamp(0.0, TAIL_TICK_SECS)
+    }
+}
+
 /// 进程级同时在刷的视频会话上限（跨订单共享）。
 ///
 /// 队列 worker 数可以调到几十，但每个订单内部还有自己的课程并发（急速档 8），
@@ -83,7 +104,6 @@ pub struct TaskInput {
     pub base_url: String,
     pub cookies: Vec<CookieKV>,
     pub videos: Vec<Video>,
-    pub status_file: String,
     #[serde(default)]
     pub concurrency: usize,
     #[serde(default)]
@@ -105,21 +125,11 @@ struct Shared {
     cookie_str: Mutex<String>,
     username: String,
     password: String,
-    status_file: String,
     push_ws: bool,
     /// 随推送一起上报：服务端据此把消息投到 order:{id} topic
     order_id: String,
     /// 本任务的节奏档位参数（并发/错峰/请求间隔）
     profile: SpeedProfile,
-    progress: Mutex<Progress>,
-}
-
-#[derive(Default)]
-struct Progress {
-    done: u64,
-    total: u64,
-    total_study: u64,
-    total_duration: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -226,8 +236,16 @@ async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
     let mut last_report: u64 = 0;
 
     loop {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        total_time += 1;
+        // 报满 studyTime 后一次睡到下一续报点，不再每秒空转（见 next_tick_secs）
+        let past_target = total_time >= actual_target;
+        let wall_left = video.duration as f64 * MIN_RATIO - start.elapsed().as_secs_f64();
+        let tick = next_tick_secs(past_target, wall_left);
+        if tick > 0.0 {
+            tokio::time::sleep(Duration::from_secs_f64(tick)).await;
+        }
+        // 本轮的推进量（秒）：未报满时恒为 1，报满后为一整个续报间隔
+        let step = tick.max(1.0) as u64;
+        total_time += step;
 
         // 自适应上报间隔（与原实现一致）
         let remaining = actual_target.saturating_sub(total_time.min(actual_target));
@@ -307,12 +325,6 @@ async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
             }
         }
 
-        // 更新进度
-        {
-            let mut p = shared.progress.lock().await;
-            p.total_study += 1;
-        }
-
         // 完成条件：studyTime 报满 + 墙钟 ≥ 2.1×时长
         if total_time >= actual_target && start.elapsed().as_secs_f64() >= video.duration as f64 * MIN_RATIO {
             return Ok(true);
@@ -376,27 +388,6 @@ async fn cookie_refresh_loop(shared: Arc<Shared>) {
     }
 }
 
-/// status.json 原子写（tmp + rename；Windows 上无 fsync 保证但 rename 原子）
-async fn write_status(shared: &Shared, extra: &[(&str, &str)]) {
-    let p = shared.progress.lock().await;
-    let mut map = serde_json::Map::new();
-    map.insert("video_done".into(), p.done.into());
-    map.insert("video_total".into(), p.total.into());
-    map.insert("video_pct".into(), if p.total > 0 { (p.done * 100 / p.total) as u64 } else { 0 }.into());
-    map.insert("total_study_time".into(), p.total_study.into());
-    map.insert("total_duration".into(), p.total_duration.into());
-    map.insert("updated_at".into(), serde_json::Value::from(
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)));
-    for (k, v) in extra {
-        map.insert(k.to_string(), serde_json::Value::from(v.clone()));
-    }
-    let body = serde_json::Value::Object(map).to_string();
-    let tmp = format!("{}.tmp", shared.status_file);
-    if tokio::fs::write(&tmp, body).await.is_ok() {
-        let _ = tokio::fs::rename(&tmp, &shared.status_file).await;
-    }
-}
-
 async fn push_ws(shared: &Shared, mut data: serde_json::Value, push_url: &str, push_token: &str) {
     if !shared.push_ws {
         return;
@@ -422,18 +413,15 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
         .map(|c| format!("{}={}", c.name, c.value))
         .collect::<Vec<_>>().join(";");
 
-    let total_duration: u64 = task.videos.iter().map(|v| v.duration).sum();
     let shared = Arc::new(Shared {
         client,
         base_url,
         cookie_str: Mutex::new(cookie_str),
         username: task.username.clone(),
         password: task.password.clone(),
-        status_file: task.status_file.clone(),
         push_ws: task.push_ws,
         order_id: task.order_id.clone(),
         profile,
-        progress: Mutex::new(Progress { total: task.videos.len() as u64, total_duration, ..Default::default() }),
     });
 
     // 启动时 cookie 有效性检查
@@ -447,10 +435,6 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
         }
     }
 
-    write_status(&shared, &[
-        ("phase", "video"),
-        ("message", &format!("开始刷视频 (共{}个)", task.videos.len())),
-    ]).await;
     push_ws(&shared, serde_json::json!({"type": "progress", "phase": "video"}), push_url, push_token).await;
 
     // 心跳 + cookie 续期后台任务
@@ -491,13 +475,6 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
                 match study_video(&shared, v).await {
                     Ok(true) => {
                         done_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let mut p = shared.progress.lock().await;
-                        p.done = done_counter.load(std::sync::atomic::Ordering::Relaxed);
-                        drop(p);
-                        write_status(&shared, &[
-                            ("phase", "video"),
-                            ("message", ""),
-                        ]).await;
                     }
                     Ok(false) | Err(_) => {
                         failed_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -536,25 +513,9 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
         None => tracing::warn!(done, total, "平台进度复核失败（响应异常），跳过该项检查"),
         _ => {}
     }
-    let actual_pct_str = actual_pct.map(|p| p.to_string()).unwrap_or_default();
-
     if failed > 0 {
-        write_status(&shared, &[
-            ("phase", "done"),
-            ("done", "true"),
-            ("success", "false"),
-            ("video_pct", &actual_pct_str),
-            ("message", &format!("部分视频未完成 {done}/{total}")),
-        ]).await;
         anyhow::bail!("部分视频未完成 {done}/{total}");
     }
-    write_status(&shared, &[
-        ("phase", "done"),
-        ("done", "true"),
-        ("success", "true"),
-        ("video_pct", "100"),
-        ("message", "任务完成"),
-    ]).await;
     eprintln!("[rust_worker] 任务完成 {done}/{total}");
     Ok(())
 }
@@ -582,4 +543,25 @@ async fn verify_platform_progress(shared: &Shared) -> Option<u64> {
     }
     if total == 0 { return Some(0); }
     Some(viewed * 100 / total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 回归：报满 studyTime 后的"撑墙钟"阶段必须按 30s 粒度推进，
+    /// 而不是 1s 空转（否则一个 45 分钟视频要多发上千次重复上报）
+    #[test]
+    fn test_tail_tick_avoids_per_second_spin() {
+        // 未报满：维持 1s 粒度（studyTime 要逐秒逼近目标）
+        assert_eq!(next_tick_secs(false, 9999.0), 1.0);
+        assert_eq!(next_tick_secs(false, 0.2), 1.0);
+        // 报满后：按 30s 续报
+        assert_eq!(next_tick_secs(true, 300.0), TAIL_TICK_SECS);
+        assert_eq!(next_tick_secs(true, 30.0), TAIL_TICK_SECS);
+        // 尾段：按剩余时间精确睡到终点，不多睡
+        assert!((next_tick_secs(true, 5.5) - 5.5).abs() < 1e-9);
+        // 已到终点：不再睡（由完成判据收尾）
+        assert_eq!(next_tick_secs(true, -3.0), 0.0);
+    }
 }

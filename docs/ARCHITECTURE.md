@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-Anti-Course Cheating Plugin 是一个在线课程自动化 SaaS 平台，支持视频自动观看、考试自动答题、多用户管理和聚合支付处理。后端为单个 Rust 二进制（axum），无 Python 依赖。
+成都文理学院网课平台解决方案（仓库名 Anti-Course Cheating Plugin）：面向高校在线课程平台的自主学习管理工具，覆盖课程扫描、视频学习调度、考试辅助与聚合支付。后端为单个 Rust 二进制（axum），无 Python 依赖；前端为 Vue 3 SPA，由后端进程直接托管。
 
 ## 技术栈
 
@@ -23,7 +23,7 @@ Anti-Course Cheating Plugin/
 │       ├── main.rs                 # axum 入口：路由、中间件、启动初始化
 │       ├── auth.rs                 # JWT 认证 + 黑名单
 │       ├── api.rs / order.rs       # 订单生命周期、定价
-│       ├── progress.rs             # 进度查询
+│       ├── progress.rs             # 实时推送中枢：WS（后台）+ SSE（客户端）
 │       ├── scan.rs                 # 课程扫描（平台表常量）
 │       ├── login.rs                # 学校平台登录（本地 OCR 图形码）
 │       ├── study.rs                # 刷课循环（tokio 多并发）
@@ -66,7 +66,7 @@ Anti-Course Cheating Plugin/
   填写的联系方式在后台 `brush_cards.contact` 人工找回。
 - 免费：全局开关 `free_mode`，或持有效刷课卡（`card_valid_days` 天）。
   命中后订单 0 元、标记 `payment_channel='free'`、**直接入队**（不走支付与对账），
-  免费单默认走保守档。
+  档位**强制保守**（不付费只能用串行，见「三档节奏」）。
 - 邀请：分享链接形如 `/?ref=<邀请码>`；中间件在链接落地时即记录邀请（不依赖前端上报）。
   `invite_require_order=1`（默认）时，好友下单才算一次有效邀请；每人只计一次、自己邀自己不计。
 - 领卡：每满 `invite_threshold` 位有效邀请可领 1 张，可重复领取（`invite_threshold` /
@@ -114,13 +114,15 @@ POST /api/pricing/apply-package  # 应用打包定价
 
 #### 订单系统
 ```
-订单生命周期
-创建 -> 待支付 -> 已支付 -> 接单中 -> 执行中 -> 已完成
+订单生命周期（客户视角只有三态）
+创建 -> 待支付 -> 处理中 -> 已完成；失败 / 已取消 单独标出
+（内部状态 queued/running/retrying 等不再暴露给客户，只在后台队列页可见）
 
 API
-POST /api/orders/batch    # 批量创建订单
-GET  /api/orders/my       # 用户订单列表
-POST /api/orders/{id}/accept  # 接单
+POST /api/orders/batch        # 批量创建订单（价格与档位由后端强制）
+GET  /api/orders/{id}         # 单条查单（游客用 view_token）
+GET  /api/orders/             # 列表（管理员 Bearer）
+POST /api/orders/clear-history
 ```
 
 ### 2. 任务执行（进程内 tokio 任务）
@@ -136,6 +138,19 @@ POST /api/orders/{id}/accept  # 接单
 - 点选验证码（need_code=2）不支持，直接报错；图形码（need_code=1）走进程内 ONNX OCR
 - 取消任务：管理端取消会 abort 真实运行中的 tokio 任务（任务表存 AbortHandle），
   不只是改库状态
+
+#### 单视频时间轴（`study::study_video`）
+
+一个视频要同时满足两个条件才算完成：**studyTime 报满**（`时长 - 已看时长`）与
+**墙钟 ≥ 时长 × 2.1**（防平台 beginTime/finalTime 重叠检测）。两段采取的节奏不同：
+
+| 阶段 | 节奏 | 原因 |
+|------|------|------|
+| `0 → 报满` | 1s 粒度推进，上报间隔随剩余时长自适应放大（1/3/5/10/15/20/30s） | studyTime 需要逐秒逼近目标 |
+| `报满 → 2.1×` | 30s 一续报，最后一段按剩余时间**精确睡到终点** | 这段只是撑墙钟；原先每秒重复上报同一 studyTime，一个 45 分钟视频要多发约 3000 次无意义请求，且"1 秒不差"本身就是机器特征 |
+
+`next_tick_secs` 有单测钉住这三条边界（未报满=1s、报满=30s、尾段精确）。
+会话许可（`GLOBAL_STUDY_SESSIONS`）在整个视频生命周期内持有，等待期间不发请求。
 
 ### 3. 前端 (`frontend/`)
 
@@ -163,7 +178,8 @@ Admin.vue (管理员后台)
 | 保守档 | **完全串行**：课程并发 1、扫描并发 1，课程间 30s 错峰 | gentle |
 
 任何档位的并发上限都不得超过 8（平台重叠检测安全线），有单测兜住。
-免费单（全局免费或刷课卡）默认走保守档。
+**免费单（全局免费或刷课卡）由服务端强制改写为保守档** —— 适中/暴力是付费权益，
+前端置灰只是提示，真正的闸门在 `order.rs`（客户端传 turbo 也会被覆盖）。
 
 ### 4. 定价系统详解
 
@@ -224,6 +240,33 @@ reasoner→flash 思考），不需要人工改配置。
 - 单门考试成本约 ¥0.01-0.05（极低）
 - 每次调用后的 tokens 与估算费用写入 `ai_usage` 表，后台看板按
   今日 / 近 7 天 / 累计汇总，并按调用场景拆出成本占比
+
+## 实时通道（进度推送）
+
+`progress.rs` 是唯一广播入口（`broadcast(state, topic, kind, data)`），信封格式：
+
+```json
+{"v":1,"topic":"order:ORD-x","type":"order.update","data":{"order_id":"ORD-x","status":"running"},"ts":1759132800123,"seq":12871}
+```
+
+同一份广播喂两条通道，按**使用场景**分工，而不是两套机制并存：
+
+| 通道 | 使用方 | 鉴权 | 为什么 |
+|------|--------|------|--------|
+| `GET /api/progress/ws/live` | 管理后台（桌面端） | 首帧 `auth`（管理员 JWT）/ `sub`（订单 view_token 列表）控制帧，5s 未表态关闭 | 需要双向控制帧；后台常驻桌面，不受手机省电约束 |
+| `GET /api/progress/sse/live?orders=OID:token,...` | 客户端订单页（手机端） | 查询串里的订单凭证，逐条比对 `view_token`，无效直接 401 | 只需单向推送：原生 `EventSource` 自带重连（含退避），前端不必实现 ping / 半开检测 / 指数退避 |
+
+服务端约束（两条通道一致）：
+
+- **topic 过滤在服务端做**（隐私，不是性能）：载荷含订单相关文本，客户端过滤等于把别人的订单暴露给 DevTools。
+- SSE 的凭证只能走查询串，因此**没有"关闭过滤"的开关**，不会因环境变量配错而全站广播。
+- 心跳：WS 30s / SSE 40s（40s 既压住反代 60s 空闲超时，也不至于让手机基带频繁醒来）；
+  SSE 另带 `Cache-Control: no-cache` 与 `X-Accel-Buffering: no`，防止反代把帧憋在缓冲区。
+- 广播缓冲被冲掉（`Lagged`）时下发 `resync` 帧让前端重拉一次，避免界面静默停在旧状态。
+
+客户端连接生命周期（省电的关键，`Orders.vue`）：**页面可见且还有未跑完的单才维持连接**，
+切后台或全部终态立即断开；建连与自动重连成功各补拉一次全量；连续 3 次失败放弃重连
+（`EventSource` 默认约 3s 一次且不封顶，对端异常时比重轮询更费电）。
 
 ## 运行方式
 

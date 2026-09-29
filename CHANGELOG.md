@@ -1,3 +1,29 @@
+# 2026-09-29 手机端实时通道改 SSE + 商业规则收敛 + 死代码清理
+
+## 变更内容
+
+- **手机端省电**：订单页从「10s 轮询 × N 单」改为 **SSE 长连接**（`GET /api/progress/sse/live?orders=OID:token,...`）——
+  逐条比对 `view_token` 才放行 topic（无效 401）、服务端过滤、40s 心跳注释、`no-cache` + `X-Accel-Buffering: no` 防反代缓冲、
+  掉帧下发 `resync` 让前端重拉；前端用原生 `EventSource`，**可见且有未跑完的单才维持连接**，
+  隐藏/全部终态即断开，连续 3 次失败放弃重连（避免自带重试变成重连风暴）
+- **管理后台仍走 WS**：需要 `auth`/`sub` 控制帧，且后台在桌面端，不受手机省电约束（两通道分工见架构文档）
+- **窄屏降耗**：≤768px 关闭粘顶栏/固定底栏的实时背景模糊（滚动每帧重算，GPU 常驻开销）
+- **商业规则（服务端强制）**：免费单（全局免费/刷课卡）**强制保守档**、价格逐单以后端为准（堵住传 `price=0` 白嫖）、
+  刷课卡按笔数扣额度、有效邀请只认已收款订单；`/api/admin/promo/stats` 移入鉴权组
+- **算法优化**：单视频"撑墙钟"阶段由每秒空转/重复上报改为 **30s 续报 + 尾段精确睡到终点**
+  （一个 45 分钟视频少发约 3000 次同内容请求，1 秒不差的节奏也不像机器），`next_tick_secs` 有单测
+- **架构清理**：`api.rs` 五份 orders 列清单收敛为 `ORDER_SELECT` 唯一真源（此前 `vid` 漏选就是拷贝漂移导致）；
+  删除 Python 时代遗留的 `status_file`/`cx_plan.json` 只写不读机制（每视频一次磁盘写），连带只写不读的 `Progress`
+- **死代码**：删除已下线「风险监控」残留 CSS（Admin.vue / main.css）；`useHomeState` 删除只写不读的 `payOrders`
+- **文档**：README 重写为《成都文理学院网课平台解决方案》；删除 `docs/BROWSER_TESTING.md` 与旧设计稿；
+  架构文档新增「单视频时间轴」「实时通道」两节
+
+## 验收
+
+- Rust 单测 69 passed、前端单测 16 passed、`cargo build --release` 与 `npm run build`（vue-tsc）通过
+- SSE 实测：无效凭证 401、有效凭证 `200 text/event-stream`、真实 `order.update` 帧直达对应订单、40s 心跳到达
+- 真账号只读验证：`/api/courses/scan` 两个账号分别 3/3 与 2/3 平台登录成功（失败那个是平台密码不一致，非代码问题）
+
 # 2026-09-29 UI 重构 + WebSocket 实时化 + 技术栈升级
 
 ## 变更内容

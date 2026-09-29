@@ -327,19 +327,15 @@ async fn handle_job_failure(state: &AppState, job: &QueueJob, err: &str) {
     }
 }
 
-/// 执行单个学校任务：登录 → 扫描+刷课 → 状态更新（status.json 协议）
+/// 执行单个学校任务：登录 → 扫描+刷课 → 状态更新
 async fn execute_school_job(state: &AppState, job: &QueueJob) {
     let base_url = crate::scan::platform_base_url(job.website_id);
-    let tmpdir = std::env::temp_dir().join(format!("task_{}", job.job_id));
-    let _ = tokio::fs::create_dir_all(&tmpdir).await;
-    let status_file = tmpdir.join("status.json").to_string_lossy().to_string();
 
     // 会话复用：缓存/落盘 cookie 有效则跳过登录（避免频繁登录触发平台风控）
     let session = match crate::session::get_session(&base_url, &job.username, &job.password).await {
         Ok(s) => s,
         Err(e) => {
             let msg = format!("登录失败: {e}");
-            let _ = tokio::fs::remove_dir_all(&tmpdir).await;
             handle_job_failure(state, job, &msg).await;
             return;
         }
@@ -364,7 +360,6 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
         base_url: base_url.clone(),
         cookie_str: session.cookie_str,
         course_ids,
-        status_file: status_file.clone(),
         // 队列任务同样要推进度：否则管理端只能靠手动刷新看任务跑到哪了
         push_ws: true,
         speed_mode: job.speed_mode.clone(),
@@ -386,7 +381,6 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
         }
         Err(e) => handle_job_failure(state, job, &e.to_string()).await,
     }
-    let _ = tokio::fs::remove_dir_all(&tmpdir).await;
 }
 
 /// 启动时回收上次运行遗留的 running 任务。
