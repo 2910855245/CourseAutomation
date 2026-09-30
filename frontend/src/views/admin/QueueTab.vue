@@ -6,6 +6,15 @@ const { applyAutoConcurrency, cancelQueueJob, clearQueueHistory, deleteQueueJob,
 
 // 调度器开关的真实状态：接口未返回该字段时按"启用"处理（兼容旧后端）
 const schedulerOff = computed(() => queueStats.value?.scheduler_enabled === false)
+
+// 双通道：付费优先、免费限额，各自在跑/排队要分开看
+const paidLane = computed<any>(() => queueStats.value?.school?.paid ?? null)
+const freeLane = computed<any>(() => queueStats.value?.school?.free ?? null)
+function lanePct(l: any): number {
+  if (!l?.max_workers) return 0
+  return Math.min(100, Math.round(((l.active_workers || 0) / l.max_workers) * 100))
+}
+const laneQueueing = (l: any) => l?.pending ?? 0
 </script>
 
 <template>
@@ -59,7 +68,10 @@ const schedulerOff = computed(() => queueStats.value?.scheduler_enabled === fals
       </div>
 
       <div class="queue-config-row">
-        <label class="qcfg-label">最大并发数</label>
+        <label
+          class="qcfg-label"
+          title="付费通道（含持卡优先单）的并发上限；免费通道额度在推广页单独配置"
+        >付费并发上限</label>
         <input
           v-model.number="maxWorkersInput"
           type="number"
@@ -153,14 +165,6 @@ const schedulerOff = computed(() => queueStats.value?.scheduler_enabled === fals
             失败
           </div>
         </div>
-        <div class="qkpi">
-          <div class="qkpi-val qkpi-blue">
-            {{ queueStats.active_workers || 0 }}<span class="qkpi-sub">/{{ queueStats.max_workers || '-' }}</span>
-          </div>
-          <div class="qkpi-label">
-            工作线程（在跑/上限）
-          </div>
-        </div>
         <div
           v-if="queueStats.global_study_sessions"
           class="qkpi"
@@ -173,6 +177,43 @@ const schedulerOff = computed(() => queueStats.value?.scheduler_enabled === fals
             title="进程内同时在刷的视频会话数上限，调大工作线程不会突破它"
           >
             全局会话上限
+          </div>
+        </div>
+      </div>
+
+      <!-- 双通道：付费优先、免费限额，积压分开看（付费单会不会被免费单拖住，看这里） -->
+      <div
+        v-if="paidLane && freeLane"
+        class="queue-lanes"
+      >
+        <div class="qlane">
+          <div class="qlane-head">
+            <span class="qlane-name">付费通道</span>
+            <span class="qlane-num mono">{{ paidLane.active_workers || 0 }} / {{ paidLane.max_workers || '-' }}</span>
+          </div>
+          <div class="qlane-bar">
+            <div
+              class="qlane-fill"
+              :style="{ width: lanePct(paidLane) + '%' }"
+            />
+          </div>
+          <div class="qlane-foot">
+            排队 <b class="mono">{{ laneQueueing(paidLane) }}</b> · 执行中 <b class="mono">{{ paidLane.running || 0 }}</b>
+          </div>
+        </div>
+        <div class="qlane">
+          <div class="qlane-head">
+            <span class="qlane-name">免费通道</span>
+            <span class="qlane-num mono">{{ freeLane.active_workers || 0 }} / {{ freeLane.max_workers || '-' }}</span>
+          </div>
+          <div class="qlane-bar">
+            <div
+              class="qlane-fill free"
+              :style="{ width: lanePct(freeLane) + '%' }"
+            />
+          </div>
+          <div class="qlane-foot">
+            排队 <b class="mono">{{ laneQueueing(freeLane) }}</b> · 执行中 <b class="mono">{{ freeLane.running || 0 }}</b>
           </div>
         </div>
       </div>
@@ -454,6 +495,44 @@ const schedulerOff = computed(() => queueStats.value?.scheduler_enabled === fals
 .qkpi-val.qkpi-bad { color: var(--c-danger); }
 .qkpi-val.qkpi-blue { color: var(--c-info); }
 .qkpi-label { font-size: 11.5px; color: var(--c-text-secondary); margin-top: 4px; font-weight: 500; }
+
+/* ==================== 双通道 ==================== */
+.queue-lanes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+.qlane {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  padding: 14px 18px;
+  box-shadow: var(--shadow-xs);
+  animation: q-in .3s cubic-bezier(.32, .72, .35, 1) both;
+}
+.qlane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.qlane-name { font-size: 12.5px; font-weight: 600; color: var(--c-text-secondary); }
+.qlane-num { font-size: 15px; font-weight: 700; color: var(--c-text); }
+.qlane-bar {
+  height: 8px;
+  background: var(--c-bg);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.qlane-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--c-primary);
+  transition: width .4s cubic-bezier(.32, .72, .35, 1);
+}
+.qlane-fill.free { background: var(--c-success); }
+.qlane-foot { font-size: 12px; color: var(--c-text-muted); margin-top: 10px; }
+.qlane-foot b { color: var(--c-text-secondary); font-weight: 600; }
 
 /* ==================== 筛选区 ==================== */
 .section-actions {

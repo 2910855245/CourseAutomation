@@ -113,7 +113,9 @@ export interface DashboardStats {
   }
   queue: {
     enabled: boolean; paused: boolean
-    active_workers: number; max_workers: number
+    /** 双通道分开：付费池与免费额度上限不同，占用率各自算 */
+    paid: { active_workers: number; max_workers: number }
+    free: { active_workers: number; max_workers: number }
     pending: number; retrying: number; running: number
     waiting: number; failed: number; completed: number
     backlog_minutes: number

@@ -50,7 +50,15 @@ const speedModeDesc = computed(() => ({
 // 因此"要不要付钱"有两种命中方式：领了免单资格（限时免费 / 刷课卡），
 // 或者这单根本只有视频要刷 —— 两者都锁保守档。
 // 判据必须与后端一致（后端按逐单价格是否 0 强制改写档位）。
-const freeTotal = computed(() => isPrivileged.value || benefit.value.free || summary.value.total <= 0)
+// 但不能单看 total<=0：定价还没回来时 total 也是 0，按钮会先显示"免费提交"
+// 再跳成"提交并支付"，档位也被错误锁到保守 —— 所以定价加载中按付费处理。
+const freeTotal = computed(() =>
+  isPrivileged.value || benefit.value.free ||
+  summary.value.exams === 0 ||
+  (!loadingPrices.value && summary.value.total <= 0),
+)
+/** 合计展示：定价加载中时不显示 ¥0.00（避免"0 元下单"的误导） */
+const totalText = computed(() => loadingPrices.value ? '计价中…' : `¥${summary.value.total.toFixed(2)}`)
 // 免单原因要分开说：持卡免的是考试费，视频免费是所有人本来就有的
 const freeTagText = computed(() => {
   if (isPrivileged.value) return '管理员免单'
@@ -443,7 +451,7 @@ onMounted(async () => {
               </div>
               <div v-else class="co-total">
                 <span class="co-total-label">合计</span>
-                <span class="co-total-val mono">¥{{ summary.total.toFixed(2) }}</span>
+                <span class="co-total-val mono">{{ totalText }}</span>
               </div>
               <button
                 class="btn btn-primary btn-lg"
@@ -458,7 +466,7 @@ onMounted(async () => {
 
           <!-- 计费口径：刷视频免费，答题/考试按门课收费 -->
           <p class="billing-note">
-            刷视频<b>免费</b>（免费单串行排队）<template v-if="!freeTotal">；本次含未完成的答题/考试，按门课计费<span class="mono"> ¥{{ summary.total.toFixed(2) }}</span>，付费后进入快速通道、不用排队</template><template v-else>；所选课程没有待完成的答题/考试，直接提交即可开跑</template>
+            刷视频<b>免费</b>（免费单串行排队）<template v-if="!freeTotal">；本次含未完成的答题/考试，按门课计费<span class="mono"> {{ totalText }}</span>，付费后进入快速通道、不用排队</template><template v-else>；所选课程没有待完成的答题/考试，直接提交即可开跑</template>
           </p>
 
           <!-- 营销位：免费资格与邀请进度 -->

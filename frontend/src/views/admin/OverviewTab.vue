@@ -55,12 +55,11 @@ const sortedAlerts = computed(() =>
   }),
 )
 
-/** 队列占用率：worker 用了几个 / 上限（上限为 0 时按 0 处理，不显示 NaN 宽度） */
-const workersPct = computed(() => {
-  const q = dash.value?.queue
-  if (!q || !q.max_workers) return 0
-  return Math.min(100, Math.round((q.active_workers / q.max_workers) * 100))
-})
+/** 通道占用率：分子分母必须来自同一通道（付费池与免费额度上限不同，混算会虚高） */
+function lanePct(active: number | undefined, max: number | undefined): number {
+  if (!max) return 0
+  return Math.min(100, Math.round(((active || 0) / max) * 100))
+}
 
 /** 近 7 天：收入折线（左轴）+ 订单柱（右轴），图例由面板头部 HTML 承担 */
 const trendOption = computed(() => {
@@ -406,16 +405,30 @@ const sceneNames: Record<string, string> = {
               {{ dash.queue.paused ? '已暂停' : dash.queue.enabled ? '运行中' : '调度器停用' }}
             </span>
           </div>
-          <div class="q-workers">
-            <div class="q-workers-head">
-              <span>并发占用</span>
-              <span class="mono">{{ dash.queue.active_workers }} / {{ dash.queue.max_workers || '—' }}</span>
+          <div class="q-lanes">
+            <div class="q-lane">
+              <div class="q-workers-head">
+                <span>付费通道</span>
+                <span class="mono">{{ dash.queue.paid?.active_workers || 0 }} / {{ dash.queue.paid?.max_workers || '—' }}</span>
+              </div>
+              <div class="q-bar-bg">
+                <div
+                  class="q-bar-fill"
+                  :style="{ width: lanePct(dash.queue.paid?.active_workers, dash.queue.paid?.max_workers) + '%' }"
+                />
+              </div>
             </div>
-            <div class="q-bar-bg">
-              <div
-                class="q-bar-fill"
-                :style="{ width: workersPct + '%' }"
-              />
+            <div class="q-lane">
+              <div class="q-workers-head">
+                <span>免费通道</span>
+                <span class="mono">{{ dash.queue.free?.active_workers || 0 }} / {{ dash.queue.free?.max_workers || '—' }}</span>
+              </div>
+              <div class="q-bar-bg">
+                <div
+                  class="q-bar-fill free"
+                  :style="{ width: lanePct(dash.queue.free?.active_workers, dash.queue.free?.max_workers) + '%' }"
+                />
+              </div>
             </div>
           </div>
           <div class="q-grid">
@@ -813,14 +826,14 @@ const sceneNames: Record<string, string> = {
 .chart-slim { width: 100%; }
 
 /* ==================== 队列健康 ==================== */
-.q-workers { margin-bottom: 18px; }
+.q-lanes { display: flex; flex-direction: column; gap: 14px; margin-bottom: 18px; }
+.q-lane { display: flex; flex-direction: column; gap: 6px; }
 .q-workers-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   font-size: 12px;
   color: var(--c-text-secondary);
-  margin-bottom: 8px;
 }
 .mono { font-variant-numeric: tabular-nums; }
 .q-bar-bg {
@@ -835,6 +848,7 @@ const sceneNames: Record<string, string> = {
   background: var(--c-primary);
   transition: width .4s cubic-bezier(.32, .72, .35, 1);
 }
+.q-bar-fill.free { background: var(--c-success); }
 .q-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

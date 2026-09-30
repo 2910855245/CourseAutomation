@@ -795,6 +795,9 @@ async fn admin_dashboard(State(state): State<AppState>) -> Json<Value> {
             [], |r| r.get(0)).ok().flatten();
         let max_workers = crate::queue::config_get_blocking(&conn, "queue_max_workers")
             .and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+        let free_max_workers = crate::queue::config_get_blocking(&conn, crate::queue::CFG_FREE_MAX_WORKERS)
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or_else(|| default_free_max_workers() as i64);
         let paused = crate::queue::config_get_blocking(&conn, "queue_paused")
             .map(|v| v == "1").unwrap_or(false);
         let backlog_minutes = oldest_pending.as_deref()
@@ -921,8 +924,15 @@ async fn admin_dashboard(State(state): State<AppState>) -> Json<Value> {
             "queue": {
                 "enabled": crate::queue::dispatcher_enabled_public(),
                 "paused": paused,
-                "active_workers": crate::queue::active_workers(),
-                "max_workers": max_workers,
+                // 双通道分开报：分子必须配本通道的分母，免费在跑数算进付费额度会虚高
+                "paid": {
+                    "active_workers": crate::queue::active_workers_in(crate::queue::Lane::Paid),
+                    "max_workers": max_workers,
+                },
+                "free": {
+                    "active_workers": crate::queue::active_workers_in(crate::queue::Lane::Free),
+                    "max_workers": free_max_workers,
+                },
                 "pending": q_pending, "retrying": q_retrying, "running": q_running,
                 "waiting": q_waiting, "failed": q_failed, "completed": q_completed,
                 "backlog_minutes": backlog_minutes,
