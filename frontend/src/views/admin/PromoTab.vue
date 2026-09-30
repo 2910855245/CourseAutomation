@@ -15,8 +15,6 @@ const threshold = ref(3)
 const requireOrder = ref(true)
 const validDays = ref(30)
 const maxOrders = ref(0)
-// 免费通道并发数：刷视频免费但串行排队，这一项决定"同时放几个免费单在跑"
-const freeMaxWorkers = ref(2)
 
 const CONFIG_KEYS = {
   free_mode: 'free_mode',
@@ -25,7 +23,6 @@ const CONFIG_KEYS = {
   require_order: 'invite_require_order',
   valid_days: 'card_valid_days',
   max_orders: 'card_max_orders',
-  free_max_workers: 'free_max_workers',
 }
 
 async function load() {
@@ -41,7 +38,6 @@ async function load() {
     requireOrder.value = c.require_order !== false
     validDays.value = c.valid_days ?? 30
     maxOrders.value = c.max_orders ?? 0
-    freeMaxWorkers.value = c.free_max_workers ?? 2
   } catch (e: any) {
     store.toast(e?.message || '加载推广数据失败', 'error')
   } finally { loading.value = false }
@@ -57,8 +53,6 @@ async function save() {
       [CONFIG_KEYS.require_order, requireOrder.value ? '1' : '0'],
       [CONFIG_KEYS.valid_days, String(Math.max(1, Math.min(3650, Math.floor(validDays.value || 1))))],
       [CONFIG_KEYS.max_orders, String(Math.max(0, Math.floor(maxOrders.value || 0)))],
-      // 与后端 queue 的 clamp 一致（1..=32），越界值直接夹住而不是让后端静默回退
-      [CONFIG_KEYS.free_max_workers, String(Math.max(1, Math.min(32, Math.floor(freeMaxWorkers.value || 1))))],
     ]
     for (const [k, v] of pairs) await api.adminConfig.set(k, v)
     store.toast('推广配置已保存', 'success')
@@ -158,15 +152,10 @@ onMounted(load)
             <label>一张卡可用订单数（0=不限）</label>
             <input v-model.number="maxOrders" type="number" min="0" class="opt-input full">
           </div>
-          <div class="field">
-            <label>免费通道并发数（刷视频）</label>
-            <input v-model.number="freeMaxWorkers" type="number" min="1" max="32" class="opt-input full">
-          </div>
         </div>
 
         <p class="settings-hint">
-          免费通道与付费通道额度独立：付费答题永远不用排在免费刷课的队尾。
-          免费通道开得越大，平台风控压力与付费单的等待体验都会变差。
+          免费通道的并发额度（同时放几个免费单在跑）在「队列监控」页配置，与付费额度并排。
         </p>
 
         <button class="btn btn-primary" :disabled="saving" @click="save">

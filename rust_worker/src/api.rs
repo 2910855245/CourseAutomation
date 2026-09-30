@@ -1951,11 +1951,24 @@ async fn set_pause(state: &AppState, keys: &[&str], value: &str, msg: &str) -> J
     Json(json!({"success": true, "message": msg}))
 }
 
-/// 并发数配置：?max_workers=N 或 ?auto=true（按机器规格推荐）
+/// 并发数配置：?max_workers=N（付费通道）/ ?free_max_workers=N（免费通道）/ ?auto=true
+///
+/// 两条通道额度独立配置，写进同一个配置表，调度器 5s 内热加载生效
+/// （见 queue::read_runtime_config）。
 async fn queue_config(
     State(state): State<AppState>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Json<Value> {
+    if let Some(raw) = params.get("free_max_workers") {
+        let n = match raw.parse::<usize>() {
+            Ok(n) if n > 0 => n.clamp(1, MAX_FREE_WORKERS_CEILING),
+            _ => return Json(json!({"success": false, "message": "free_max_workers 非法"})),
+        };
+        return match crate::queue::config_set(&state.db, crate::queue::CFG_FREE_MAX_WORKERS, &n.to_string()).await {
+            Ok(()) => Json(json!({"success": true, "message": "免费通道并发已更新", "data": {"free_max_workers": n}})),
+            Err(e) => Json(json!({"success": false, "message": e.to_string()})),
+        };
+    }
     let specs = tokio::task::spawn_blocking(|| server_specs().clone())
         .await
         .unwrap_or(Value::Null);
@@ -2002,6 +2015,9 @@ fn server_specs() -> &'static Value {
 /// 并发上限硬边界，与 queue::MAX_WORKERS_CEILING 保持一致
 const MAX_WORKERS_CEILING: usize = 64;
 
+/// 免费通道并发上限，与 queue::MAX_FREE_WORKERS_CEILING 保持一致
+const MAX_FREE_WORKERS_CEILING: usize = 64;
+
 /// 默认并发：CPU 核数 - 1（夹在 1..=64），与队列调度器启动默认一致。
 /// Rust 任务全是 I/O 等待，上限远高于 Python 时代的 8 —— 提高的是"同时等
 /// 多少个视频的墙钟"，不是"每秒打多少请求"（后者由全局闸门固定在 ≈2 req/s）。
@@ -2010,13 +2026,13 @@ fn default_max_workers() -> usize {
         .saturating_sub(1).max(1).clamp(1, MAX_WORKERS_CEILING)
 }
 
-/// 免费通道默认并发，与 queue::default_free_max_workers 同源（免费是成本项，刻意小）
+/// 免费通道默认并发，与 queue::default_free_max_workers 同源（默认 8，管理端可热改）
 fn default_free_max_workers() -> usize {
     std::env::var("RUST_FREE_MAX_WORKERS").ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n > 0)
-        .unwrap_or(2)
-        .clamp(1, 32)
+        .unwrap_or(8)
+        .clamp(1, MAX_FREE_WORKERS_CEILING)
 }
 
 #[cfg(target_os = "linux")]

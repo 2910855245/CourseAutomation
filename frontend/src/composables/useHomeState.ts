@@ -6,19 +6,6 @@ import { api, type PlatformResult, type CourseItem } from '@/api'
 export function useHomeState() {
   const store = useAppStore()
 
-  // ── Role detection ──
-  const userRole = ref<'admin' | null>(null)
-  const isPrivileged = computed(() => !!userRole.value)
-
-  function detectUserRole() {
-    // 管理员徽章：仅检查 admin token（用户体系已删除）
-    userRole.value = store.isAdminLoggedIn ? 'admin' : null
-  }
-
-  function handleVisibilityChange() {
-    if (document.visibilityState === 'visible') detectUserRole()
-  }
-
   // ── Session persistence ──
   const LS_KEY = 'course_platform_remember'
 
@@ -471,7 +458,7 @@ export function useHomeState() {
           }
         }
       }
-      const free = isPrivileged.value || benefit.value.free
+      const free = benefit.value.free
       const orders = Object.entries(grouped).map(([w, g]) => {
         const wid = parseInt(w)
         let taskType: string
@@ -694,8 +681,6 @@ export function useHomeState() {
   }
 
   return {
-    // Role
-    userRole, isPrivileged, detectUserRole, handleVisibilityChange,
     // Scan
     username, password, scanning, rescanning, scanDone, allDone, isLeaving, scanData, countdown,
     activeTab, chaoxingUsername, chaoxingPassword, startChaoxingScan,

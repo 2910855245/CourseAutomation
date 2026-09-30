@@ -11,7 +11,6 @@ const store = useAppStore()
 const { load: loadPlatformNames, getName: getPlatformName } = usePlatformNames()
 
 const {
-  userRole, isPrivileged, detectUserRole, handleVisibilityChange,
   username, password, scanning, rescanning, scanDone, allDone, isLeaving, scanData, countdown,
   activeTab, chaoxingUsername, chaoxingPassword, startChaoxingScan,
   loginError, failedPlatforms, reloginDialog, reloginPassword, reloginLoading, loginErrorCountdown,
@@ -53,7 +52,7 @@ const speedModeDesc = computed(() => ({
 // 但不能单看 total<=0：定价还没回来时 total 也是 0，按钮会先显示"免费提交"
 // 再跳成"提交并支付"，档位也被错误锁到保守 —— 所以定价加载中按付费处理。
 const freeTotal = computed(() =>
-  isPrivileged.value || benefit.value.free ||
+  benefit.value.free ||
   summary.value.exams === 0 ||
   (!loadingPrices.value && summary.value.total <= 0),
 )
@@ -61,7 +60,6 @@ const freeTotal = computed(() =>
 const totalText = computed(() => loadingPrices.value ? '计价中…' : `¥${summary.value.total.toFixed(2)}`)
 // 免单原因要分开说：持卡免的是考试费，视频免费是所有人本来就有的
 const freeTagText = computed(() => {
-  if (isPrivileged.value) return '管理员免单'
   if (benefit.value.reason === 'card') return '刷课卡免考试费'
   if (benefit.value.reason === 'global') return '限时免费'
   return '视频免费'
@@ -120,12 +118,9 @@ const fmtCountdown = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padS
 onBeforeUnmount(() => {
   if (autoRedirectTimer) { clearInterval(autoRedirectTimer); autoRedirectTimer = null }
   if (payPollTimer.value) { clearTimeout(payPollTimer.value); payPollTimer.value = null }
-  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 
 onMounted(async () => {
-  detectUserRole()
-  document.addEventListener('visibilitychange', handleVisibilityChange)
   loadPlatformNames()
   checkAnnouncement()
   loadBenefit()
@@ -412,11 +407,13 @@ onMounted(async () => {
                 <span class="sp-opt-sub">{{ isSpeedLocked(opt.key) ? '付费可用' : opt.sub }}</span>
               </button>
             </div>
-            <p v-if="benefit.free && speedMode === 'gentle'" class="sp-free">
-              {{ benefit.reason === 'card' ? '刷课卡' : '限时免费' }}只能使用保守档（一节课接一节课）。
-              想要更快？付费下单即可解锁适中 / 暴力档。
-            </p>
-            <p v-else-if="speedMode === 'turbo'" class="sp-warn">
+            <!-- 三种通道的规则摘要：与后端判定一致（免费锁保守档 / 持卡插队 / 付费解锁三档） -->
+            <div class="sp-rules">
+              <span class="sp-rule"><b>免费刷课</b>免费队列串行 · 锁保守档</span>
+              <span class="sp-rule"><b>插队刷课</b>持卡排免费队列队首 · 免考试费</span>
+              <span class="sp-rule"><b>付费答题 / 考试</b>独立通道不排队 · 三档任选</span>
+            </div>
+            <p v-if="speedMode === 'turbo'" class="sp-warn">
               暴力档并发最高（已控制在平台检测安全线内），建议仅在需要当天见效时使用。
             </p>
           </div>
@@ -433,7 +430,7 @@ onMounted(async () => {
                   <span class="co-stat"><b class="mono">{{ summary.exams }}</b> 场考试</span>
                 </template>
               </div>
-              <div v-if="!(isPrivileged || benefit.free) && summary.breakdown.length > 0" class="co-breakdown">
+              <div v-if="!benefit.free && summary.breakdown.length > 0" class="co-breakdown">
                 <span v-for="(b, i) in summary.breakdown.slice(0, 3)" :key="i" class="co-bd-item">
                   {{ b.name.length > 10 ? b.name.slice(0, 10) + '…' : b.name }} <span class="mono">{{ b.videos }}</span>节 <span class="mono">¥{{ b.price.toFixed(2) }}</span>
                 </span>
@@ -1166,7 +1163,7 @@ onMounted(async () => {
   background: var(--c-primary-soft);
   box-shadow: inset 0 0 0 1px var(--c-primary);
 }
-/* 付费档位在免费待遇下置灰：不是禁用而是"要解锁"，所以保留可点击（点了给出提示） */
+/* 免费单（纯视频 / 免单待遇）只能保守档：不是禁用而是"要解锁"，保留可点击（点了给出提示） */
 .sp-opt.locked {
   opacity: .55;
   cursor: not-allowed;
@@ -1414,11 +1411,20 @@ onMounted(async () => {
 }
 .ps-link:hover { text-decoration: underline; }
 
-.sp-free {
-  font-size: 12px;
-  color: var(--c-success);
-  line-height: 1.7;
+/* 三种通道的规则摘要：把"为什么这两个档被锁"讲在明面上，判据与后端一致 */
+.sp-rules {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
   margin-top: 10px;
+  font-size: var(--fs-xs);
+  line-height: 1.7;
+  color: var(--c-text-muted);
+}
+.sp-rule b {
+  margin-right: var(--space-1);
+  color: var(--c-text);
+  font-weight: 600;
 }
 
 .co-total-val.free {

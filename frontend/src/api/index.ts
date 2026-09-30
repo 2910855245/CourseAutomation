@@ -204,6 +204,7 @@ export const api = {
     pause: (queue?: string) => post<ApiResponse<any>>(queue ? '/api/queue/pause/' + queue : '/api/queue/pause'),
     resume: (queue?: string) => post<ApiResponse<any>>(queue ? '/api/queue/resume/' + queue : '/api/queue/resume'),
     config: (max_workers: number, queue?: string) => post<ApiResponse<any>>('/api/queue/config' + buildQuery({ max_workers, queue })),
+    freeConfig: (free_max_workers: number) => post<ApiResponse<any>>('/api/queue/config' + buildQuery({ free_max_workers })),
     autoConfig: (queue?: string) => post<ApiResponse<any>>('/api/queue/config' + buildQuery({ auto: true, queue })),
     detect: () => get<ApiResponse<any>>('/api/queue/detect'),
   },

@@ -14,6 +14,8 @@ export function usePayments() {
   const loadingQueue = ref(false)
   const queuePausing = ref(false)
   const maxWorkersInput = ref(0)
+  // 免费通道额度：与付费额度独立，两个输入框并排放在队列监控页
+  const freeMaxWorkersInput = ref(0)
   const serverSpecs = ref<any>(null)
 
   async function loadQueueData() {
@@ -27,6 +29,7 @@ export function usePayments() {
       queueStats.value = sr.data
       queueJobs.value = jr.data
       maxWorkersInput.value = sr.data.max_workers || 1
+      freeMaxWorkersInput.value = sr.data.school?.free?.max_workers || 1
       detectServerSpecs()
     } catch (e: any) { store.toast(e.message || '加载队列数据失败', 'error') }
     finally { loadingQueue.value = false }
@@ -53,6 +56,11 @@ export function usePayments() {
 
   async function setMaxWorkers() {
     try { await api.queue.config(maxWorkersInput.value, undefined); loadQueueData(); store.toast('并发数已更新', 'success') }
+    catch (e: any) { store.toast(e.message, 'error') }
+  }
+
+  async function setFreeMaxWorkers() {
+    try { await api.queue.freeConfig(freeMaxWorkersInput.value); loadQueueData(); store.toast('免费通道并发已更新', 'success') }
     catch (e: any) { store.toast(e.message, 'error') }
   }
 
@@ -93,7 +101,7 @@ export function usePayments() {
   }
 
   // ── Pay test ──
-  const payTestChecks = ref<Array<{name: string; ok: boolean; msg: string}>>([])
+  const payTestChecks = ref<Array<{ name: string; ok: boolean; msg: string }>>([])
   const payTestLoading = ref(false)
   const payTestStarted = ref(false)
   const payTestQrImage = ref('')
@@ -139,7 +147,7 @@ export function usePayments() {
       try {
         const r = await api.ypay.payTest.check(payTestBatchId, { out_trade_no: payTestBatchId, trade_no: payTestTradeNo })
         if (r.data?.paid) { stopPayTestPolling(); payTestPaid.value = true; payTestPolling.value = false }
-      } catch {}
+      } catch { }
     }, 3000)
   }
 
@@ -156,8 +164,8 @@ export function usePayments() {
 
   return {
     // Queue
-    queueStats, queueJobs, queueStatusFilter, queueFilter, loadingQueue, queuePausing, maxWorkersInput, serverSpecs,
-    loadQueueData, setQueueFilter, pauseQueue, resumeQueue, setMaxWorkers, detectServerSpecs, applyAutoConcurrency,
+    queueStats, queueJobs, queueStatusFilter, queueFilter, loadingQueue, queuePausing, maxWorkersInput, freeMaxWorkersInput, serverSpecs,
+    loadQueueData, setQueueFilter, pauseQueue, resumeQueue, setMaxWorkers, setFreeMaxWorkers, detectServerSpecs, applyAutoConcurrency,
     cancelQueueJob, deleteQueueJob, retryQueueJob, clearQueueHistory,
     // Pay test
     payTestChecks, payTestLoading, payTestStarted, payTestQrImage, payTestReallyPrice,

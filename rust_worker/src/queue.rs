@@ -109,11 +109,12 @@ pub fn active_workers() -> usize {
 /// 已经不是 worker 数而是平台出站闸门（见 platform_client::wait_rate_limit）。
 const MAX_WORKERS_CEILING: usize = 64;
 
-/// 免费通道默认并发数
-const DEFAULT_FREE_WORKERS: usize = 2;
-/// 免费通道并发上限的硬边界。免费是成本项，额度上限远低于付费通道：
-/// 真正贴着平台风险的是"同时在跑的会话总数"，免费池开大只会推高风控压力。
-const MAX_FREE_WORKERS_CEILING: usize = 32;
+/// 免费通道默认并发数（管理端可热改）
+const DEFAULT_FREE_WORKERS: usize = 8;
+/// 免费通道并发上限的硬边界，与付费通道同量级：免费单里只有视频，且被钉在
+/// 保守档（串行），真正贴着平台风险的是进程内会话总数，由 study::GLOBAL_STUDY_SESSIONS
+/// 那道闸统一兜住 —— 免费池开大只会先撞上它，不会绕过它。
+const MAX_FREE_WORKERS_CEILING: usize = 64;
 
 /// 免费通道并发数的配置键（后台可热改）
 pub const CFG_FREE_MAX_WORKERS: &str = "free_max_workers";
@@ -585,8 +586,10 @@ impl RuntimeConfig {
 
 /// 免费通道默认并发数。
 ///
-/// 刻意比付费通道小得多：免费单是"用流量换口碑"的成本项，免费池开太大既拖慢
-/// 付费单的排队体验，也把平台风控压力提上来。默认 2 路，管理端可调。
+/// 免费是成本项，但不再压到 2 路：免费单只有视频，且服务端已把档位钉成保守档
+/// （整单串行），单条订单本来就不会打出并发峰；真正的总闸是进程内视频会话数
+/// （study::GLOBAL_STUDY_SESSIONS），免费池开得比它大也只会先排在那里。
+/// 默认与 CPU 核数相当，管理端可热改（1..=64）。
 fn default_free_max_workers() -> usize {
     std::env::var("RUST_FREE_MAX_WORKERS").ok()
         .and_then(|v| v.parse::<usize>().ok())
@@ -730,8 +733,9 @@ mod tests {
     fn test_free_max_workers_default_within_ceiling() {
         let n = default_free_max_workers();
         assert!(n >= 1 && n <= MAX_FREE_WORKERS_CEILING, "免费默认并发越界: {n}");
-        // 免费额度默认必须远小于付费上限，否则"免费不挤占付费"的承诺形同虚设
-        assert!(n <= DEFAULT_FREE_WORKERS, "免费默认并发不应大于 {DEFAULT_FREE_WORKERS}");
+        // 免费通道的上界不得反超付费通道：否则免费单能拿到比付费更大的额度，
+        // "付费优先"的承诺直接被额度配置架空
+        assert!(MAX_FREE_WORKERS_CEILING <= MAX_WORKERS_CEILING);
     }
 
     /// 池隔离 + 付费免排队。

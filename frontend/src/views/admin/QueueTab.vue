@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useAdminStore } from '@/stores/admin'
 const { fmtDate } = useAdminStore().state().dashboard
-const { applyAutoConcurrency, cancelQueueJob, clearQueueHistory, deleteQueueJob, detectServerSpecs, loadQueueData, loadingQueue, maxWorkersInput, pauseQueue, queueFilter, queueJobs, queuePausing, queueStats, queueStatusFilter, resumeQueue, retryQueueJob, serverSpecs, setMaxWorkers } = useAdminStore().state().payments
+const { applyAutoConcurrency, cancelQueueJob, clearQueueHistory, deleteQueueJob, detectServerSpecs, freeMaxWorkersInput, loadQueueData, loadingQueue, maxWorkersInput, pauseQueue, queueFilter, queueJobs, queuePausing, queueStats, queueStatusFilter, resumeQueue, retryQueueJob, serverSpecs, setFreeMaxWorkers, setMaxWorkers } = useAdminStore().state().payments
 
 // 调度器开关的真实状态：接口未返回该字段时按"启用"处理（兼容旧后端）
 const schedulerOff = computed(() => queueStats.value?.scheduler_enabled === false)
@@ -15,6 +15,12 @@ function lanePct(l: any): number {
   return Math.min(100, Math.round(((l.active_workers || 0) / l.max_workers) * 100))
 }
 const laneQueueing = (l: any) => l?.pending ?? 0
+
+/** 进度显示：收敛到 1 位小数（1/61 不再显示成 1.639344262295082），整数省略 .0 */
+function pctText(v: number | undefined) {
+  const s = Number(v || 0).toFixed(1)
+  return s.endsWith('.0') ? s.slice(0, -2) : s
+}
 </script>
 
 <template>
@@ -70,7 +76,7 @@ const laneQueueing = (l: any) => l?.pending ?? 0
       <div class="queue-config-row">
         <label
           class="qcfg-label"
-          title="付费通道（含持卡优先单）的并发上限；免费通道额度在推广页单独配置"
+          title="付费通道（含持卡优先单）的并发上限"
         >付费并发上限</label>
         <input
           v-model.number="maxWorkersInput"
@@ -82,6 +88,26 @@ const laneQueueing = (l: any) => l?.pending ?? 0
         <button
           class="btn btn-primary btn-sm"
           @click="setMaxWorkers"
+        >
+          应用
+        </button>
+      </div>
+
+      <div class="queue-config-row">
+        <label
+          class="qcfg-label"
+          title="免费通道（纯视频单 + 持卡插队单）的并发上限，与付费额度互不挤占"
+        >免费并发上限</label>
+        <input
+          v-model.number="freeMaxWorkersInput"
+          type="number"
+          min="1"
+          max="64"
+          class="qcfg-input"
+        >
+        <button
+          class="btn btn-primary btn-sm"
+          @click="setFreeMaxWorkers"
         >
           应用
         </button>
@@ -313,10 +339,13 @@ const laneQueueing = (l: any) => l?.pending ?? 0
                   v-if="j.progress !== undefined"
                   class="q-progress"
                 >
-                  <div
-                    class="q-prog-bar"
-                    :style="{ width: j.progress + '%' }"
-                  />
+                  <div class="q-prog-track">
+                    <div
+                      class="q-prog-bar"
+                      :style="{ width: pctText(j.progress) + '%' }"
+                    />
+                  </div>
+                  <span class="q-prog-text mono">{{ pctText(j.progress) }}%</span>
                 </div>
                 <span v-else>-</span>
               </td>
@@ -622,17 +651,29 @@ const laneQueueing = (l: any) => l?.pending ?? 0
 
 /* ==================== 进度条 ==================== */
 .q-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.q-prog-track {
   width: 84px;
   height: 6px;
   background: var(--c-bg);
   border-radius: 999px;
   overflow: hidden;
+  flex: none;
 }
 .q-prog-bar {
   height: 100%;
   background: var(--c-primary);
   border-radius: 999px;
   transition: width .35s cubic-bezier(.32, .72, .35, 1);
+}
+.q-prog-text {
+  font-size: 11.5px;
+  color: var(--c-text-secondary);
+  min-width: 36px;
+  text-align: right;
 }
 
 /* ==================== 操作区 ==================== */

@@ -491,10 +491,6 @@ pub async fn admin_stats(db: &Db) -> Result<Value> {
             Ok(json!({"code": r.get::<_, String>(0)?, "invited": r.get::<_, i64>(1)?,
                       "converted": r.get::<_, i64>(2)?}))
         })? { top.push(r?); }
-        // 免费通道并发数：回显后台表单（读的是调度器同一个配置键）
-        let free_max_workers = crate::queue::config_get_blocking(&conn, crate::queue::CFG_FREE_MAX_WORKERS)
-            .and_then(|v| v.parse::<i64>().ok())
-            .unwrap_or(2);
         Ok(json!({
             "config": {
                 "free_mode": cfg.free_mode,
@@ -503,7 +499,6 @@ pub async fn admin_stats(db: &Db) -> Result<Value> {
                 "require_order": cfg.require_order,
                 "valid_days": cfg.valid_days,
                 "max_orders": cfg.max_orders,
-                "free_max_workers": free_max_workers,
             },
             "visitors": visitors, "visitors_today": visitors_today,
             "invites": invites, "invites_valid": invites_valid,
