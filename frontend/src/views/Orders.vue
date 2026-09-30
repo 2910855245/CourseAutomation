@@ -57,6 +57,11 @@ function tagClass(o: OrderItem) {
 /** 进度条只在真的在跑的时候出现 */
 function showProgress(o: OrderItem) { return group(o) === 'running' && pct(o) > 0 }
 function pct(o: OrderItem) { return o.progress != null ? o.progress : 0 }
+/** 显示用：历史数据里存过未取整的浮点（如 1.639344262295082），统一收敛到 1 位小数 */
+function pctText(o: OrderItem) {
+  const s = Number(pct(o)).toFixed(1)
+  return s.endsWith('.0') ? s.slice(0, -2) : s
+}
 
 const filters: { key: string; label: string }[] = [
   { key: '', label: '全部' },
@@ -381,7 +386,7 @@ const fmtMoney = (n: number) => `¥${(n || 0).toFixed(2)}`
             <div class="ocp-bar">
               <div class="ocp-fill" :style="{ width: pct(o) + '%' }" />
             </div>
-            <span class="ocp-pct mono">{{ pct(o) }}%</span>
+            <span class="ocp-pct mono">{{ pctText(o) }}%</span>
           </div>
 
           <footer
@@ -450,7 +455,7 @@ const fmtMoney = (n: number) => `¥${(n || 0).toFixed(2)}`
             <div class="ocp-bar">
               <div class="ocp-fill" :style="{ width: pct(detailOrder) + '%' }" />
             </div>
-            <span class="ocp-pct mono">{{ pct(detailOrder) }}%</span>
+            <span class="ocp-pct mono">{{ pctText(detailOrder) }}%</span>
           </div>
         </div>
       </div>

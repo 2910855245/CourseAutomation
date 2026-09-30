@@ -603,8 +603,10 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
                 }
             };
             // 每节结束回报一次进度：进度条按**成功**节数走，
-            // 失败的单独写在步骤文案里 —— 不能拿"尝试过的节数"冒充"刷成功的节数"
-            let pct = if total_videos > 0 { done as f64 * 100.0 / total_videos as f64 } else { 0.0 };
+            // 失败的单独写在步骤文案里 —— 不能拿"尝试过的节数"冒充"刷成功的节数"。
+            // 收敛到 1 位小数：原始浮点（如 1/61 → 1.639344262295082）落库后
+            // 会在订单页整串显示出来
+            let pct = if total_videos > 0 { (done as f64 * 1000.0 / total_videos as f64).round() / 10.0 } else { 0.0 };
             let step = if failed > 0 {
                 format!("已完成 {done}/{total_videos} 节（失败 {failed}）")
             } else {
