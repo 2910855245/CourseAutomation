@@ -138,8 +138,43 @@ pub async fn push_progress(
         }
         (format!("order:{order_id}"), payload)
     };
+    persist_job_progress(&state, &payload).await;
     broadcast(&state, &topic, &kind, payload);
     Json(json!({"success": true, "message": "已推送"})).into_response()
+}
+
+/// 带进度数值的推送帧顺手落库。
+///
+/// 订单页与后台队列监控读的是 `queue_jobs_*` 的 progress 列；引擎只广播不落库的话，
+/// 刷新页面进度条又回到 0%（此前正是如此：整单跑完前永远是 0，末尾直接跳 100）。
+/// 让引擎继续不感知数据库，落库收敛在这一个入口，两条推送链路都受益。
+async fn persist_job_progress(state: &AppState, payload: &Value) {
+    let order_id = payload.get("order_id").and_then(Value::as_str).unwrap_or("");
+    let Some(pct) = payload.get("progress").and_then(Value::as_f64) else { return };
+    if order_id.is_empty() {
+        return;
+    }
+    let order_id = order_id.to_string();
+    let step = payload.get("step").and_then(Value::as_str).unwrap_or("").to_string();
+    let done = payload.get("done").and_then(Value::as_i64).unwrap_or(0);
+    let total = payload.get("total").and_then(Value::as_i64).unwrap_or(0);
+    let pool = state.db.clone_pool();
+    let _ = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let conn = pool.get()?;
+        for table in ["queue_jobs_school", "queue_jobs_chaoxing"] {
+            // 只推进运行中的行：终态任务不允许被迟到的帧改回去
+            let _ = conn.execute(
+                &format!(
+                    "UPDATE {table} SET progress=?1, completed_steps=?2, total_steps=?3,
+                            current_step_name=?4
+                     WHERE order_id=?5 AND status='running' AND deleted_at IS NULL"
+                ),
+                rusqlite::params![pct, done, total, step, order_id],
+            );
+        }
+        Ok(())
+    })
+    .await;
 }
 
 /// 解析 `orders=OID:token,OID:token` → 允许的 topic 集合。

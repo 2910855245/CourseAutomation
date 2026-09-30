@@ -256,7 +256,10 @@ async fn scan_course(client: &Client, cookie: &str, base_url: &str,
         &format!("{base}/user/study_record/work"), course_id).await;
 
     let videos: Vec<Value> = videos_raw.iter().map(|v| {
-        let status = if v.viewed_duration >= v.duration && v.duration > 0 {
+        // 已学判定必须与刷课侧共用同一个函数：以前两处各写一套，
+        // duration 解析异常时会出现"扫描说待刷、刷课说已完成"
+        // （收钱不干活还报 100%）。时长未知一律不算已学。
+        let status = if crate::study::video_is_done(v) {
             "已学"
         } else if v.viewed_duration > 0 {
             "未学完"

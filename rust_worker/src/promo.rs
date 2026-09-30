@@ -59,8 +59,14 @@ impl PromoConfig {
     }
 }
 
-/// 该访客当前能享受的免费待遇。免费即**只能用保守档**（串行），
-/// 适中/暴力是付费权益 —— 服务端会在创建订单时强制改写档位，前端置灰只是提示。
+/// 该访客当前能享受的免费待遇。
+///
+/// 商业规则：刷视频对所有人免费，平台收入来自答题/考试。因此这里的 `free`
+/// 含义是「**这一单不用付钱**」，来源只有两种：全局免费活动，或刷课卡
+/// （卡的权益 = 免考试费 + 优先排队）。
+///
+/// 免费单一律只能用保守档（串行）：适中/暴力是付费权益，服务端会在创建订单时
+/// 强制改写档位，前端置灰只是提示。
 #[derive(Debug, Clone, Default)]
 pub struct Benefit {
     pub free: bool,
@@ -485,6 +491,10 @@ pub async fn admin_stats(db: &Db) -> Result<Value> {
             Ok(json!({"code": r.get::<_, String>(0)?, "invited": r.get::<_, i64>(1)?,
                       "converted": r.get::<_, i64>(2)?}))
         })? { top.push(r?); }
+        // 免费通道并发数：回显后台表单（读的是调度器同一个配置键）
+        let free_max_workers = crate::queue::config_get_blocking(&conn, crate::queue::CFG_FREE_MAX_WORKERS)
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(2);
         Ok(json!({
             "config": {
                 "free_mode": cfg.free_mode,
@@ -493,6 +503,7 @@ pub async fn admin_stats(db: &Db) -> Result<Value> {
                 "require_order": cfg.require_order,
                 "valid_days": cfg.valid_days,
                 "max_orders": cfg.max_orders,
+                "free_max_workers": free_max_workers,
             },
             "visitors": visitors, "visitors_today": visitors_today,
             "invites": invites, "invites_valid": invites_valid,

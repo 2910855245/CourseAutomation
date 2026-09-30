@@ -75,6 +75,9 @@ pub async fn login_school(base_url: &str, username: &str, password: &str) -> Res
     let school_ids: Option<Vec<String>> = None;
     let school_id_index = 0usize;
 
+    // 重试耗尽时把平台最后一次响应带出来：否则线上只能看到"重试10次未成功"，
+    // 分不清是验证码识别不过、参数不对，还是文案没被上面的判定命中
+    let mut last_note = String::new();
     for _attempt in 0..10 {
         // 获取验证码图片 + 本地 OCR（含合法性预校验，见 fetch_captcha_code）
         let code = fetch_captcha_code(&client, &captcha_url, &login_url).await;
@@ -101,6 +104,7 @@ pub async fn login_school(base_url: &str, username: &str, password: &str) -> Res
 
         let status = resp.status().as_u16();
         let text = resp.text().await.unwrap_or_default();
+        last_note = text.chars().take(120).collect::<String>().replace('\n', " ");
 
         if text.contains("验证码有误") || text.contains("验证码错误") {
             continue;
@@ -126,7 +130,7 @@ pub async fn login_school(base_url: &str, username: &str, password: &str) -> Res
         }
         let _ = school_id_index; // 保留变量避免大改，school_ids 恒 None 不会触达
     }
-    bail!("登录失败: 重试10次未成功")
+    bail!("登录失败: 重试10次未成功（末次响应: {last_note}）")
 }
 
 /// 从平台 JSON 响应中提取 msg 字段（{"status":false,"msg":"..."}）

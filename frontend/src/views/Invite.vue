@@ -86,11 +86,11 @@ onMounted(load)
       <!-- 头图区：营销主视觉 -->
       <section class="hero anim-rise">
         <span class="eyebrow">邀请有礼</span>
-        <h1 class="hero-title">邀请好友，免费刷课</h1>
+        <h1 class="hero-title">邀请好友，得优先通道</h1>
         <p class="hero-sub">
           每成功邀请 <strong class="mono">{{ data?.threshold || 3 }}</strong> 位好友下单，
-          即可领取 <strong class="mono">{{ data?.valid_days || 30 }}</strong> 天免费刷课卡 ——
-          有效期内不限次数，全平台通用。
+          即可领取 <strong class="mono">{{ data?.valid_days || 30 }}</strong> 天刷课卡 ——
+          答题/考试<strong>免单</strong>，下单还能<strong>优先排队</strong>，不用等免费队列。
         </p>
 
         <div v-if="data?.free_mode" class="hero-banner">
@@ -111,7 +111,7 @@ onMounted(load)
         <section class="card anim-rise">
           <div class="card-head">
             <h3>我的专属邀请链接</h3>
-            <span v-if="activeCard" class="status-tag ok">免单生效中</span>
+            <span v-if="activeCard" class="status-tag ok">优先通道生效中</span>
           </div>
           <div class="link-row">
             <input class="link-input mono" :value="link" readonly @focus="(e: any) => e.target.select()">
@@ -190,7 +190,7 @@ onMounted(load)
                 <span class="status-tag" :class="c.valid ? 'ok' : 'muted'">{{ c.valid ? '生效中' : '已过期' }}</span>
               </div>
               <div class="ticket-body">
-                <span class="ticket-label">免费刷课卡</span>
+                <span class="ticket-label">刷课卡</span>
                 <span class="ticket-days mono">{{ c.valid ? `剩 ${c.days_left} 天` : '—' }}</span>
               </div>
               <div class="ticket-foot">
@@ -208,8 +208,9 @@ onMounted(load)
           </div>
           <ol class="rules">
             <li>分享链接给好友，好友<b>通过链接进入并完成一次下单</b>记为 1 位有效邀请。</li>
-            <li>每满 {{ data.threshold }} 位有效邀请，可领取 1 张 {{ data.valid_days }} 天免费刷课卡，可重复领取。</li>
-            <li>持卡期间下单 <b>0 元</b>，不限次数；免费单默认使用保守档（一节课接一节课，最稳）。</li>
+            <li>每满 {{ data.threshold }} 位有效邀请，可领取 1 张 {{ data.valid_days }} 天刷课卡，可重复领取。</li>
+            <li>持卡期间<b>答题 / 考试免单</b>（刷视频本来就免费），不限次数。</li>
+            <li>持卡下单<b>优先排队</b>：排在所有普通免费单之前，不用等免费队列。</li>
             <li>卡片与当前浏览器身份绑定；领卡时填了联系方式的，换设备 / 清缓存后联系客服可找回。</li>
             <li>同一好友仅计一次；需通过你的链接进入并完成下单才计入，自己邀请自己不计。</li>
           </ol>

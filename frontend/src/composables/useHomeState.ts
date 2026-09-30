@@ -505,22 +505,26 @@ export function useHomeState() {
       sessionStorage.setItem('last_order_tokens', allPairs); localStorage.setItem('last_order_tokens', allPairs)
       const orderedCourseIds = Object.values(grouped).flatMap(g => g.ids)
       if (!allOrders.length) { store.toast('订单创建成功，但未返回订单信息', 'warning'); paying.value = false; return }
-      // 免费单以后端判定为准（它已经 0 元并直接进队列），前端不该再弹支付
-      if (free || batchRes?.data?.free === true) {
-        if (batchRes?.data?.free === true) { await loadBenefit() }
-        handleOrderSuccess(orderedCourseIds); paying.value = false; return
+      // 后端逐单分流：0 元单（只剩视频要刷）已经直接进队列开跑，不需要也不该支付
+      const payableIds: string[] = (batchRes?.data?.payable_order_ids || []).filter(Boolean)
+      if (payableIds.length) {
+        // 有付费单（含未完成的考试/作业）：只对这部分发起收款
+        if (free || batchRes?.data?.free === true) { await loadBenefit() }
+        pendingOrderedCourseIds.value = orderedCourseIds
+        const methods = [{ key: 'ypay_wxpay', pay_type: 1 }, { key: 'ypay_alipay', pay_type: 2 }]
+        const qrCodes: Record<string, string> = {}; const batchIds: Record<string, string> = {}; const batchOutTradeNos: Record<string, string> = {}; const reallyPrices: Record<string, number> = {}
+        for (const m of methods) {
+          try { const payRes = await api.payment.batchCreate({ order_ids: payableIds, pay_type: m.pay_type }); const pd = (payRes?.data || {}) as any; batchIds[m.key] = pd.batch_id || ''; batchOutTradeNos[m.key] = pd.out_trade_no || ''; if (pd.qr_image) qrCodes[m.key] = pd.qr_image; if (pd.really_price) reallyPrices[m.key] = pd.really_price } catch { }
+        }
+        payQrCodes.value = qrCodes; payReallyPrices.value = reallyPrices; payBatchIds.value = batchIds; payBatchOutTradeNos.value = batchOutTradeNos
+        payQrCode.value = qrCodes[selectedPayMethod.value] || ''; payBatchId.value = batchIds[selectedPayMethod.value] || ''; payBatchOutTradeNo.value = batchOutTradeNos[selectedPayMethod.value] || ''
+        payTotal.value = reallyPrices[selectedPayMethod.value] || (batchRes?.data?.total_price ?? payTotal.value); showPayModal.value = true
+        startPollPayment()
+        return
       }
-      pendingOrderedCourseIds.value = orderedCourseIds
-      const methods = [{ key: 'ypay_wxpay', pay_type: 1 }, { key: 'ypay_alipay', pay_type: 2 }]
-      const qrCodes: Record<string, string> = {}; const batchIds: Record<string, string> = {}; const batchOutTradeNos: Record<string, string> = {}; const reallyPrices: Record<string, number> = {}
-      const orderIds = allOrders.map((o: any) => o.order_id)
-      for (const m of methods) {
-        try { const payRes = await api.payment.batchCreate({ order_ids: orderIds, pay_type: m.pay_type }); const pd = (payRes?.data || {}) as any; batchIds[m.key] = pd.batch_id || ''; batchOutTradeNos[m.key] = pd.out_trade_no || ''; if (pd.qr_image) qrCodes[m.key] = pd.qr_image; if (pd.really_price) reallyPrices[m.key] = pd.really_price } catch { }
-      }
-      payQrCodes.value = qrCodes; payReallyPrices.value = reallyPrices; payBatchIds.value = batchIds; payBatchOutTradeNos.value = batchOutTradeNos
-      payQrCode.value = qrCodes[selectedPayMethod.value] || ''; payBatchId.value = batchIds[selectedPayMethod.value] || ''; payBatchOutTradeNo.value = batchOutTradeNos[selectedPayMethod.value] || ''
-      payTotal.value = reallyPrices[selectedPayMethod.value] || payTotal.value; showPayModal.value = true
-      startPollPayment()
+      // 全是免费单（纯刷视频 / 持卡免考试费）：已直接开跑，不再弹支付
+      if (batchRes?.data?.free === true) { await loadBenefit() }
+      handleOrderSuccess(orderedCourseIds); paying.value = false
     } catch (e: any) { store.toast('提交失败：' + (e?.message || '网络错误'), 'error') }
     finally { paying.value = false }
   }

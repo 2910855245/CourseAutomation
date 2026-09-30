@@ -678,15 +678,18 @@ impl Db {
             tx.rollback()?;
             return Ok(false);
         }
-        // 对齐 submit_job：同 username+website_id 活跃任务 → 跳过
+        // 对齐 submit_job：同 username+website_id+job_type 活跃任务 → 跳过。
+        // job_type 必须参与去重：刷课免费之后，「先领免费刷课、之后再买答题」是
+        // 主流程，若只按账号判重，付款后的答题单会被静默丢弃（订单永远停在已付款、
+        // 无报错、不重试）。带上 job_type 后同账号的「刷课」与「考试」可并行。
         let dup: Option<String> = tx
             .query_row(
                 &format!(
                     "SELECT job_id FROM {table}
-                     WHERE username=?1 AND website_id=?2
+                     WHERE username=?1 AND website_id=?2 AND job_type=?3
                        AND status IN ('pending','running','retrying') LIMIT 1"
                 ),
-                params![username, website_id],
+                params![username, website_id, task_type],
                 |r| r.get(0),
             )
             .ok();
@@ -698,20 +701,32 @@ impl Db {
         // 刷课档位随订单带入队列任务（老订单该列为空 → 均衡）
         let speed_mode =
             crate::speed::SpeedMode::parse(order["speed_mode"].as_str().unwrap_or("")).as_str();
+        // 通道与池内优先级由订单的免费来源派生（判定表唯一，见 queue::lane_and_priority）
+        let paid_processed = order["paid_processed"].as_str().unwrap_or("");
+        let (lane, priority) = crate::queue::lane_and_priority(paid_processed);
         tx.execute(
             &format!(
                 "INSERT INTO {table}
                  (job_id, username, password, website_id, job_type, course_ids, status,
-                  priority, progress, total_steps, completed_steps, current_step_name,
+                  priority, lane, progress, total_steps, completed_steps, current_step_name,
                   error_message, retry_count, max_retries, task_id, order_id, result_data,
                   verified, created_at, started_at, finished_at, deleted_at, speed_mode)
-                 VALUES (?1,?2,?3,?4,?5,?6,'pending',0,0,0,0,'','',0,3,NULL,?7,'{{}}',0,?8,NULL,NULL,NULL,?9)"
+                 VALUES (?1,?2,?3,?4,?5,?6,'pending',?7,?8,0,0,0,'','',0,3,NULL,?9,'{{}}',0,?10,NULL,NULL,NULL,?11)"
             ),
-            params![job_id, username, password, website_id, task_type, course_ids, order_id,
+            params![job_id, username, password, website_id, task_type, course_ids,
+                    priority, lane.as_str(), order_id,
                     crate::queue::now_str(), speed_mode],
         )?;
         tx.commit()?;
-        tracing::info!(job_id, order_id, task_type, table, "支付订单入队");
+        tracing::info!(
+            job_id,
+            order_id,
+            task_type,
+            table,
+            lane = lane.as_str(),
+            priority,
+            "支付订单入队"
+        );
         Ok(true)
     }
 }
@@ -754,6 +769,66 @@ mod tests {
         let order = db.get_order_sync("ORD-T1").expect("订单应能读出");
         assert_eq!(order["vid"], "VID-TEST");
         assert_eq!(order["speed_mode"], "turbo");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 回归：去重必须带上 job_type。
+    ///
+    /// "刷课免费、考试付费"之后，「先领免费刷课、之后再买答题」是主流程。
+    /// 若去重只看 username+website_id，付款后的答题单会被静默丢弃
+    /// （返回 Ok(false)，订单永远停在已付款、无报错、不重试）。
+    #[test]
+    fn test_dedup_allows_video_and_exam_same_account() {
+        let dir = std::env::temp_dir().join(format!(
+            "rust_worker_ypay_dedup_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("dedup.db");
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(path.to_str().unwrap()).unwrap();
+
+        let order = |oid: &str, task_type: &str, paid_processed: &str| {
+            json!({
+                "order_id": oid, "status": "paid", "task_type": task_type,
+                "username": "SAMEUSER", "password": "p", "website_id": 1,
+                "course_ids": [], "speed_mode": "gentle",
+                "paid_processed": paid_processed,
+            })
+        };
+
+        // 同一账号先有一条免费刷课任务在跑
+        assert!(db
+            .submit_paid_order_job_sync(&order("ORD-V1", "video", "free:video"))
+            .unwrap());
+        // 再买答题：必须入队成功（这正是旧逻辑会静默吞掉的那一单）
+        assert!(db
+            .submit_paid_order_job_sync(&order("ORD-E1", "exam", "paid"))
+            .unwrap());
+
+        let conn = db.clone_pool().get().unwrap();
+        let rows: Vec<(String, String, i64)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT job_type, lane, priority FROM queue_jobs_school
+                     WHERE order_id IN ('ORD-V1','ORD-E1') ORDER BY job_type",
+                )
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(rows.len(), 2, "答题单被去重逻辑吞掉了");
+        // exam → 付费池；video 免费单 → 免费池（普通档 priority 2）
+        assert_eq!(rows[0], ("exam".to_string(), "paid".to_string(), 0));
+        assert_eq!(rows[1], ("video".to_string(), "free".to_string(), 2));
+
+        // 同类型重复入队仍应被拦住（去重本身没有失效）
+        assert!(!db
+            .submit_paid_order_job_sync(&order("ORD-E2", "exam", "paid"))
+            .unwrap());
+        drop(conn);
         let _ = std::fs::remove_file(&path);
     }
 }

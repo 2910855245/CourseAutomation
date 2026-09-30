@@ -124,37 +124,27 @@ pub fn price_courses(cfg: &Value, courses: &[Value]) -> (Vec<Value>, f64) {
     (entries, total)
 }
 
-/// 单门课定价（对齐 order_service._price_single_course）
+/// 考试单价（缺省 5 元/门课）
+fn price_exam_of(cfg: &Value) -> f64 {
+    cfg["price_exam_only"].as_f64().unwrap_or(5.0)
+}
+
+/// 单门课定价。
+///
+/// 商业规则：**刷视频免费，答题/考试收费**。所以这里只看"还剩多少要付费的活"：
+/// 视频进度不再参与计价，一门课只要还有未完成的考试/作业就要付费，两样都没有
+/// 就是 0 元（走免费通道，下单即开跑、不进支付流程）。
 fn price_single_course(cd: &Value, cfg: &Value) -> f64 {
-    let video_total = cd["video_total"].as_i64().unwrap_or(0);
-    let video_completed = cd["video_completed"].as_i64().unwrap_or(0);
     let exam_total = cd["exam_total"].as_i64().unwrap_or(0);
     let exam_done = cd["exam_done"].as_i64().unwrap_or(0);
     let homework_total = cd["homework_total"].as_i64().unwrap_or(0);
     let homework_done = cd["homework_done"].as_i64().unwrap_or(0);
 
-    let has_video = video_total > 0;
-    let video_all_done = has_video && video_completed >= video_total;
     let has_exam = exam_total > 0 && exam_done < exam_total;
     let has_homework = homework_total > 0 && homework_done < homework_total;
     let price_exam = cfg["price_exam_only"].as_f64().unwrap_or(5.0);
     let price_homework = cfg["price_homework_only"].as_f64().unwrap_or(3.0);
 
-    if video_all_done {
-        if has_exam && !has_homework {
-            return price_exam;
-        }
-        if has_homework && !has_exam {
-            return price_homework;
-        }
-        if has_exam && has_homework {
-            return price_exam.max(price_homework);
-        }
-        return calculate_package_price(cfg, video_total, video_completed);
-    }
-    if has_video {
-        return calculate_package_price(cfg, video_total, video_completed);
-    }
     if has_exam && !has_homework {
         return price_exam;
     }
@@ -164,6 +154,7 @@ fn price_single_course(cd: &Value, cfg: &Value) -> f64 {
     if has_exam && has_homework {
         return price_exam.max(price_homework);
     }
+    // 只剩视频（或什么都已完成）→ 免费
     0.0
 }
 
@@ -181,14 +172,22 @@ pub async fn compute_batch_price(db: &Db, orders: &[Value]) -> Result<f64> {
 fn compute_item_prices(cfg: &Value, orders: &[Value]) -> Vec<f64> {
     orders.iter().map(|item| {
         let website_id = item["website_id"].as_i64().unwrap_or(1);
-        let video_count = item["video_count"].as_i64().unwrap_or(0);
         let details = item["course_details"].as_array().cloned().unwrap_or_default();
         if website_id == 4 {
             cfg["price_chaoxing"].as_f64().unwrap_or(8.0)
         } else if !details.is_empty() {
             details.iter().map(|cd| price_single_course(cd, cfg)).sum::<f64>().round_to_2()
         } else {
-            calculate_package_price(cfg, video_count, 0)
+            // 无课程明细（老前端或手工调用）：视频不计费，只看有没有待完成的考试。
+            // 明细缺失时无法知道考试分布在哪些课，按"选中课程数"兜底计费 ——
+            // 宁可对老调用多收，也不能让"少传明细"变成少付钱的后门
+            // （否则可用 N 门课的 course_ids + 一笔考试费把全部考试做完）。
+            let exam_count = item["exam_count"].as_i64().unwrap_or(0);
+            if exam_count <= 0 {
+                return 0.0;
+            }
+            let courses = item["course_ids"].as_array().map(|a| a.len()).unwrap_or(0).max(1);
+            price_exam_of(cfg) * courses as f64
         }
     }).collect()
 }
@@ -255,11 +254,14 @@ async fn create_order(db: &Db, username: &str, password: &str, item: &Value,
     }))
 }
 
-/// 批量下单（对齐 create_batch_orders 主流程）
+/// 批量下单。
 ///
-/// `vid` / `benefit`：营销推广的免费待遇。命中时所有订单 0 元、标记为已支付并
-/// **直接进队列**（免费用户不该走支付流程，也不该等对账），同时把邀请关系标记为
-/// 已转化、消耗一次卡额度。
+/// 商业规则：**刷视频免费、答题/考试收费**。因此不再"整批免费或整批付费"，
+/// 而是**逐单分流**：后端算出的价是 0 的（只剩视频）直接标记已支付并入队，
+/// 立刻开跑、不进支付流程；价 > 0 的（含未完成的考试/作业）留给支付。
+///
+/// `vid` / `benefit`：营销推广待遇。命中刷课卡时考试费清零（该单也变 0 元），
+/// 并在入队时拿到更高的排队档位（见 `queue::lane_and_priority`）。
 pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
                                  benefit: crate::promo::Benefit) -> Result<Value> {
     let username = body["username"].as_str().unwrap_or("").to_string();
@@ -271,47 +273,56 @@ pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
     // 于是把 price 全传 0 就能让 0 元订单落库（支付金额读库里的价格）→ 白嫖。
     let cfg = pricing_config(db).await?;
     let item_prices = compute_item_prices(&cfg, &orders);
-    let total_price = item_prices.iter().sum::<f64>().round_to_2();
     for (item, price) in orders.iter_mut().zip(item_prices.iter()) {
         item["price"] = json!(price);
     }
 
+    // 持卡：考试费清零，整单变 0 元走免费通道（卡的权益是"免考试费 + 优先排队"）
+    let card_free = benefit.is_free();
+
     let mut created = Vec::new();
+    let mut free_ids: Vec<String> = Vec::new();
+    let mut payable_ids: Vec<String> = Vec::new();
+    let mut payable_total = 0.0f64;
+
     for item in &orders {
         let course_ids = item["course_ids"].as_array().cloned().unwrap_or_default();
         if course_ids.is_empty() && item["video_count"].as_i64().unwrap_or(0) == 0 {
             continue;
         }
-        // 免费订单（全局免费 / 刷课卡）：价格清零，并且**强制**保守档。
-        // 这是商业规则而不是默认值：不付费只能用串行档，适中/暴力是付费权益。
-        // 必须在服务端强制——只靠前端置灰的话，直接调接口传 turbo 就白嫖了加速。
         let mut item = item.clone();
-        if benefit.is_free() {
-            item["speed_mode"] = json!(crate::speed::SpeedMode::Gentle.as_str());
+        if card_free {
+            // 持卡：考试费清零，该单变 0 元
             item["price"] = json!(0.0);
         }
+        // 免费单一律只能用保守档：适中/暴力是付费权益。必须在服务端强制——
+        // 只靠前端置灰的话，直接调接口传 turbo 就白嫖了加速。
+        // 注意判据是"这一单要不要付钱"，而不是"有没有卡"：刷视频对所有人免费，
+        // 所以没有卡的普通用户下的纯视频单同样是免费单，同样只能串行。
+        let is_free_item = item["price"].as_f64().unwrap_or(0.0) <= 0.0;
+        if is_free_item {
+            item["speed_mode"] = json!(crate::speed::SpeedMode::Gentle.as_str());
+        }
         let order = create_order(db, &username, &password, &item, "").await?;
+        let oid = order["order_id"].as_str().unwrap_or("").to_string();
         let mut masked = order.clone();
         masked["password"] = json!("***");
-        masked["view_token"] = json!(view_token(order["order_id"].as_str().unwrap_or("")));
-        masked["free"] = json!(benefit.is_free());
+        masked["view_token"] = json!(view_token(&oid));
+        masked["free"] = json!(is_free_item);
         created.push(masked);
-    }
 
-    // 免费单：标记已支付 + 直接入队（复用支付成功那条唯一入队通道）
-    if benefit.is_free() {
-        for order in &created {
-            let oid = order["order_id"].as_str().unwrap_or("").to_string();
-            if oid.is_empty() {
-                continue;
-            }
+        if is_free_item {
+            // 免费来源照抄 benefit.reason（global / card），只有"纯视频免费"才是 video。
+            // 千万不要在这里把来源归并成 card：`lane_and_priority` 按 free:card 给插队档，
+            // 归并会让全局免费活动的单白拿持卡优先权，后台统计也会误判。
+            let reason = if card_free { benefit.reason.clone() } else { "video".to_string() };
             let oid2 = oid.clone();
-            let reason = benefit.reason.clone();
             let pool = db.clone_pool();
             let _ = tokio::task::spawn_blocking(move || -> Result<()> {
                 let conn = pool.get()?;
                 let now = crate::queue::now_str();
-                // paid_processed 的 'free' 是免费单的标记；payment_channel 便于后台统计
+                // paid_processed 的 'free:*' 前缀是免费单标记，也是队列通道的判定依据
+                // （见 queue::lane_and_priority）；payment_channel 便于后台统计
                 conn.execute(
                     "UPDATE orders SET status='paid', paid=1, payment_channel='free',
                             payment_time=?1, paid_processed=?2, updated_at=?1
@@ -322,30 +333,35 @@ pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
             })
             .await;
             crate::pay_routes::enqueue_paid_order(db, &oid).await;
-        }
-        // 一卡按张数计额度：一次提交建了 N 单就扣 N 次，
-        // 否则把多门课塞进一批就能用 1 次额度刷 N 单
-        crate::promo::consume_card(db, &benefit.card_id, created.len() as i64).await;
-        tracing::info!(orders = created.len(), reason = %benefit.reason, "免费订单已创建并直接入队");
-    }
-    // 付费订单：把访客身份写进订单，供"付款成功 → 邀请转化"归因
-    // （有效邀请只认已收款订单，免费单不算，避免注册小号白刷卡）
-    if !benefit.is_free() && !vid.is_empty() {
-        for order in &created {
-            let oid = order["order_id"].as_str().unwrap_or("").to_string();
-            if oid.is_empty() {
-                continue;
+            free_ids.push(oid);
+        } else {
+            payable_total += item["price"].as_f64().unwrap_or(0.0);
+            payable_ids.push(oid.clone());
+            // 付费单才写访客身份：有效邀请只认已收款订单，免费单带 vid 会刷出假邀请
+            if !vid.is_empty() {
+                let oid2 = oid.clone();
+                let vid2 = vid.to_string();
+                let pool = db.clone_pool();
+                let _ = tokio::task::spawn_blocking(move || -> Result<()> {
+                    let conn = pool.get()?;
+                    conn.execute("UPDATE orders SET vid=?1 WHERE order_id=?2",
+                                 rusqlite::params![vid2, oid2])?;
+                    Ok(())
+                })
+                .await;
             }
-            let pool = db.clone_pool();
-            let vid2 = vid.to_string();
-            let _ = tokio::task::spawn_blocking(move || -> Result<()> {
-                let conn = pool.get()?;
-                conn.execute("UPDATE orders SET vid=?1 WHERE order_id=?2",
-                             rusqlite::params![vid2, oid])?;
-                Ok(())
-            })
-            .await;
         }
+    }
+
+    // 一卡按张数计额度：一次提交建了 N 单就扣 N 次，
+    // 否则把多门课塞进一批就能用 1 次额度刷 N 单
+    if card_free {
+        crate::promo::consume_card(db, &benefit.card_id, created.len() as i64).await;
+        tracing::info!(orders = created.len(), reason = %benefit.reason, "持卡订单已创建并直接入队");
+    }
+    if !free_ids.is_empty() {
+        tracing::info!(free = free_ids.len(), payable = payable_ids.len(),
+                       "订单已分流：免费单直接入队，付费单待支付");
     }
 
     Ok(json!({
@@ -353,9 +369,13 @@ pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
         "message": format!("成功创建 {} 个订单", created.len()),
         "data": {
             "orders": created,
-            "total_price": if benefit.is_free() { 0.0 } else { total_price },
-            "paid": benefit.is_free(),
-            "free": benefit.is_free(),
+            // 已直接开跑的免费单 / 还需支付才能跑的付费单
+            "free_order_ids": free_ids,
+            "payable_order_ids": payable_ids,
+            "total_price": payable_total.round_to_2(),
+            // 是否全部免单（全部走免费通道、无需支付）
+            "paid": payable_ids.is_empty(),
+            "free": free_ids.len() == created.len() && !created.is_empty(),
             "free_reason": benefit.reason,
         },
     }))
@@ -390,5 +410,66 @@ mod tests {
         let t = view_token("ORD-TEST");
         assert_eq!(t.len(), 24);
         assert_eq!(t, view_token("ORD-TEST"));
+    }
+
+    /// 核心商业规则：**刷视频不计费，只有未完成的考试/作业才收费**。
+    /// 这条规则决定了一单要不要走支付流程，价错一块钱就是白嫖或多收。
+    #[test]
+    fn test_video_is_free_exam_is_paid() {
+        let cfg = test_cfg();
+
+        // 只剩视频（含"视频没刷完"与"视频已刷完"两种）→ 一律 0 元
+        assert_eq!(price_single_course(
+            &json!({"video_total": 100, "video_completed": 0,
+                    "exam_total": 0, "exam_done": 0,
+                    "homework_total": 0, "homework_done": 0}), &cfg), 0.0);
+        assert_eq!(price_single_course(
+            &json!({"video_total": 100, "video_completed": 100,
+                    "exam_total": 0, "exam_done": 0,
+                    "homework_total": 0, "homework_done": 0}), &cfg), 0.0);
+        // 视频没刷完 + 有考试未完成 → 只收考试费（视频那部分免费）
+        assert_eq!(price_single_course(
+            &json!({"video_total": 100, "video_completed": 0,
+                    "exam_total": 2, "exam_done": 0,
+                    "homework_total": 0, "homework_done": 0}), &cfg), 5.0);
+        // 考试已全部完成 → 没有要付费的活了
+        assert_eq!(price_single_course(
+            &json!({"video_total": 100, "video_completed": 0,
+                    "exam_total": 2, "exam_done": 2,
+                    "homework_total": 0, "homework_done": 0}), &cfg), 0.0);
+        // 只有作业 → 作业价；考试+作业 → 取较高者
+        assert_eq!(price_single_course(
+            &json!({"video_total": 10, "video_completed": 0,
+                    "exam_total": 0, "exam_done": 0,
+                    "homework_total": 3, "homework_done": 0}), &cfg), 3.0);
+        assert_eq!(price_single_course(
+            &json!({"video_total": 10, "video_completed": 0,
+                    "exam_total": 1, "exam_done": 0,
+                    "homework_total": 3, "homework_done": 0}), &cfg), 5.0);
+    }
+
+    /// 纯视频单整单必须判 0 元 —— 前端据此跳开支付流程直接进订单页。
+    #[test]
+    fn test_video_only_batch_prices_to_zero() {
+        let cfg = test_cfg();
+        let orders = vec![json!({
+            "website_id": 1, "video_count": 120, "exam_count": 0,
+            "course_details": [{"video_total": 60, "video_completed": 0,
+                                "exam_total": 0, "exam_done": 0,
+                                "homework_total": 0, "homework_done": 0}]
+        })];
+        assert_eq!(compute_item_prices(&cfg, &orders), vec![0.0]);
+    }
+
+    /// 少了课程明细不能变成少付钱的后门：明细缺失时按选中课程数兜底，
+    /// 否则可用 N 门课的 course_ids + 一笔考试费把全部考试做完。
+    #[test]
+    fn test_missing_details_charges_per_course_not_once() {
+        let cfg = test_cfg();
+        let orders = vec![json!({
+            "website_id": 1, "video_count": 0, "exam_count": 4,
+            "course_ids": ["c1", "c2", "c3"]
+        })];
+        assert_eq!(compute_item_prices(&cfg, &orders), vec![15.0]); // 3 门 × 5
     }
 }

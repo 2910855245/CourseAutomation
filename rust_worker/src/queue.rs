@@ -24,43 +24,106 @@ use crate::AppState;
 
 const SCHOOL_TABLE: &str = "queue_jobs_school";
 
-/// 当前在跑的 worker 数。管理端队列监控要显示"正在跑几个"，此前该值在
-/// `dispatcher_loop` 里是个局部变量、对外接口只好硬编码 0，监控因此永远显示
-/// 0 个工作线程。改为进程级原子量，由 `queue_stats` 读取。
-static ACTIVE_WORKERS: AtomicUsize = AtomicUsize::new(0);
+/// 队列通道。免费（刷视频）与付费（答题/考试）各有**独立**的并发额度，
+/// 互不挤占：付费单永远不会排在免费积压后面，免费人流也吃不掉付费槽位。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lane {
+    Paid,
+    Free,
+}
+
+impl Lane {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Lane::Paid => "paid",
+            Lane::Free => "free",
+        }
+    }
+}
+
+/// 由订单的 `paid_processed` 派生 (通道, 池内优先级)。
+///
+/// 这是**唯一判定表**，入队的两条路径（支付成功 / 管理员补入队）都必须走它，
+/// 否则管理员手动入队会把免费单扔进付费池抢额度。
+///
+/// 免费的三种来源里只有「持卡」享受插队（priority 1），其余普通免费单为 2。
+pub fn lane_and_priority(paid_processed: &str) -> (Lane, i64) {
+    let p = paid_processed.trim();
+    if let Some(reason) = p.strip_prefix("free:") {
+        let priority = if reason == "card" { 1 } else { 2 };
+        (Lane::Free, priority)
+    } else {
+        (Lane::Paid, 0)
+    }
+}
+
+/// 付费通道当前在跑的 worker 数
+static ACTIVE_WORKERS_PAID: AtomicUsize = AtomicUsize::new(0);
+/// 免费通道当前在跑的 worker 数
+static ACTIVE_WORKERS_FREE: AtomicUsize = AtomicUsize::new(0);
 
 /// worker 槽位的 RAII 守卫。
 ///
 /// 必须用 Drop 而不是在 `execute_school_job().await` 之后手写 `fetch_sub`：
 /// 刷课链路上任何一个 panic（数组越界、第三方库、unwrap）都会让 tokio 直接
 /// 终止那个 task，`fetch_sub` 那行永远执行不到。结果是**每 panic 一次就永久
-/// 少一个并发槽位**，累积到 queue_max_workers 之后调度器 `ACTIVE_WORKERS >= max`
-/// 恒成立，新任务永不被认领 —— 服务静默停摆，而队列监控还显示"运行中"。
+/// 少一个并发槽位**，累积到上限之后调度器恒判"已满"，新任务永不被认领 ——
+/// 服务静默停摆，而队列监控还显示"运行中"。
 /// Drop 在 panic 展开时同样会执行，所以槽位一定会被还回来。
-struct WorkerSlot;
+///
+/// 槽位记在自己所属通道的计数器上：两条通道额度独立，归还时也必须还对池子。
+struct WorkerSlot(Lane);
 
 impl WorkerSlot {
-    fn acquire() -> Self {
-        ACTIVE_WORKERS.fetch_add(1, Ordering::Relaxed);
-        WorkerSlot
+    fn acquire(lane: Lane) -> Self {
+        counter(lane).fetch_add(1, Ordering::Relaxed);
+        WorkerSlot(lane)
     }
 }
 
 impl Drop for WorkerSlot {
     fn drop(&mut self) {
-        ACTIVE_WORKERS.fetch_sub(1, Ordering::Relaxed);
+        counter(self.0).fetch_sub(1, Ordering::Relaxed);
     }
 }
 
-/// 供管理端读取的实时 worker 数
+fn counter(lane: Lane) -> &'static AtomicUsize {
+    match lane {
+        Lane::Paid => &ACTIVE_WORKERS_PAID,
+        Lane::Free => &ACTIVE_WORKERS_FREE,
+    }
+}
+
+/// 指定通道当前在跑的 worker 数
+pub fn active_workers_in(lane: Lane) -> usize {
+    counter(lane).load(Ordering::Relaxed)
+}
+
+/// 供管理端读取的实时 worker 数（两条通道求和，保持既有接口语义不变）
 pub fn active_workers() -> usize {
-    ACTIVE_WORKERS.load(Ordering::Relaxed)
+    active_workers_in(Lane::Paid) + active_workers_in(Lane::Free)
 }
 
 /// 并发上限的硬边界。Rust 侧任务全为 I/O 等待（视频墙钟 + 平台请求），
 /// 单任务内存开销极小，因此上限远高于 Python 版；超过 64 之后真正的瓶颈
 /// 已经不是 worker 数而是平台出站闸门（见 platform_client::wait_rate_limit）。
 const MAX_WORKERS_CEILING: usize = 64;
+
+/// 免费通道默认并发数
+const DEFAULT_FREE_WORKERS: usize = 2;
+/// 免费通道并发上限的硬边界。免费是成本项，额度上限远低于付费通道：
+/// 真正贴着平台风险的是"同时在跑的会话总数"，免费池开大只会推高风控压力。
+const MAX_FREE_WORKERS_CEILING: usize = 32;
+
+/// 免费通道并发数的配置键（后台可热改）
+pub const CFG_FREE_MAX_WORKERS: &str = "free_max_workers";
+
+/// 调度器每轮尝试通道的顺序：**付费优先**。
+///
+/// 这是"付费免排队"这条商业承诺的实现点，抽成常量并被回归测试钉住：
+/// 顺序一旦反过来，付费单就会排在免费积压后面（免费单动辄几小时，
+/// 等于付费用户白花钱排队）。两条通道额度独立，所以"优先"不会饿死免费。
+const LANE_ATTEMPT_ORDER: [Lane; 2] = [Lane::Paid, Lane::Free];
 
 /// 调度器是否启用（默认启用；仅显式 RUST_QUEUE_ENABLED=false 才停用）
 fn dispatcher_enabled() -> bool {
@@ -148,8 +211,12 @@ fn chrono_lite(secs: u64) -> String {
     )
 }
 
-/// 原子认领下一个待执行任务
-async fn claim_next_job(state: &AppState) -> Result<Option<QueueJob>> {
+/// 原子认领下一个待执行任务（限定通道）。
+///
+/// `lane` 既能防止付费通道捞走免费单、也防止免费通道在付费未满时抢走付费单；
+/// 额度判断留在调度循环里（见 `dispatcher_loop`），这里不做计数 —— 否则
+/// "查额度 → 认领" 之间会出现超发窗口。
+async fn claim_next_job(state: &AppState, lane: Lane) -> Result<Option<QueueJob>> {
     let pool_guard = state.db.raw_pool().clone();
     let row = tokio::task::spawn_blocking(move || -> Result<Option<QueueJob>> {
         let mut conn = pool_guard.get()?;
@@ -161,10 +228,10 @@ async fn claim_next_job(state: &AppState) -> Result<Option<QueueJob>> {
                 // 删掉的任务继续捞出来执行。
                 "SELECT job_id, username, password, website_id, job_type, course_ids, order_id, max_retries, retry_count, speed_mode
                  FROM {SCHOOL_TABLE}
-                 WHERE status IN ('pending','retrying') AND deleted_at IS NULL
+                 WHERE status IN ('pending','retrying') AND deleted_at IS NULL AND lane=?1
                  ORDER BY priority ASC, created_at ASC LIMIT 1"
             ),
-            [],
+            rusqlite::params![lane.as_str()],
             |r| {
                 Ok(QueueJob {
                     job_id: r.get(0)?,
@@ -417,61 +484,115 @@ async fn reclaim_stale_running(state: &AppState) {
 /// 调度器主循环（每队列一个 tokio task）
 ///
 /// 并发上限与暂停状态都从 system_config 动态读取（管理端可热更新）：
-///   - `queue_max_workers`：同时执行的任务数上限
+///   - `queue_max_workers`：**付费通道**同时执行的任务数上限
+///   - `free_max_workers`：**免费通道**同时执行的任务数上限
 ///   - `queue_paused` / `queue_paused_school` / `queue_paused_chaoxing`：暂停开关
+///
+/// 两条通道额度独立、互不挤占：每轮先填付费槽位再填免费槽位，因此付费单永远
+/// 不会排在免费积压后面；免费人流吃满了也只会卡住免费通道自己。
 pub async fn dispatcher_loop(state: Arc<AppState>) {
     tracing::info!("Rust 队列调度器启动（学校任务）");
     reclaim_stale_running(&state).await;
-    // 配置缓存：(上次刷新时间, 并发上限, 是否暂停)，避免每轮都查库
-    let mut cfg_cache: (std::time::Instant, usize, bool) =
-        (std::time::Instant::now(), default_max_workers(), false);
+    // 配置缓存：(上次刷新时间, 付费上限, 免费上限, 是否暂停)，避免每轮都查库
+    let mut cfg_cache: RuntimeConfig = RuntimeConfig::initial();
     loop {
         // 显式 false 才停用（常规暂停走 queue_paused 热配置，不重启进程）
         if !dispatcher_enabled() {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             continue;
         }
-        if cfg_cache.0.elapsed() > std::time::Duration::from_secs(5) {
-            let (max, paused) = read_runtime_config(&state.db).await;
-            cfg_cache = (std::time::Instant::now(), max, paused);
+        if cfg_cache.refreshed_at.elapsed() > std::time::Duration::from_secs(5) {
+            cfg_cache = read_runtime_config(&state.db).await;
         }
-        if cfg_cache.2 {
+        if cfg_cache.paused {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             continue;
         }
-        if ACTIVE_WORKERS.load(Ordering::Relaxed) >= cfg_cache.1 {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            continue;
-        }
-        match claim_next_job(&state).await {
-            Ok(Some(job)) => {
-                let state2 = state.clone();
-                // 槽位由 RAII 守卫持有：任务 panic 时 Drop 依然会归还槽位
-                let slot = WorkerSlot::acquire();
-                let order_id = job.order_id.clone();
-                let order_id_task = order_id.clone();
-                let handle = tokio::spawn(async move {
-                    let _slot = slot;
-                    execute_school_job(&state2, &job).await;
-                    // 跑完自行摘除登记，避免表无限增长（panic 时留一条无效句柄，
-                    // 对外部 abort 一个已结束的任务是无害空操作）
-                    if !order_id_task.is_empty() {
-                        state2.tasks.remove(&order_id_task);
+
+        // 先付费后免费。任一条认领成功就立刻重试另一条（不 sleep），
+        // 全部拿不到才退避 —— 空转成本只有一次索引查询。
+        let mut claimed_any = false;
+        let mut errored = false;
+        for lane in LANE_ATTEMPT_ORDER {
+            if active_workers_in(lane) >= cfg_cache.max_workers(lane) {
+                continue;
+            }
+            // 额度变量、认领通道、槽位通道必须来自同一个 lane，
+            // 否则会出现"按付费额度放行、却认领了免费单"的错配
+            match claim_next_job(&state, lane).await {
+                Ok(Some(job)) => {
+                    claimed_any = true;
+                    let state2 = state.clone();
+                    // 槽位由 RAII 守卫持有：任务 panic 时 Drop 依然会归还槽位，
+                    // 且归还到它所属通道的计数器上
+                    let slot = WorkerSlot::acquire(lane);
+                    let order_id = job.order_id.clone();
+                    let order_id_task = order_id.clone();
+                    let handle = tokio::spawn(async move {
+                        let _slot = slot;
+                        execute_school_job(&state2, &job).await;
+                        // 跑完自行摘除登记，避免表无限增长（panic 时留一条无效句柄，
+                        // 对外部 abort 一个已结束的任务是无害空操作）
+                        if !order_id_task.is_empty() {
+                            state2.tasks.remove(&order_id_task);
+                        }
+                    });
+                    // 登记 AbortHandle：管理端「取消」运行中的任务要能真的停下来，
+                    // 只改库状态的话任务会继续跑完并把状态覆盖回 completed
+                    if !order_id.is_empty() && !handle.is_finished() {
+                        state.tasks.insert(order_id, handle.abort_handle());
                     }
-                });
-                // 登记 AbortHandle：管理端「取消」运行中的任务要能真的停下来，
-                // 只改库状态的话任务会继续跑完并把状态覆盖回 completed
-                if !order_id.is_empty() && !handle.is_finished() {
-                    state.tasks.insert(order_id, handle.abort_handle());
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::error!(error = %e, lane = lane.as_str(), "认领任务失败");
+                    errored = true;
                 }
             }
-            Ok(None) => tokio::time::sleep(std::time::Duration::from_secs(2)).await,
-            Err(e) => {
-                tracing::error!(error = %e, "认领任务失败");
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            }
+        }
+        if claimed_any {
+            continue;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(if errored { 5 } else { 2 })).await;
+    }
+}
+
+/// 调度器运行期配置（热加载，每 5s 刷新一次）
+struct RuntimeConfig {
+    refreshed_at: std::time::Instant,
+    paid_max: usize,
+    free_max: usize,
+    paused: bool,
+}
+
+impl RuntimeConfig {
+    fn initial() -> Self {
+        Self {
+            refreshed_at: std::time::Instant::now(),
+            paid_max: default_max_workers(),
+            free_max: default_free_max_workers(),
+            paused: false,
         }
     }
+
+    fn max_workers(&self, lane: Lane) -> usize {
+        match lane {
+            Lane::Paid => self.paid_max,
+            Lane::Free => self.free_max,
+        }
+    }
+}
+
+/// 免费通道默认并发数。
+///
+/// 刻意比付费通道小得多：免费单是"用流量换口碑"的成本项，免费池开太大既拖慢
+/// 付费单的排队体验，也把平台风控压力提上来。默认 2 路，管理端可调。
+fn default_free_max_workers() -> usize {
+    std::env::var("RUST_FREE_MAX_WORKERS").ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_FREE_WORKERS)
+        .clamp(1, MAX_FREE_WORKERS_CEILING)
 }
 
 /// 默认并发上限：环境变量 > CPU 核数-1，夹在 1..=64。
@@ -483,18 +604,23 @@ fn default_max_workers() -> usize {
         .clamp(1, MAX_WORKERS_CEILING)
 }
 
-/// 读取运行期配置（并发上限 + 暂停），失败时退回默认值
-async fn read_runtime_config(db: &Db) -> (usize, bool) {
+/// 读取运行期配置（两条通道的并发上限 + 暂停），失败时退回默认值
+async fn read_runtime_config(db: &Db) -> RuntimeConfig {
     // 夹在 1..=64：管理端写入的值不应能把进程拖垮（每个 worker 都是一条
     // 常驻 tokio 任务 + 一个临时目录），越界值一律按边界处理而不是照单全收。
-    let max = config_get(db, "queue_max_workers").await
+    let paid_max = config_get(db, "queue_max_workers").await
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n > 0)
         .unwrap_or_else(default_max_workers)
         .clamp(1, MAX_WORKERS_CEILING);
+    let free_max = config_get(db, CFG_FREE_MAX_WORKERS).await
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or_else(default_free_max_workers)
+        .clamp(1, MAX_FREE_WORKERS_CEILING);
     let paused = config_get(db, "queue_paused").await.map(|v| v == "1").unwrap_or(false)
         || config_get(db, "queue_paused_school").await.map(|v| v == "1").unwrap_or(false);
-    (max, paused)
+    RuntimeConfig { refreshed_at: std::time::Instant::now(), paid_max, free_max, paused }
 }
 
 /// 读系统配置（键不存在返回 None）
@@ -577,5 +703,102 @@ mod tests {
         std::env::set_var("RUST_QUEUE_ENABLED", "true");
         assert!(dispatcher_enabled());
         std::env::remove_var("RUST_QUEUE_ENABLED");
+    }
+
+    // ── 双通道：判定表 / 额度 / 池隔离 ──────────────────────────────────
+
+    /// 通道与优先级完全由 `paid_processed` 决定。这张表被支付入队和管理员补入队
+    /// 两条路径共用，判定错一条就会让免费单落进付费池抢额度。
+    #[test]
+    fn test_lane_and_priority_table() {
+        // 真实付款（ypay 回写的成功标记）→ 付费池，池内第一档
+        assert_eq!(lane_and_priority("paid"), (Lane::Paid, 0));
+        assert_eq!(lane_and_priority(""), (Lane::Paid, 0));
+        assert_eq!(lane_and_priority("unprocessed"), (Lane::Paid, 0));
+        // 持卡免费单：免考试费 + 插队
+        assert_eq!(lane_and_priority("free:card"), (Lane::Free, 1));
+        // 其余免费来源都不插队
+        assert_eq!(lane_and_priority("free:global"), (Lane::Free, 2));
+        assert_eq!(lane_and_priority("free:video"), (Lane::Free, 2));
+        // 未知的 free: 子类型一律按普通免费处理，绝不因为新来源被误判进付费池
+        assert_eq!(lane_and_priority("free:whatever"), (Lane::Free, 2));
+        // 前后空白不该改变判定
+        assert_eq!(lane_and_priority("  free:card  "), (Lane::Free, 1));
+    }
+
+    #[test]
+    fn test_free_max_workers_default_within_ceiling() {
+        let n = default_free_max_workers();
+        assert!(n >= 1 && n <= MAX_FREE_WORKERS_CEILING, "免费默认并发越界: {n}");
+        // 免费额度默认必须远小于付费上限，否则"免费不挤占付费"的承诺形同虚设
+        assert!(n <= DEFAULT_FREE_WORKERS, "免费默认并发不应大于 {DEFAULT_FREE_WORKERS}");
+    }
+
+    /// 池隔离 + 付费免排队。
+    ///
+    /// 场景刻意造得对免费最有利、对付费最不利：3 条免费单的 created_at 全部早于
+    /// 唯一那条付费单（免费积压在前），且两条通道额度都为 1。此时一轮调度
+    /// 必须先认领付费单 —— 这就是"付费免排队"的可验证形式。
+    #[test]
+    fn test_paid_lane_never_queues_behind_free_backlog() {
+        let dir = std::env::temp_dir().join(format!("rust_worker_lane_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lane.db");
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(path.to_str().unwrap()).unwrap();
+        {
+            let conn = db.clone_pool().get().unwrap();
+            // 3 条免费（普通 2 条 + 持卡 1 条）与 1 条付费；付费单 created_at 最晚
+            let rows = [
+                ("JOB-FREE-A", "free", 2, "2026-01-01 00:00:01"),
+                ("JOB-FREE-CARD", "free", 1, "2026-01-01 00:00:02"),
+                ("JOB-FREE-B", "free", 2, "2026-01-01 00:00:03"),
+                ("JOB-PAID", "paid", 0, "2026-01-01 00:00:04"),
+            ];
+            for (id, lane, prio, ts) in rows {
+                conn.execute(
+                    "INSERT INTO queue_jobs_school
+                     (job_id, username, password, website_id, job_type, course_ids, status,
+                      priority, lane, progress, total_steps, completed_steps, current_step_name,
+                      error_message, retry_count, max_retries, order_id, result_data, verified,
+                      created_at, speed_mode)
+                     VALUES (?1,'u','p',1,'video','[]','pending',?2,?3,0,0,0,'','',0,3,
+                             ?1,'{}',0,?4,'gentle')",
+                    rusqlite::params![id, prio, lane, ts],
+                )
+                .unwrap();
+            }
+        }
+        let pool = db.clone_pool();
+
+        // 复刻调度器一轮的认领决策（两条通道额度各 1）：按 LANE_ATTEMPT_ORDER 依次尝试
+        let claim = |lane: Lane| -> Option<String> {
+            let conn = pool.get().unwrap();
+            let id: String = conn.query_row(
+                "SELECT job_id FROM queue_jobs_school
+                 WHERE status IN ('pending','retrying') AND deleted_at IS NULL AND lane=?1
+                 ORDER BY priority ASC, created_at ASC LIMIT 1",
+                rusqlite::params![lane.as_str()], |r| r.get(0)).unwrap();
+            conn.execute("UPDATE queue_jobs_school SET status='running' WHERE job_id=?1",
+                         rusqlite::params![id]).unwrap();
+            Some(id)
+        };
+        let claimed: Vec<String> = LANE_ATTEMPT_ORDER.iter().filter_map(|l| claim(*l)).collect();
+        assert_eq!(claimed, vec!["JOB-PAID", "JOB-FREE-CARD"],
+                   "一轮调度必须先拿付费单，再按 priority 拿免费单");
+
+        // 付费通道只拿付费单；免费通道按 priority（持卡先于普通）再按 created_at
+        let mut free_rest = Vec::new();
+        for _ in 0..2 {
+            free_rest.push(claim(Lane::Free).unwrap());
+        }
+        assert_eq!(free_rest, vec!["JOB-FREE-A", "JOB-FREE-B"]);
+        let conn = pool.get().unwrap();
+        let pending_paid: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM queue_jobs_school WHERE lane='paid' AND status='pending'",
+            [], |r| r.get(0)).unwrap();
+        assert_eq!(pending_paid, 0, "付费单不该被免费通道留下");
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
     }
 }

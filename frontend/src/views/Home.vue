@@ -46,13 +46,24 @@ const speedModeDesc = computed(() => ({
   gentle: '完全串行：一节课刷完再刷下一节，课程间自动拉长间隔，最接近真人。',
 }[speedMode.value]))
 
-// 付费权益：不付费（全局免费活动 / 刷课卡）只能跑保守档，适中与暴力锁定
+// 商业规则：刷视频免费、答题/考试付费。免费的单只能跑保守档（串行）。
+// 因此"要不要付钱"有两种命中方式：领了免单资格（限时免费 / 刷课卡），
+// 或者这单根本只有视频要刷 —— 两者都锁保守档。
+// 判据必须与后端一致（后端按逐单价格是否 0 强制改写档位）。
+const freeTotal = computed(() => isPrivileged.value || benefit.value.free || summary.value.total <= 0)
+// 免单原因要分开说：持卡免的是考试费，视频免费是所有人本来就有的
+const freeTagText = computed(() => {
+  if (isPrivileged.value) return '管理员免单'
+  if (benefit.value.reason === 'card') return '刷课卡免考试费'
+  if (benefit.value.reason === 'global') return '限时免费'
+  return '视频免费'
+})
 function isSpeedLocked(key: string) {
-  return benefit.value.free && key !== 'gentle'
+  return key !== 'gentle' && freeTotal.value
 }
 function pickSpeed(key: 'turbo' | 'balanced' | 'gentle') {
   if (isSpeedLocked(key)) {
-    store.toast('免费刷只能使用保守档，付费下单可解锁适中 / 暴力档', 'warning')
+    store.toast('免费刷课只能使用保守档，付费答题可解锁适中 / 暴力档', 'warning')
     return
   }
   setSpeedMode(key)
@@ -423,10 +434,10 @@ onMounted(async () => {
             </div>
 
             <div class="co-action">
-              <div v-if="isPrivileged || benefit.free" class="co-total">
+              <div v-if="freeTotal" class="co-total">
                 <span class="co-total-label">合计</span>
                 <span class="co-total-val free">
-                  <span class="free-tag">{{ benefit.reason === 'card' ? '刷课卡免单' : '限时免费' }}</span>
+                  <span class="free-tag">{{ freeTagText }}</span>
                   <span class="mono">¥0.00</span>
                 </span>
               </div>
@@ -439,17 +450,22 @@ onMounted(async () => {
                 :disabled="paying || summary.courses === 0"
                 @click="submitAndPay"
               >
-                <span v-if="!paying">{{ (isPrivileged || benefit.free) ? '免费提交' : '提交并支付' }}</span>
+                <span v-if="!paying">{{ freeTotal ? '免费提交' : '提交并支付' }}</span>
                 <span v-else class="btn-loading"><span class="spinner"></span>提交中</span>
               </button>
             </div>
           </div>
 
+          <!-- 计费口径：刷视频免费，答题/考试按门课收费 -->
+          <p class="billing-note">
+            刷视频<b>免费</b>（免费单串行排队）<template v-if="!freeTotal">；本次含未完成的答题/考试，按门课计费<span class="mono"> ¥{{ summary.total.toFixed(2) }}</span>，付费后进入快速通道、不用排队</template><template v-else>；所选课程没有待完成的答题/考试，直接提交即可开跑</template>
+          </p>
+
           <!-- 营销位：免费资格与邀请进度 -->
           <div v-if="benefit.free || inviteInfo.can_claim > 0 || myCard" class="promo-strip">
             <template v-if="myCard">
               <span class="ps-tag ok">刷课卡生效中</span>
-              <span class="ps-text">有效期还剩 <b class="mono">{{ myCard.days_left }}</b> 天，期间下单不花钱</span>
+              <span class="ps-text">有效期还剩 <b class="mono">{{ myCard.days_left }}</b> 天，答题/考试免单并优先排队</span>
             </template>
             <template v-else-if="benefit.reason === 'global'">
               <span class="ps-tag ok">限时免费</span>
@@ -1165,6 +1181,18 @@ onMounted(async () => {
 }
 
 /* ==================== 结算条 ==================== */
+/* 计费口径说明：贴在结算条下方，讲清楚"哪部分免费、哪部分收费" */
+.billing-note {
+  margin-top: var(--space-3);
+  font-size: var(--fs-xs);
+  line-height: 1.7;
+  color: var(--c-text-muted);
+}
+.billing-note b {
+  color: var(--c-text);
+  font-weight: 600;
+}
+
 .checkout {
   position: sticky;
   bottom: var(--space-4);

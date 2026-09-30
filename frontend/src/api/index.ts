@@ -6,6 +6,22 @@ export function setAdminApiToken(t: string) { adminToken = t }
 
 const FETCH_TIMEOUT_MS = 30000  // 30 秒超时，防止按钮永久卡住
 
+// 邀请落地：分享链接是 /?ref=<邀请码>，但路由是 hash 模式，后端中间件只看得到
+// API 请求（前端地址栏的 query 它看不到）。所以由落地后的第一个 API 请求代转一次，
+// 之后清空，避免后续每个请求都重复上报。
+const refCode = (() => {
+  try {
+    const v = new URLSearchParams(location.search).get('ref') || ''
+    return /^[A-Za-z0-9]{4,32}$/.test(v) ? v : ''
+  } catch { return '' }
+})()
+let refPending = !!refCode
+
+function withRef(path: string): string {
+  if (!refPending) return path
+  return path + (path.includes('?') ? '&' : '?') + 'ref=' + encodeURIComponent(refCode)
+}
+
 async function request<T = any>(method: string, path: string, body?: any): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   const adminOnlyPrefixes = ['/api/admin', '/api/queue', '/api/ypay', '/api/health']
@@ -21,7 +37,9 @@ async function request<T = any>(method: string, path: string, body?: any): Promi
   opts.signal = controller.signal
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
   try {
-    const res = await fetch(API_BASE + path, opts)
+    const res = await fetch(API_BASE + withRef(path), opts)
+    // 请求已到过服务端（后端在中间件里就先记账，与 handler 成败无关），不必再带
+    refPending = false
     if (!res.ok) {
       let errMsg = `请求失败 (${res.status})`
       try {
@@ -136,7 +154,13 @@ export const api = {
     relogin: (d: { username: string; password: string; website_id: number; include_records: boolean }) => post<ApiResponse<{ platform: PlatformResult }>>('/api/courses/relogin', d),
   },
   orders: {
-    batch: (d: { username: string; password: string; orders: any[] }) => post<ApiResponse<any>>('/api/orders/batch', d),
+    // 后端逐单分流：free_order_ids 是 0 元、已直接开跑的（只剩视频要刷）；
+    // payable_order_ids 是要付款才能跑的（含未完成的考试/作业）
+    batch: (d: { username: string; password: string; orders: any[] }) =>
+      post<ApiResponse<{
+        orders: any[]; free_order_ids: string[]; payable_order_ids: string[]
+        total_price: number; paid: boolean; free: boolean; free_reason: string
+      }>>('/api/orders/batch', d),
     get: (id: string, token?: string) => get<ApiResponse<OrderItem>>('/api/orders/' + id + (token ? '?token=' + encodeURIComponent(token) : '')),
     cancel: (id: string, token?: string) => del<ApiResponse<any>>('/api/orders/' + id + (token ? '?token=' + encodeURIComponent(token) : '')),
     clearHistory: () => post<ApiResponse<any>>('/api/orders/clear-history'),

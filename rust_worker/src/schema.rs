@@ -307,6 +307,12 @@ const SPEED_MODE_COLUMN: &[(&str, &str)] = &[("speed_mode", "VARCHAR(255) DEFAUL
 /// 订单上的访客标识（营销归因：付款成功后据此把邀请记为有效）
 const ORDER_VISITOR_COLUMN: &[(&str, &str)] = &[("vid", "VARCHAR(64) DEFAULT ''")];
 
+/// 队列任务所属通道：付费（答题/考试）与免费（刷视频）。
+///
+/// 与 `priority` 正交：`lane` 决定占哪条并发额度，`priority` 只决定池内先后。
+/// 老库缺列时默认 'paid' —— 历史任务都是付费单，落付费池即当前行为。
+const LANE_COLUMN: &[(&str, &str)] = &[("lane", "VARCHAR(16) DEFAULT 'paid'")];
+
 /// 幂等补列：表里缺失的列用 ALTER TABLE ADD COLUMN 补上（已存在的跳过）
 fn add_missing_columns(
     conn: &rusqlite::Connection,
@@ -338,6 +344,8 @@ pub fn ensure_schema(pool: &Pool<SqliteConnectionManager>) -> Result<()> {
     add_missing_columns(&conn, "queue_jobs_school", SPEED_MODE_COLUMN)?;
     add_missing_columns(&conn, "queue_jobs_chaoxing", SPEED_MODE_COLUMN)?;
     add_missing_columns(&conn, "orders", ORDER_VISITOR_COLUMN)?;
+    add_missing_columns(&conn, "queue_jobs_school", LANE_COLUMN)?;
+    add_missing_columns(&conn, "queue_jobs_chaoxing", LANE_COLUMN)?;
 
     conn.execute_batch(INDEX_DDL).context("建索引失败")?;
 

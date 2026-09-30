@@ -988,6 +988,10 @@ async fn queue_stats(State(state): State<AppState>) -> Json<Value> {
     let max_workers = crate::queue::config_get(&state.db, "queue_max_workers").await
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or_else(|| default_max_workers() as i64);
+    // 免费通道额度（与调度器读同一个键，监控显示的才是真实生效值）
+    let free_max_workers = crate::queue::config_get(&state.db, crate::queue::CFG_FREE_MAX_WORKERS).await
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or_else(|| default_free_max_workers() as i64);
     let paused_all = crate::queue::config_get(&state.db, "queue_paused").await
         .map(|v| v == "1").unwrap_or(false);
     let paused_school = paused_all || crate::queue::config_get(&state.db, "queue_paused_school").await
@@ -999,23 +1003,35 @@ async fn queue_stats(State(state): State<AppState>) -> Json<Value> {
         let conn = db.get()?;
         // 统计口径与任务列表保持一致：都被软删的任务不该继续出现在 KPI 里
         // （此前列表过滤了 deleted_at、KPI 没过滤，两个数字对不上）
-        let table_stats = |table: &str| -> rusqlite::Result<Map<String, Value>> {
+        let table_stats = |table: &str, lane: Option<&str>| -> rusqlite::Result<Map<String, Value>> {
             let mut m = Map::new();
             for st in ["pending", "running", "waiting", "completed", "failed"] {
-                let c: i64 = conn.query_row(
-                    &format!("SELECT COUNT(*) FROM {table} WHERE status=?1 AND deleted_at IS NULL"),
-                    rusqlite::params![st], |r| r.get(0))?;
+                let c: i64 = match lane {
+                    Some(l) => conn.query_row(
+                        &format!("SELECT COUNT(*) FROM {table} WHERE status=?1 AND deleted_at IS NULL AND lane=?2"),
+                        rusqlite::params![st, l], |r| r.get(0))?,
+                    None => conn.query_row(
+                        &format!("SELECT COUNT(*) FROM {table} WHERE status=?1 AND deleted_at IS NULL"),
+                        rusqlite::params![st], |r| r.get(0))?,
+                };
                 m.insert(st.to_string(), json!(c));
             }
-            let total: i64 = conn.query_row(
-                &format!("SELECT COUNT(*) FROM {table} WHERE deleted_at IS NULL"),
-                [], |r| r.get(0))?;
+            let total: i64 = match lane {
+                Some(l) => conn.query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE deleted_at IS NULL AND lane=?1"),
+                    rusqlite::params![l], |r| r.get(0))?,
+                None => conn.query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE deleted_at IS NULL"),
+                    [], |r| r.get(0))?,
+            };
             m.insert("total".into(), json!(total));
             Ok(m)
         };
-        let active = crate::queue::active_workers() as i64;
-        let mut school = table_stats("queue_jobs_school")?;
-        let mut chaoxing = table_stats("queue_jobs_chaoxing")?;
+        let active_paid = crate::queue::active_workers_in(crate::queue::Lane::Paid) as i64;
+        let active_free = crate::queue::active_workers_in(crate::queue::Lane::Free) as i64;
+        let active = active_paid + active_free;
+        let mut school = table_stats("queue_jobs_school", None)?;
+        let mut chaoxing = table_stats("queue_jobs_chaoxing", None)?;
         // 学校队列是唯一被调度器消费的队列（学习通链路未落地），
         // 所以进程级在跑数全部归到 school；chaoxing 恒为 0 是事实而非占位。
         school.insert("active_workers".into(), json!(active));
@@ -1024,6 +1040,15 @@ async fn queue_stats(State(state): State<AppState>) -> Json<Value> {
         school.insert("max_study_workers".into(), json!(max_workers));
         school.insert("paused".into(), json!(paused_school));
         school.insert("queue_name".into(), json!("school"));
+        // 两条通道各自的积压/在跑/额度：付费单会不会被免费积压拖住，看这里
+        let mut paid_lane = table_stats("queue_jobs_school", Some("paid"))?;
+        paid_lane.insert("active_workers".into(), json!(active_paid));
+        paid_lane.insert("max_workers".into(), json!(max_workers));
+        let mut free_lane = table_stats("queue_jobs_school", Some("free"))?;
+        free_lane.insert("active_workers".into(), json!(active_free));
+        free_lane.insert("max_workers".into(), json!(free_max_workers));
+        school.insert("paid".into(), json!(paid_lane));
+        school.insert("free".into(), json!(free_lane));
         chaoxing.insert("active_workers".into(), json!(0));
         chaoxing.insert("max_workers".into(), json!(max_workers));
         chaoxing.insert("active_study_workers".into(), json!(0));
@@ -1471,19 +1496,23 @@ async fn enqueue_order_impl(state: &AppState, order_id: &str) -> anyhow::Result<
         let username = order["username"].as_str().unwrap_or("").to_string();
         let password = crate::crypto::load_password(&conn, &oid)
             .ok_or_else(|| anyhow::anyhow!("订单凭据缺失（加密记录与明文列均无）"))?;
+        // 通道/优先级与支付入队走同一张判定表：管理员手动补入队时若写死 0，
+        // 免费单会落进付费池抢额度，两条通道的隔离就形同虚设
+        let (lane, priority) =
+            crate::queue::lane_and_priority(order["paid_processed"].as_str().unwrap_or(""));
         conn.execute(
             "INSERT INTO queue_jobs_school
-             (job_id, username, password, website_id, job_type, course_ids, status, priority,
+             (job_id, username, password, website_id, job_type, course_ids, status, priority, lane,
               progress, total_steps, completed_steps, current_step_name, error_message,
               retry_count, max_retries, task_id, order_id, result_data, verified,
               created_at, started_at, finished_at, deleted_at, speed_mode)
-             VALUES (?1,?2,?3,?4,?5,?6,'pending',0,0,0,0,'','',0,3,NULL,?7,'{}',0,?8,NULL,NULL,NULL,?9)",
+             VALUES (?1,?2,?3,?4,?5,?6,'pending',?7,?8,0,0,0,'','',0,3,NULL,?9,'{}',0,?10,NULL,NULL,NULL,?11)",
             rusqlite::params![
                 job_id, username, password,
                 order["website_id"].as_i64().unwrap_or(1),
                 order["task_type"].as_str().unwrap_or("video"),
                 serde_json::to_string(&order["course_ids"])?,
-                oid, crate::queue::now_str(),
+                priority, lane.as_str(), oid, crate::queue::now_str(),
                 crate::speed::SpeedMode::parse(
                     order["speed_mode"].as_str().unwrap_or("")).as_str(),
             ],
@@ -1733,7 +1762,7 @@ async fn queue_jobs(
             let mut sql = format!(
                 "SELECT job_id, username, order_id, status, progress, current_step_name,
                         error_message, retry_count, verified, job_type, created_at,
-                        started_at, finished_at
+                        started_at, finished_at, lane, priority
                  FROM {table} WHERE deleted_at IS NULL"
             );
             let mut args: Vec<String> = Vec::new();
@@ -1758,6 +1787,8 @@ async fn queue_jobs(
                     "created_at": r.get::<_, Option<String>>(10)?.unwrap_or_default(),
                     "started_at": r.get::<_, Option<String>>(11)?,
                     "finished_at": r.get::<_, Option<String>>(12)?,
+                    "lane": r.get::<_, Option<String>>(13)?.unwrap_or_else(|| "paid".into()),
+                    "priority": r.get::<_, i64>(14).unwrap_or(0),
                     "queue": queue_tag,
                 }))
             })?
@@ -1967,6 +1998,15 @@ const MAX_WORKERS_CEILING: usize = 64;
 fn default_max_workers() -> usize {
     std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
         .saturating_sub(1).max(1).clamp(1, MAX_WORKERS_CEILING)
+}
+
+/// 免费通道默认并发，与 queue::default_free_max_workers 同源（免费是成本项，刻意小）
+fn default_free_max_workers() -> usize {
+    std::env::var("RUST_FREE_MAX_WORKERS").ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(2)
+        .clamp(1, 32)
 }
 
 #[cfg(target_os = "linux")]

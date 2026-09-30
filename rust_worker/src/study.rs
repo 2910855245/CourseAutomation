@@ -86,14 +86,33 @@ fn make_client() -> Client {
 pub struct Video {
     #[serde(default)]
     pub node_id: String,
+    /// 视频总时长（秒）。`None` = 平台没给出可用时长（字段缺失/非数值/为 0）。
+    ///
+    /// 必须是 Option 而不是"0 兜底"：0 会让 `duration - viewed` 算出 0，
+    /// 于是这一节被当成"已看完"瞬间跳过 —— 而扫描侧用的是另一套判据，
+    /// 会把同一节算成"待刷"并据此收钱。两边结论相反的结果是：客户付了钱、
+    /// 进度条爬到 100%、平台上一节都没动。拿不到时长就必须能表达"不知道"。
     #[serde(default)]
-    pub duration: u64,
+    pub duration: Option<u64>,
     #[serde(default)]
     pub viewed_duration: u64,
+    /// 视频文件地址。平台列表接口不返回时长，补时长要从文件本身读（见 scan 的媒体探测）。
+    #[serde(default)]
+    pub local_file: Option<String>,
     #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub course_id: String,
+}
+
+/// 视频是否已在平台上刷满。
+///
+/// **扫描侧（计费/待刷统计）与刷课侧（是否跳过）必须共用这一个判据**。
+/// 此前两边各写一套等价但不一致的判断，`duration` 一旦解析失败就会分叉：
+/// 扫描判"要刷"（计费、入队），刷课判"已完成"（秒过、报 100%）。
+/// 时长未知一律**不算已完成** —— 不知道就不许替客户宣布成功。
+pub fn video_is_done(v: &Video) -> bool {
+    matches!(v.duration, Some(d) if v.viewed_duration >= d)
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,19 +158,54 @@ struct ReportForm<'a> {
     studyTime: i64,
 }
 
+/// 平台对同一字段的类型并不稳定 —— 已实测到字符串 / 数字 / 布尔三种形态。
+/// 数字字段一旦收到 `true`，整个响应反序列化就失败，一节视频会被判成失败，
+/// 而这种"类型随意"并不是真的执行错误。这里统一做宽松转换。
+fn lenient_i64<'de, D>(d: D) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(match v {
+        Some(serde_json::Value::Number(n)) => n
+            .as_i64()
+            .or_else(|| n.as_f64().map(|f| f as i64))
+            .unwrap_or(0),
+        Some(serde_json::Value::String(s)) => s.trim().parse::<i64>().unwrap_or(0),
+        // 布尔当真值用：true=1。平台把标志位塞进数字字段时就是这个形态
+        Some(serde_json::Value::Bool(b)) => i64::from(b),
+        _ => 0,
+    })
+}
+
+fn lenient_bool<'de, D>(d: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(match v {
+        Some(serde_json::Value::Bool(b)) => b,
+        Some(serde_json::Value::Number(n)) => n.as_i64().unwrap_or(0) != 0,
+        Some(serde_json::Value::String(s)) => {
+            !matches!(s.trim().to_ascii_lowercase().as_str(), "" | "0" | "false" | "no")
+        }
+        _ => false,
+    })
+}
+
 #[derive(Debug, Deserialize)]
 struct ReportResp {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_i64")]
     status: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_i64")]
     state: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_i64")]
     studyId: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_i64")]
     need_code: i64,
     #[serde(default)]
     verifyToken: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_bool")]
     offline: bool,
     #[serde(default)]
     msg: String,
@@ -220,8 +274,14 @@ async fn handle_captcha(shared: &Shared, node_id: &str, need_code: i64, verify_t
 
 /// 刷单个视频：墙钟推进 + 自适应上报 + 验证码重试 + 2.1 比率
 async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
-    let actual_target = video.duration.saturating_sub(video.viewed_duration);
+    // 时长拿不到时绝不能当成"已完成"：那是假成功 —— 客户付了钱、进度条爬到
+    // 100%、平台上一节都没动，而且不会有任何报错。宁可让这一单失败被看见。
+    let Some(duration) = video.duration else {
+        anyhow::bail!("视频时长无法获取，无法刷课（node={} 《{}》）", video.node_id, video.name);
+    };
+    let actual_target = duration.saturating_sub(video.viewed_duration);
     if actual_target == 0 {
+        // 时长已知且已看满 → 真的不需要再刷
         return Ok(true);
     }
     // 全局会话闸：许可在整个视频生命周期内持有，把进程内并发会话总数压在上限内。
@@ -238,7 +298,7 @@ async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
     loop {
         // 报满 studyTime 后一次睡到下一续报点，不再每秒空转（见 next_tick_secs）
         let past_target = total_time >= actual_target;
-        let wall_left = video.duration as f64 * MIN_RATIO - start.elapsed().as_secs_f64();
+        let wall_left = duration as f64 * MIN_RATIO - start.elapsed().as_secs_f64();
         let tick = next_tick_secs(past_target, wall_left);
         if tick > 0.0 {
             tokio::time::sleep(Duration::from_secs_f64(tick)).await;
@@ -326,7 +386,7 @@ async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
         }
 
         // 完成条件：studyTime 报满 + 墙钟 ≥ 2.1×时长
-        if total_time >= actual_target && start.elapsed().as_secs_f64() >= video.duration as f64 * MIN_RATIO {
+        if total_time >= actual_target && start.elapsed().as_secs_f64() >= duration as f64 * MIN_RATIO {
             return Ok(true);
         }
     }
@@ -356,8 +416,11 @@ async fn heartbeat_loop(shared: Arc<Shared>) {
         let secs = rand::rng().random_range(90..=150);
         tokio::time::sleep(Duration::from_secs(secs)).await;
         crate::speed::pace(&shared.profile).await;
+        // 心跳同样要带 cookie，否则平台侧看到的是一次匿名访问，等于没心跳
+        let cookie = shared.cookie_str.lock().await.clone();
         let _ = shared.client
             .post(format!("{}/user/online", shared.base_url))
+            .header("Cookie", cookie)
             .header("X-Requested-With", "XMLHttpRequest")
             .send().await;
     }
@@ -371,8 +434,12 @@ async fn cookie_refresh_loop(shared: Arc<Shared>) {
             continue;
         }
         crate::speed::pace(&shared.profile).await;
+        // 与启动检查同一个坑：不带 cookie 的 /user/index 一定 302，
+        // 结果是每 30 分钟白白触发一次重新登录（每单一轮 10 次登录尝试）
+        let cookie = shared.cookie_str.lock().await.clone();
         let resp = shared.client
             .get(format!("{}/user/index", shared.base_url))
+            .header("Cookie", cookie)
             .send().await;
         match resp {
             Ok(r) if matches!(r.status().as_u16(), 302 | 401 | 403) => {
@@ -424,9 +491,14 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
         profile,
     });
 
-    // 启动时 cookie 有效性检查
+    // 启动时 cookie 有效性检查。
+    // 必须显式带上会话 cookie：不带就是匿名请求，平台对 /user/index 一律 302 到
+    // 登录页 → 每次启动都误判「cookie 已过期」并触发一次毫无必要的重新登录。
     if !task.username.is_empty() {
-        let r = shared.client.get(format!("{}/user/index", shared.base_url)).send().await;
+        let cookie = shared.cookie_str.lock().await.clone();
+        let r = shared.client.get(format!("{}/user/index", shared.base_url))
+            .header("Cookie", cookie)
+            .send().await;
         if let Ok(resp) = r {
             if matches!(resp.status().as_u16(), 302 | 401 | 403) {
                 eprintln!("[rust_worker] 启动时 cookie 已过期，尝试重新登录");
@@ -474,6 +546,11 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
     let done_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let failed_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
+    // 进度回报参数：闭包要 move 进去，先转成 owned；总节数在这里定死
+    let push_url = push_url.to_string();
+    let push_token = push_token.to_string();
+    let total_videos = queue.len() as u64;
+
     // 视频并发闸：档位决定同时在跑几路会话（急速 8 / 均衡 4 / 温柔 1）。
     // 槽位满时后面的视频在此排队（不产生任何请求）。
     let video_sem = Arc::new(tokio::sync::Semaphore::new(profile.video_concurrency.max(1)));
@@ -496,16 +573,48 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
         let shared = shared.clone();
         let done_counter = done_counter.clone();
         let failed_counter = failed_counter.clone();
+        let push_url = push_url.clone();
+        let push_token = push_token.clone();
         set.spawn(async move {
             let _permit = permit;
-            match study_video(&shared, &v).await {
+            let t0 = Instant::now();
+            let r = study_video(&shared, &v).await;
+            let wall = t0.elapsed().as_secs();
+            let order = std::sync::atomic::Ordering::Relaxed;
+            let (done, failed) = match r {
                 Ok(true) => {
-                    done_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let d = done_counter.fetch_add(1, order) + 1;
+                    let f = failed_counter.load(order);
+                    eprintln!("[rust_worker] 视频完成 {}/{} 《{}》时长 {}s 墙钟 {}s",
+                              d + f, total_videos, v.name, v.duration.unwrap_or(0), wall);
+                    (d, f)
                 }
-                Ok(false) | Err(_) => {
-                    failed_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(false) => {
+                    let f = failed_counter.fetch_add(1, order) + 1;
+                    eprintln!("[rust_worker] 视频未完成 {}/{} 《{}》墙钟 {}s",
+                              f, total_videos, v.name, wall);
+                    (done_counter.load(order), f)
                 }
-            }
+                Err(e) => {
+                    let f = failed_counter.fetch_add(1, order) + 1;
+                    eprintln!("[rust_worker] 视频失败 {}/{} 《{}》err={e:#}",
+                              f, total_videos, v.name);
+                    (done_counter.load(order), f)
+                }
+            };
+            // 每节结束回报一次进度：进度条按**成功**节数走，
+            // 失败的单独写在步骤文案里 —— 不能拿"尝试过的节数"冒充"刷成功的节数"
+            let pct = if total_videos > 0 { done as f64 * 100.0 / total_videos as f64 } else { 0.0 };
+            let step = if failed > 0 {
+                format!("已完成 {done}/{total_videos} 节（失败 {failed}）")
+            } else {
+                format!("已刷 {done}/{total_videos} 节")
+            };
+            push_ws(&shared, serde_json::json!({
+                "type": "progress", "phase": "video",
+                "progress": pct, "done": done, "failed": failed, "total": total_videos,
+                "step": step,
+            }), &push_url, &push_token).await;
         });
     }
     while set.join_next().await.is_some() {}
@@ -618,8 +727,9 @@ mod tests {
     fn mock_videos(course: &str, count: usize, duration: u64) -> Vec<Video> {
         (0..count).map(|i| Video {
             node_id: format!("{course}-n{i}"),
-            duration,
+            duration: Some(duration),
             viewed_duration: 0,
+            local_file: None,
             name: format!("{course} 第{i}节"),
             course_id: course.to_string(),
         }).collect()
