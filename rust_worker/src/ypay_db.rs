@@ -507,6 +507,35 @@ impl Db {
             .unwrap_or_default()
     }
 
+    /// 找出「已付款但两张队列表都没有任务」的孤儿单（顺延补投用）。
+    ///
+    /// 这是 `submit_paid_order_job_sync` 账号级去重的配套兜底：同账号同平台
+    /// 前一单还在跑时，第二单入队会返回 false 且不改任何状态，订单停在
+    /// `status='paid'` 无人再碰。对账循环周期性调用本方法即可 —— 前一单跑完、
+    /// 账号槽位空出来后，下一轮扫描把它送上（不重下单、不丢单）。
+    ///
+    /// 排序：付费单在免费单之前（账号槽位空出时付费优先），同档位按创建时间先来先得。
+    /// NOT EXISTS 不过滤 deleted_at，与 `queue_job_status_by_order_sync` 的口径一致，
+    /// 避免把管理员软删掉的任务再复活一份。
+    pub fn find_orders_paid_without_job_sync(&self, limit: i64) -> Vec<String> {
+        let pool = self.clone_pool();
+        let Ok(conn) = pool.get() else { return vec![] };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT o.order_id FROM orders o
+             WHERE o.paid = 1 AND o.status = 'paid' AND o.deleted_at IS NULL
+               AND NOT EXISTS (SELECT 1 FROM queue_jobs_school q WHERE q.order_id = o.order_id)
+               AND NOT EXISTS (SELECT 1 FROM queue_jobs_chaoxing q WHERE q.order_id = o.order_id)
+             ORDER BY CASE WHEN o.paid_processed LIKE 'free:%' THEN 1 ELSE 0 END ASC,
+                      o.created_at ASC
+             LIMIT ?1",
+        ) else {
+            return vec![];
+        };
+        stmt.query_map(params![limit], |r| r.get::<_, String>(0))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
     /// 更新订单 out_trade_no（对齐 update_order 的单字段用法，附 updated_at）
     pub fn update_order_out_trade_no_sync(&self, order_id: &str, out_trade_no: &str) -> bool {
         let pool = self.clone_pool();
@@ -678,18 +707,20 @@ impl Db {
             tx.rollback()?;
             return Ok(false);
         }
-        // 对齐 submit_job：同 username+website_id+job_type 活跃任务 → 跳过。
-        // job_type 必须参与去重：刷课免费之后，「先领免费刷课、之后再买答题」是
-        // 主流程，若只按账号判重，付款后的答题单会被静默丢弃（订单永远停在已付款、
-        // 无报错、不重试）。带上 job_type 后同账号的「刷课」与「考试」可并行。
+        // 对齐 submit_job：同 username+website_id 活跃任务 → 跳过（同账号串行，跨类型也拦）。
+        // 为什么跨类型也串行：平台的重叠检测按账号统计会话数（安全线 ≤8，见 speed.rs），
+        // 同账号两任务并行会让重叠数相加直接越线；且同账号并发登录会互踢会话。
+        // 「先领免费刷课、之后再买答题」的第二单不会丢 —— 这里只是延后，
+        // 由 pay_routes.rs 的对账循环兜底扫描（resume_deferred_orders_sync）
+        // 在前一单跑完后自动补投，顾客无需重新下单。
         let dup: Option<String> = tx
             .query_row(
                 &format!(
                     "SELECT job_id FROM {table}
-                     WHERE username=?1 AND website_id=?2 AND job_type=?3
+                     WHERE username=?1 AND website_id=?2
                        AND status IN ('pending','running','retrying') LIMIT 1"
                 ),
-                params![username, website_id, task_type],
+                params![username, website_id],
                 |r| r.get(0),
             )
             .ok();
@@ -772,13 +803,13 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// 回归：去重必须带上 job_type。
+    /// 回归：同账号同平台串行（跨类型也拦），前序任务完成后顺延入队。
     ///
-    /// "刷课免费、考试付费"之后，「先领免费刷课、之后再买答题」是主流程。
-    /// 若去重只看 username+website_id，付款后的答题单会被静默丢弃
-    /// （返回 Ok(false)，订单永远停在已付款、无报错、不重试）。
+    /// 为什么跨类型也拦：平台的重叠检测按账号统计会话数（安全线 ≤8），同账号
+    /// 两任务并行会让重叠数相加越线，且并发登录会互踢会话。「先领免费刷课、
+    /// 之后再买答题」的第二单只是延后，由 finder + 对账循环补投，不会丢单。
     #[test]
-    fn test_dedup_allows_video_and_exam_same_account() {
+    fn test_dedup_serializes_same_account_and_defers() {
         let dir = std::env::temp_dir().join(format!(
             "rust_worker_ypay_dedup_test_{}",
             std::process::id()
@@ -787,6 +818,25 @@ mod tests {
         let path = dir.join("dedup.db");
         let _ = std::fs::remove_file(&path);
         let db = Db::open(path.to_str().unwrap()).unwrap();
+
+        // 三张订单落库：E1/E2 是付费答题（后创建），F1 是免费刷课
+        {
+            let conn = db.clone_pool().get().unwrap();
+            for (oid, tt, pp, created) in [
+                ("ORD-F1", "video", "free:video", "2026-01-01 00:00:00"),
+                ("ORD-E1", "exam", "processed", "2026-01-01 00:00:05"),
+                ("ORD-E2", "exam", "processed", "2026-01-01 00:00:06"),
+            ] {
+                conn.execute(
+                    "INSERT INTO orders (order_id, username, password, website_id, task_type,
+                         course_ids, video_count, exam_count, price, status, paid, paid_processed,
+                         created_at, updated_at)
+                     VALUES (?1,'SAMEUSER','',1,?2,'[]',1,0,0.0,'paid',1,?3,?4,?4)",
+                    rusqlite::params![oid, tt, pp, created],
+                )
+                .unwrap();
+            }
+        }
 
         let order = |oid: &str, task_type: &str, paid_processed: &str| {
             json!({
@@ -801,11 +851,38 @@ mod tests {
         assert!(db
             .submit_paid_order_job_sync(&order("ORD-V1", "video", "free:video"))
             .unwrap());
-        // 再买答题：必须入队成功（这正是旧逻辑会静默吞掉的那一单）
-        assert!(db
-            .submit_paid_order_job_sync(&order("ORD-E1", "exam", "paid"))
+        // 跨类型（答题）与同类型（再来一单答题）都被账号级去重拦下 → 顺延
+        assert!(!db
+            .submit_paid_order_job_sync(&order("ORD-E1", "exam", "processed"))
             .unwrap());
+        assert!(!db
+            .submit_paid_order_job_sync(&order("ORD-E2", "exam", "processed"))
+            .unwrap());
+        // 兜底扫描能看到这两张悬空单，且付费单排在免费单之前、同档位按创建时间
+        assert_eq!(
+            db.find_orders_paid_without_job_sync(10),
+            vec!["ORD-E1", "ORD-E2", "ORD-F1"]
+        );
 
+        // 前序任务跑完 → 账号槽位空出 → 顺延入队成功
+        db.clone_pool()
+            .get()
+            .unwrap()
+            .execute(
+                "UPDATE queue_jobs_school SET status='completed' WHERE order_id='ORD-V1'",
+                [],
+            )
+            .unwrap();
+        assert!(db
+            .submit_paid_order_job_sync(&order("ORD-E1", "exam", "processed"))
+            .unwrap());
+        // 已入队的单不再出现在扫描结果里
+        assert_eq!(
+            db.find_orders_paid_without_job_sync(10),
+            vec!["ORD-E2", "ORD-F1"]
+        );
+
+        // 通道归属：免费单进 free（普通档 priority 2），付费答题进 paid（priority 0）
         let conn = db.clone_pool().get().unwrap();
         let rows: Vec<(String, String, i64)> = {
             let mut stmt = conn
@@ -819,15 +896,10 @@ mod tests {
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .unwrap()
         };
-        assert_eq!(rows.len(), 2, "答题单被去重逻辑吞掉了");
-        // exam → 付费池；video 免费单 → 免费池（普通档 priority 2）
+        assert_eq!(rows.len(), 2, "顺延的答题单没入队");
         assert_eq!(rows[0], ("exam".to_string(), "paid".to_string(), 0));
         assert_eq!(rows[1], ("video".to_string(), "free".to_string(), 2));
 
-        // 同类型重复入队仍应被拦住（去重本身没有失效）
-        assert!(!db
-            .submit_paid_order_job_sync(&order("ORD-E2", "exam", "paid"))
-            .unwrap());
         drop(conn);
         let _ = std::fs::remove_file(&path);
     }

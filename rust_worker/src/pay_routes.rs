@@ -848,12 +848,37 @@ pub(crate) fn reconcile_paid_orders_sync(db: &Db) -> usize {
     ids.len()
 }
 
+/// 顺延补投：把「已付款、但被账号级去重拦下、至今没有队列任务」的订单补投。
+///
+/// 入队去重对同账号同平台串行（见 ypay_db.submit_paid_order_job_sync，防止
+/// 平台按账号统计的重叠检测越线），第二单入队时会静默返回 false。这里周期性
+/// 兜底：前一单跑完、账号槽位空出后，下一轮扫描把它送上，顾客无需重新下单。
+/// 幂等：enqueue 链路自带 order_id 去重，重复扫到不会重复投递；同账号仍受
+/// 去重约束，一单在跑时其余单继续留在原地等下一轮。
+pub(crate) fn resume_deferred_orders_sync(db: &Db) -> usize {
+    let ids = db.find_orders_paid_without_job_sync(100);
+    if ids.is_empty() {
+        return 0;
+    }
+    let n = enqueue_paid_orders_sync(db, &ids);
+    if n > 0 {
+        tracing::info!(resumed = n, scanned = ids.len(), "顺延：补投被账号去重拦下的已付款订单");
+    }
+    n
+}
+
 /// 对账循环：每 60s 扫一次悬空的已付款订单
 pub async fn reconcile_loop(state: Arc<AppState>) {
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         let db = state.db.clone();
-        let r = tokio::task::spawn_blocking(move || reconcile_paid_orders_sync(&db)).await;
+        let r = tokio::task::spawn_blocking(move || {
+            let n = reconcile_paid_orders_sync(&db);
+            // 顺延：账号串行拦下的已付款单，在前一单跑完后自动补投
+            resume_deferred_orders_sync(&db);
+            n
+        })
+        .await;
         if let Ok(n) = r {
             if n > 0 {
                 tracing::info!(repaired = n, "对账完成");
