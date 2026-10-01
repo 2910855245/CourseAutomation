@@ -31,6 +31,7 @@ mod promo;
 mod promo_routes;
 mod queue;
 mod scan;
+mod scan_snapshot;
 mod schema;
 mod school_exam;
 mod session;
@@ -181,7 +182,12 @@ async fn main() -> anyhow::Result<()> {
     logs::init(&state);
 
     // Rust 队列调度器（默认启用；显式 RUST_QUEUE_ENABLED=false 才停用）
-    tokio::spawn(queue::dispatcher_loop(std::sync::Arc::new(state.clone())));
+    // 学校与学习通各起一个循环：队列表、执行器、暂停开关都不同，
+    // 但认领/重试/双通道额度语义共用同一套实现（见 queue::QueueKind）。
+    tokio::spawn(queue::dispatcher_loop(
+        std::sync::Arc::new(state.clone()), queue::QueueKind::School));
+    tokio::spawn(queue::dispatcher_loop(
+        std::sync::Arc::new(state.clone()), queue::QueueKind::Chaoxing));
 
     // 支付对账：补齐「通道已收款但业务未入账」的悬空订单。
     // 放在后台而不是查单接口里 —— 否则用户付完就关页面就再没人补账。

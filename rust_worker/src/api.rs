@@ -502,7 +502,7 @@ fn inject_progress_inner(
 ) -> rusqlite::Result<()> {
     // SQLite 变量数上限（默认 999）：分批绑定，避免长列表直接报错
     const CHUNK: usize = 500;
-    let mut latest: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    let mut latest: std::collections::HashMap<String, (f64, String)> = std::collections::HashMap::new();
     // school 先查：or_insert 保证 school 的记录不被 chaoxing 覆盖（学校优先）
     for table in ["queue_jobs_school", "queue_jobs_chaoxing"] {
         for chunk in ids.chunks(CHUNK) {
@@ -510,26 +510,30 @@ fn inject_progress_inner(
                 .collect::<Vec<_>>()
                 .join(",");
             let sql = format!(
-                "SELECT order_id, status, progress FROM {table}
+                "SELECT order_id, status, progress, current_step_name FROM {table}
                  WHERE order_id IN ({placeholders})
                  ORDER BY created_at DESC"
             );
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map(
                 rusqlite::params_from_iter(chunk.iter().map(|s| s.as_str())),
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?)),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?,
+                        r.get::<_, Option<String>>(3)?.unwrap_or_default())),
             )?;
             for row in rows {
-                let (order_id, status, progress) = row?;
+                let (order_id, status, progress, step) = row?;
                 // 已按 created_at DESC 排序：首次出现即该表最新一条
                 latest.entry(order_id)
-                    .or_insert(if status == "completed" { 100.0 } else { progress });
+                    .or_insert((if status == "completed" { 100.0 } else { progress }, step));
             }
         }
     }
     for item in items.iter_mut() {
         let order_id = item["order_id"].as_str().unwrap_or("");
-        item["progress"] = json!(latest.get(order_id).copied().unwrap_or(0.0));
+        let (progress, step) = latest.get(order_id).cloned().unwrap_or((0.0, String::new()));
+        item["progress"] = json!(progress);
+        // 当前步骤：订单页用它显示"正在做什么"（此前只回进度数字，用户看不到进展细节）
+        item["current_step_name"] = json!(step);
     }
     Ok(())
 }
@@ -1047,10 +1051,14 @@ async fn queue_stats(State(state): State<AppState>) -> Json<Value> {
         let active_paid = crate::queue::active_workers_in(crate::queue::Lane::Paid) as i64;
         let active_free = crate::queue::active_workers_in(crate::queue::Lane::Free) as i64;
         let active = active_paid + active_free;
+        // 学习通队列有自己的调度循环，在跑数必须分队列读 —— 此前全部记在学校头上
+        let cx_paid = crate::queue::active_workers_in_kind(
+            crate::queue::QueueKind::Chaoxing, crate::queue::Lane::Paid) as i64;
+        let cx_free = crate::queue::active_workers_in_kind(
+            crate::queue::QueueKind::Chaoxing, crate::queue::Lane::Free) as i64;
+        let cx_active = cx_paid + cx_free;
         let mut school = table_stats("queue_jobs_school", None)?;
         let mut chaoxing = table_stats("queue_jobs_chaoxing", None)?;
-        // 学校队列是唯一被调度器消费的队列（学习通链路未落地），
-        // 所以进程级在跑数全部归到 school；chaoxing 恒为 0 是事实而非占位。
         school.insert("active_workers".into(), json!(active));
         school.insert("max_workers".into(), json!(max_workers));
         school.insert("active_study_workers".into(), json!(active));
@@ -1066,12 +1074,21 @@ async fn queue_stats(State(state): State<AppState>) -> Json<Value> {
         free_lane.insert("max_workers".into(), json!(free_max_workers));
         school.insert("paid".into(), json!(paid_lane));
         school.insert("free".into(), json!(free_lane));
-        chaoxing.insert("active_workers".into(), json!(0));
+        chaoxing.insert("active_workers".into(), json!(cx_active));
         chaoxing.insert("max_workers".into(), json!(max_workers));
-        chaoxing.insert("active_study_workers".into(), json!(0));
+        chaoxing.insert("active_study_workers".into(), json!(cx_active));
         chaoxing.insert("max_study_workers".into(), json!(max_workers));
         chaoxing.insert("paused".into(), json!(paused_cx));
         chaoxing.insert("queue_name".into(), json!("chaoxing"));
+        // 学习通也分付费/免费两条通道（与学校同一套额度键、独立计数）
+        let mut cx_paid_lane = table_stats("queue_jobs_chaoxing", Some("paid"))?;
+        cx_paid_lane.insert("active_workers".into(), json!(cx_paid));
+        cx_paid_lane.insert("max_workers".into(), json!(max_workers));
+        let mut cx_free_lane = table_stats("queue_jobs_chaoxing", Some("free"))?;
+        cx_free_lane.insert("active_workers".into(), json!(cx_free));
+        cx_free_lane.insert("max_workers".into(), json!(free_max_workers));
+        chaoxing.insert("paid".into(), json!(cx_paid_lane));
+        chaoxing.insert("free".into(), json!(cx_free_lane));
 
         let sum = |k: &str| -> i64 {
             school.get(k).and_then(|v| v.as_i64()).unwrap_or(0)
@@ -1174,6 +1191,44 @@ async fn pricing_calculate(State(state): State<AppState>, Json(body): Json<Value
     let cfg = match crate::order::pricing_config(&state.db).await {
         Ok(c) => c,
         Err(e) => return Json(json!({"success": false, "message": e.to_string()})),
+    };
+    // 试算与下单必须同源：只要带了 username，就一律用服务端扫描快照里的事实，
+    // 覆盖客户端回传的明细。否则试算按客户端数据、下单按服务端数据，两边价不一致，
+    // 更糟的是给"伪造明细"的客户端显示 0 元（虽然下单会被拒，但界面在骗人）。
+    let username = body["username"].as_str().unwrap_or("").trim().to_string();
+    let courses = if username.is_empty() || courses.is_empty() {
+        courses // 老调用方没带身份：退回客户端数据（仅试算展示，不参与下单）
+    } else {
+        let mut resolved: Vec<Value> = Vec::with_capacity(courses.len());
+        for c in &courses {
+            let cid = c["course_id"].as_str().unwrap_or("").trim().to_string();
+            if cid.is_empty() {
+                continue;
+            }
+            let wid = c["website_id"].as_i64().unwrap_or(0);
+            // 学习通一口价，不需要课程明细事实（也没有对应快照）→ 原样透传
+            if wid == 4 {
+                resolved.push(c.clone());
+                continue;
+            }
+            let facts = if wid > 0 {
+                crate::scan_snapshot::resolve(&username, wid, &[cid.clone()])
+            } else {
+                crate::scan_snapshot::resolve_any_school_platform(&username, &[cid.clone()])
+            };
+            match facts {
+                Ok(f) if !f.is_empty() => resolved.push(f[0].clone()),
+                // 快照缺失：与下单同一口径做**保守试算**（按一门课收考试费），
+                // 而不是报错或按客户端明细显示 0 元 —— 试算价必须与实收价一致
+                _ => resolved.push(json!({
+                    "course_id": cid,
+                    "video_total": 0, "video_completed": 0,
+                    "exam_total": 1, "exam_done": 0,
+                    "homework_total": 0, "homework_done": 0,
+                })),
+            }
+        }
+        resolved
     };
     let (entries, total) = crate::order::price_courses(&cfg, &courses);
     Json(json!({
@@ -1517,13 +1572,18 @@ async fn enqueue_order_impl(state: &AppState, order_id: &str) -> anyhow::Result<
         // 免费单会落进付费池抢额度，两条通道的隔离就形同虚设
         let (lane, priority) =
             crate::queue::lane_and_priority(order["paid_processed"].as_str().unwrap_or(""));
+        // 路由与支付入队同一条规则：学习通（website_id=4）进学习通队列
+        let website_id = order["website_id"].as_i64().unwrap_or(1);
+        let table = if website_id == 4 { "queue_jobs_chaoxing" } else { "queue_jobs_school" };
         conn.execute(
-            "INSERT INTO queue_jobs_school
+            &format!(
+            "INSERT INTO {table}
              (job_id, username, password, website_id, job_type, course_ids, status, priority, lane,
               progress, total_steps, completed_steps, current_step_name, error_message,
               retry_count, max_retries, task_id, order_id, result_data, verified,
               created_at, started_at, finished_at, deleted_at, speed_mode)
-             VALUES (?1,?2,?3,?4,?5,?6,'pending',?7,?8,0,0,0,'','',0,3,NULL,?9,'{}',0,?10,NULL,NULL,NULL,?11)",
+             VALUES (?1,?2,?3,?4,?5,?6,'pending',?7,?8,0,0,0,'','',0,3,NULL,?9,'{{}}',0,?10,NULL,NULL,NULL,?11)"
+            ),
             rusqlite::params![
                 job_id, username, password,
                 order["website_id"].as_i64().unwrap_or(1),
@@ -1600,6 +1660,39 @@ async fn admin_order_execute(State(state): State<AppState>, Path(order_id): Path
     // 此前只在 tracing 里记一笔，订单会永久停在 running，顾客看到"永远执行中"。
     let state2 = state.clone();
     let handle = tokio::spawn(async move {
+        // 学习通订单走学习通链路：登录协议（AES 表单）与上报协议都与学校完全不同，
+        // 用学校路径去打 mooc1 只会失败并白刷平台错误次数
+        if website_id == 4 {
+            let session = match crate::cx_login::login(&username, &password).await {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(order_id = %oid_task, error = %e, "手动执行：学习通登录失败");
+                    finish_manual_run(&state2, &oid_task, false, &format!("学习通登录失败: {e}")).await;
+                    tasks.remove(&oid_task);
+                    return;
+                }
+            };
+            let task = crate::cx_scan::ScanCxTaskInput {
+                order_id: oid_task.clone(),
+                cookie_str: session.cookie_str.clone(),
+                uid: session.uid.clone(),
+                fid: session.fid.clone(),
+                ua: String::new(),
+                course_ids,
+                status_file: None,
+                push_ws: true,
+            };
+            let result = crate::cx_scan::run_cx_scan_and_study(&task, &push_url, &push_token).await;
+            match &result {
+                Ok(()) => finish_manual_run(&state2, &oid_task, true, "").await,
+                Err(e) => finish_manual_run(&state2, &oid_task, false, &e.to_string()).await,
+            }
+            if let Err(e) = result {
+                tracing::warn!(order_id = %oid_task, error = %e, "手动执行：学习通任务失败");
+            }
+            tasks.remove(&oid_task);
+            return;
+        }
         let base_url = crate::scan::platform_base_url(website_id);
         let session = match crate::session::get_session(&base_url, &username, &password).await {
             Ok(s) => s,

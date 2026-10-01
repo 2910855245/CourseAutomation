@@ -33,7 +33,10 @@ pub struct ScanCxTaskInput {
     pub ua: String,
     #[serde(default)]
     pub course_ids: Vec<String>,
-    pub status_file: String,
+    /// 中间状态/计划文件（Python daemon 时代产物）。队列直连执行传 None：
+    /// 进度走 push_url 推送，计划不再落盘（此前写出的 cx_plan.json 无人读取）
+    #[serde(default)]
+    pub status_file: Option<String>,
     #[serde(default)]
     pub push_ws: bool,
 }
@@ -498,9 +501,10 @@ fn strip_tags(s: &str) -> String {
     re.replace_all(s, "").trim().to_string()
 }
 
-async fn write_cx_status(status_file: &str, phase: &str, message: &str,
+async fn write_cx_status(status_file: Option<&str>, phase: &str, message: &str,
                          done_flag: Option<bool>, success: Option<bool>,
                          extra: &[(&str, Value)]) {
+    let Some(status_file) = status_file else { return };
     let mut map = serde_json::Map::new();
     map.insert("phase".into(), phase.into());
     map.insert("message".into(), message.into());
@@ -532,17 +536,17 @@ pub async fn run_cx_scan_and_study(task: &ScanCxTaskInput, push_url: &str,
         .filter(|c| !c.is_empty())
         .collect();
 
-    write_cx_status(&task.status_file, "crawl", "正在获取学习通课程...", None, None, &[]).await;
+    write_cx_status(task.status_file.as_deref(), "crawl", "正在获取学习通课程...", None, None, &[]).await;
     let courses = fetch_course_list(&client, cookie).await?;
     let selected: Vec<CxCourse> = courses.into_iter()
         .filter(|c| !c.ended && (filter.is_empty() || filter.contains(&c.course_id)))
         .collect();
     if selected.is_empty() {
-        write_cx_status(&task.status_file, "error", "未找到进行中的课程",
+        write_cx_status(task.status_file.as_deref(), "error", "未找到进行中的课程",
                         Some(true), Some(false), &[]).await;
         anyhow::bail!("未找到进行中的课程");
     }
-    write_cx_status(&task.status_file, "crawl",
+    write_cx_status(task.status_file.as_deref(), "crawl",
                     &format!("获取到 {} 门课程", selected.len()), None, None, &[]).await;
 
     let mut video_points: Vec<CxPoint> = Vec::new();
@@ -551,7 +555,7 @@ pub async fn run_cx_scan_and_study(task: &ScanCxTaskInput, push_url: &str,
 
     for course in &selected {
         let cname = &course.name;
-        write_cx_status(&task.status_file, "crawl",
+        write_cx_status(task.status_file.as_deref(), "crawl",
                         &format!("扫描课程: {cname}"), None, None, &[]).await;
 
         let (target, _daily_limit, video_daily_cap) =
@@ -562,7 +566,7 @@ pub async fn run_cx_scan_and_study(task: &ScanCxTaskInput, push_url: &str,
                 .await.unwrap_or((0, 0));
         let remaining = target.saturating_sub(day_score).min(target.saturating_sub(total));
 
-        write_cx_status(&task.status_file, "chaoxing_points",
+        write_cx_status(task.status_file.as_deref(), "chaoxing_points",
                         &format!("[{cname}] 积分 {total}/{target} 今日+{day_score}"),
                         None, None,
                         &[("points_total", json!(total)), ("points_target", json!(target))]).await;
@@ -603,26 +607,29 @@ pub async fn run_cx_scan_and_study(task: &ScanCxTaskInput, push_url: &str,
         }
     }
 
-    // 写计划文件（Python quiz 阶段读取）
-    let plan = json!({
-        "video_points": video_points,
-        "must_learn_points": must_learn_points,
-        "person_ids": person_ids,
-        "day_count": 1,
-    });
-    let plan_path = task.status_file.replace("status.json", "cx_plan.json");
-    let _ = tokio::fs::write(&plan_path, plan.to_string()).await;
+    // 计划文件（Python 时代留给外部 quiz 阶段的中间产物）：只在传了 status_file
+    // 时落盘；队列直连执行传 None，计划随本次执行直接消费，不产生死文件
+    if let Some(status_file) = task.status_file.as_deref() {
+        let plan = json!({
+            "video_points": video_points,
+            "must_learn_points": must_learn_points,
+            "person_ids": person_ids,
+            "day_count": 1,
+        });
+        let plan_path = status_file.replace("status.json", "cx_plan.json");
+        let _ = tokio::fs::write(&plan_path, plan.to_string()).await;
+    }
 
     let all_points: Vec<CxPoint> = video_points.into_iter()
         .chain(must_learn_points.into_iter())
         .collect();
     if all_points.is_empty() {
-        write_cx_status(&task.status_file, "error", "无视频任务",
+        write_cx_status(task.status_file.as_deref(), "error", "无视频任务",
                         Some(true), Some(false), &[]).await;
         anyhow::bail!("无视频任务");
     }
 
-    write_cx_status(&task.status_file, "study_must_learn",
+    write_cx_status(task.status_file.as_deref(), "study_must_learn",
                     &format!("扫描完成，共 {} 个知识点视频", all_points.len()),
                     None, None, &[]).await;
 

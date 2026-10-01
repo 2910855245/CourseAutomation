@@ -610,6 +610,11 @@ async fn scan_one_platform(username: &str, password: &str, website_id: i64,
         all_tasks.extend(tasks);
     }
 
+    // 留档扫描快照：下单/试算的定价事实只认这里（见 crate::scan_snapshot）。
+    // 客户端回传的 course_details 不再参与定价 —— 否则伪造 exam_total:0 就能
+    // 把付费考试算成 0 元。
+    crate::scan_snapshot::save(username, website_id, &courses);
+
     json!({
         "website_id": website_id,
         "name": platform_name,

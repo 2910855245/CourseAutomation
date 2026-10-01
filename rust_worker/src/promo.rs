@@ -444,10 +444,17 @@ pub async fn consume_card(db: &Db, card_id: &str, orders: i64) {
     let _ = tokio::task::spawn_blocking(move || -> Result<()> {
         let conn = pool.get()?;
         let now = crate::queue::now_str();
+        // 额度上限也必须写进 UPDATE：先 SELECT 判断再 UPDATE 在并发下会超发
+        // （两台设备同时提交，两边都通过 check_benefit）。0 = 不限量。
+        let max_orders: i64 = crate::queue::config_get_blocking(&conn, CFG_MAX_ORDERS)
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0)
+            .max(0);
         conn.execute(
             "UPDATE brush_cards SET used_orders = used_orders + ?1
-             WHERE card_id=?2 AND revoked=0 AND expires_at > ?3",
-            rusqlite::params![orders, card_id, now],
+             WHERE card_id=?2 AND revoked=0 AND expires_at > ?3
+               AND (?4 = 0 OR used_orders + ?1 <= ?4)",
+            rusqlite::params![orders, card_id, now, max_orders],
         )?;
         Ok(())
     })

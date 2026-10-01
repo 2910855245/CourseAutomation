@@ -677,13 +677,16 @@ impl Db {
             "video" | "exam" | "full" | "chaoxing_points" => task_type_raw,
             _ => "full",
         };
-        let table = if task_type == "chaoxing_points" {
+        let username = order["username"].as_str().unwrap_or("").to_string();
+        let website_id = order["website_id"].as_i64().unwrap_or(1);
+        // 路由：学习通的单一律进学习通队列。只认 task_type=chaoxing_points 不够 ——
+        // website_id=4 就是学习通，误进学校队列会被学校协议（登录/上报完全不同）
+        // 拿去打 mooc1，必然失败还白刷平台错误次数。
+        let table = if website_id == 4 || task_type == "chaoxing_points" {
             "queue_jobs_chaoxing"
         } else {
             "queue_jobs_school"
         };
-        let username = order["username"].as_str().unwrap_or("").to_string();
-        let website_id = order["website_id"].as_i64().unwrap_or(1);
         let course_ids = serde_json::to_string(order.get("course_ids").unwrap_or(&json!([])))
             .unwrap_or_else(|_| "[]".into());
 

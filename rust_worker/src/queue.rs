@@ -22,7 +22,36 @@ use crate::progress;
 use crate::scan::ScanTaskInput;
 use crate::AppState;
 
-const SCHOOL_TABLE: &str = "queue_jobs_school";
+/// 队列种类：学校平台 / 学习通。两者的队列表、暂停开关、执行器不同，
+/// 但认领、重试、终态回写、双通道（付费/免费）语义完全一致 —— 共用一套实现，
+/// 差异全部收敛到本枚举。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueueKind {
+    School,
+    Chaoxing,
+}
+
+impl QueueKind {
+    pub fn table(self) -> &'static str {
+        match self {
+            QueueKind::School => "queue_jobs_school",
+            QueueKind::Chaoxing => "queue_jobs_chaoxing",
+        }
+    }
+    /// 分队列暂停开关（全局 queue_paused 对所有队列生效）
+    fn paused_key(self) -> &'static str {
+        match self {
+            QueueKind::School => "queue_paused_school",
+            QueueKind::Chaoxing => "queue_paused_chaoxing",
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            QueueKind::School => "school",
+            QueueKind::Chaoxing => "chaoxing",
+        }
+    }
+}
 
 /// 队列通道。免费（刷视频）与付费（答题/考试）各有**独立**的并发额度，
 /// 互不挤占：付费单永远不会排在免费积压后面，免费人流也吃不掉付费槽位。
@@ -57,10 +86,17 @@ pub fn lane_and_priority(paid_processed: &str) -> (Lane, i64) {
     }
 }
 
-/// 付费通道当前在跑的 worker 数
+/// 四条通道的在跑计数：每个队列种类 ×（付费/免费）各一个。
+/// 分种类计数是管理端队列监控能分别显示 school / chaoxing 在跑数的前提
+/// （此前所有在跑数都记在学校头上，学习通恒显 0）。
+/// 学校·付费
 static ACTIVE_WORKERS_PAID: AtomicUsize = AtomicUsize::new(0);
-/// 免费通道当前在跑的 worker 数
+/// 学校·免费
 static ACTIVE_WORKERS_FREE: AtomicUsize = AtomicUsize::new(0);
+/// 学习通·付费
+static ACTIVE_WORKERS_CX_PAID: AtomicUsize = AtomicUsize::new(0);
+/// 学习通·免费
+static ACTIVE_WORKERS_CX_FREE: AtomicUsize = AtomicUsize::new(0);
 
 /// worker 槽位的 RAII 守卫。
 ///
@@ -72,36 +108,46 @@ static ACTIVE_WORKERS_FREE: AtomicUsize = AtomicUsize::new(0);
 /// Drop 在 panic 展开时同样会执行，所以槽位一定会被还回来。
 ///
 /// 槽位记在自己所属通道的计数器上：两条通道额度独立，归还时也必须还对池子。
-struct WorkerSlot(Lane);
+struct WorkerSlot(QueueKind, Lane);
 
 impl WorkerSlot {
-    fn acquire(lane: Lane) -> Self {
-        counter(lane).fetch_add(1, Ordering::Relaxed);
-        WorkerSlot(lane)
+    fn acquire(kind: QueueKind, lane: Lane) -> Self {
+        counter(kind, lane).fetch_add(1, Ordering::Relaxed);
+        WorkerSlot(kind, lane)
     }
 }
 
 impl Drop for WorkerSlot {
     fn drop(&mut self) {
-        counter(self.0).fetch_sub(1, Ordering::Relaxed);
+        counter(self.0, self.1).fetch_sub(1, Ordering::Relaxed);
     }
 }
 
-fn counter(lane: Lane) -> &'static AtomicUsize {
-    match lane {
-        Lane::Paid => &ACTIVE_WORKERS_PAID,
-        Lane::Free => &ACTIVE_WORKERS_FREE,
+fn counter(kind: QueueKind, lane: Lane) -> &'static AtomicUsize {
+    match (kind, lane) {
+        (QueueKind::School, Lane::Paid) => &ACTIVE_WORKERS_PAID,
+        (QueueKind::School, Lane::Free) => &ACTIVE_WORKERS_FREE,
+        (QueueKind::Chaoxing, Lane::Paid) => &ACTIVE_WORKERS_CX_PAID,
+        (QueueKind::Chaoxing, Lane::Free) => &ACTIVE_WORKERS_CX_FREE,
     }
 }
 
-/// 指定通道当前在跑的 worker 数
+/// 指定队列种类、指定通道当前在跑的 worker 数
+pub fn active_workers_in_kind(kind: QueueKind, lane: Lane) -> usize {
+    counter(kind, lane).load(Ordering::Relaxed)
+}
+
+/// 学校队列指定通道当前在跑的 worker 数（既有调用点语义不变）
 pub fn active_workers_in(lane: Lane) -> usize {
-    counter(lane).load(Ordering::Relaxed)
+    active_workers_in_kind(QueueKind::School, lane)
 }
 
-/// 供管理端读取的实时 worker 数（两条通道求和，保持既有接口语义不变）
+/// 全部队列所有通道的在跑总数（健康检查/看板用）
 pub fn active_workers() -> usize {
-    active_workers_in(Lane::Paid) + active_workers_in(Lane::Free)
+    active_workers_in_kind(QueueKind::School, Lane::Paid)
+        + active_workers_in_kind(QueueKind::School, Lane::Free)
+        + active_workers_in_kind(QueueKind::Chaoxing, Lane::Paid)
+        + active_workers_in_kind(QueueKind::Chaoxing, Lane::Free)
 }
 
 /// 并发上限的硬边界。Rust 侧任务全为 I/O 等待（视频墙钟 + 平台请求），
@@ -217,8 +263,9 @@ fn chrono_lite(secs: u64) -> String {
 /// `lane` 既能防止付费通道捞走免费单、也防止免费通道在付费未满时抢走付费单；
 /// 额度判断留在调度循环里（见 `dispatcher_loop`），这里不做计数 —— 否则
 /// "查额度 → 认领" 之间会出现超发窗口。
-async fn claim_next_job(state: &AppState, lane: Lane) -> Result<Option<QueueJob>> {
+async fn claim_next_job(state: &AppState, kind: QueueKind, lane: Lane) -> Result<Option<QueueJob>> {
     let pool_guard = state.db.raw_pool().clone();
+    let table = kind.table();
     let row = tokio::task::spawn_blocking(move || -> Result<Option<QueueJob>> {
         let mut conn = pool_guard.get()?;
         let tx = conn.transaction()?;
@@ -228,7 +275,7 @@ async fn claim_next_job(state: &AppState, lane: Lane) -> Result<Option<QueueJob>
                 // （UPDATE ... SET deleted_at），漏掉这个过滤会把管理员已经
                 // 删掉的任务继续捞出来执行。
                 "SELECT job_id, username, password, website_id, job_type, course_ids, order_id, max_retries, retry_count, speed_mode
-                 FROM {SCHOOL_TABLE}
+                 FROM {table}
                  WHERE status IN ('pending','retrying') AND deleted_at IS NULL AND lane=?1
                  ORDER BY priority ASC, created_at ASC LIMIT 1"
             ),
@@ -253,7 +300,7 @@ async fn claim_next_job(state: &AppState, lane: Lane) -> Result<Option<QueueJob>
                 let now = now_str();
                 tx.execute(
                     &format!(
-                        "UPDATE {SCHOOL_TABLE} SET status='running', started_at=?1 WHERE job_id=?2"
+                        "UPDATE {table} SET status='running', started_at=?1 WHERE job_id=?2"
                     ),
                     rusqlite::params![now, job.job_id],
                 )?;
@@ -294,13 +341,14 @@ async fn claim_next_job(state: &AppState, lane: Lane) -> Result<Option<QueueJob>
 }
 
 /// 任务成功收口：把"已刷节数"对齐到整单总节数（见调用点的说明）
-async fn sync_completed_steps(state: &AppState, job: &QueueJob) {
+async fn sync_completed_steps(state: &AppState, job: &QueueJob, kind: QueueKind) {
     let pool = state.db.raw_pool().clone();
     let job_id = job.job_id.clone();
+    let table = kind.table();
     let _ = tokio::task::spawn_blocking(move || -> Result<()> {
         let conn = pool.get()?;
         conn.execute(
-            &format!("UPDATE {SCHOOL_TABLE} SET completed_steps = total_steps WHERE job_id = ?1"),
+            &format!("UPDATE {table} SET completed_steps = total_steps WHERE job_id = ?1"),
             rusqlite::params![job_id],
         )?;
         Ok(())
@@ -312,12 +360,14 @@ async fn sync_completed_steps(state: &AppState, job: &QueueJob) {
 /// 若任务挂在订单上，额外向 `order:{order_id}` 发一条 `order.update` 作为
 /// 「该订单有变化」的信号；前端收到后应重新拉取该订单，而不是把队列状态
 /// 直接当作订单状态。
-async fn update_job(state: &AppState, job: &QueueJob, fields: &[(&str, String)]) -> Result<()> {
+async fn update_job(state: &AppState, job: &QueueJob, kind: QueueKind,
+                    fields: &[(&str, String)]) -> Result<()> {
     if fields.is_empty() {
         return Ok(());
     }
     let pool_guard = state.db.raw_pool().clone();
     let job_id = job.job_id.clone();
+    let table = kind.table();
     let sets: Vec<String> = fields.iter().enumerate()
         .map(|(i, (k, _))| format!("{k}=?{}", i + 1))
         .collect();
@@ -325,7 +375,7 @@ async fn update_job(state: &AppState, job: &QueueJob, fields: &[(&str, String)])
     let n = fields.len();
     tokio::task::spawn_blocking(move || -> Result<()> {
         let conn = pool_guard.get()?;
-        let sql = format!("UPDATE {SCHOOL_TABLE} SET {} WHERE job_id=?{}",
+        let sql = format!("UPDATE {table} SET {} WHERE job_id=?{}",
                           sets.join(", "), n + 1);
         conn.execute(&sql, rusqlite::params_from_iter(
             values.iter().map(|v| v.as_str()).chain(std::iter::once(job_id.as_str())),
@@ -403,16 +453,16 @@ async fn sync_order_state(state: &AppState, job: &QueueJob, status: &str, note: 
 /// **所有**失败路径都必须走这里。历史上登录失败是一条独立的提前 return，
 /// 直接写死 `status='failed'`，绕过了重试策略 —— 一次网络抖动或 OCR 抖动
 /// 就会把留给它的 3 次重试全部作废，且不写 finished_at。
-async fn handle_job_failure(state: &AppState, job: &QueueJob, err: &str) {
+async fn handle_job_failure(state: &AppState, job: &QueueJob, kind: QueueKind, err: &str) {
     if should_retry(job.retry_count, job.max_retries) {
-        let _ = update_job(state, job,
+        let _ = update_job(state, job, kind,
                            &[("status", "retrying".into()),
                              ("error_message", err.to_string()),
                              ("retry_count", (job.retry_count + 1).to_string())]).await;
         tracing::warn!(job_id = %job.job_id, attempt = job.retry_count + 1,
                        max = job.max_retries, error = %err, "任务失败，等待重试");
     } else {
-        let _ = update_job(state, job,
+        let _ = update_job(state, job, kind,
                            &[("status", "failed".into()),
                              ("error_message", err.to_string()),
                              ("finished_at", now_str())]).await;
@@ -447,7 +497,7 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
         Ok(s) => s,
         Err(e) => {
             let msg = format!("登录失败: {e}");
-            handle_job_failure(state, job, &msg).await;
+            handle_job_failure(state, job, QueueKind::School, &msg).await;
             return;
         }
     };
@@ -483,18 +533,110 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
     let result = crate::scan::run_scan_and_study(&task, &state.push_url, &state.push_token).await;
     match result {
         Ok(()) => {
-            let _ = update_job(state, job,
+            let _ = update_job(state, job, QueueKind::School,
                                &[("status", "completed".into()), ("progress", "100".into()),
                                  ("current_step_name", "刷课完成".into()),
                                  ("finished_at", now_str())]).await;
             // 步数收口：成功路径上"已刷节数"必然等于整单总节数（引擎零失败才返回 Ok）。
             // 此前只改文案不改步数，重扫后无待刷的任务会停在上一轮的旧值（如 52/89），
             // 与平台已 100% 的状态对不上，看起来就像"进度少了几节"。
-            sync_completed_steps(state, job).await;
+            sync_completed_steps(state, job, QueueKind::School).await;
             sync_order_state(state, job, "completed", "").await;
             tracing::info!(job_id = %job.job_id, "任务完成");
         }
-        Err(e) => handle_job_failure(state, job, &e.to_string()).await,
+        Err(e) => handle_job_failure(state, job, QueueKind::School, &e.to_string()).await,
+    }
+}
+
+/// 学习通登录失败何时该"立刻终态、不再重试"。
+///
+/// 凭据类失败（密码错/账号被锁/需要验证码）重试只会**白刷平台的错误次数**
+/// （超星同样超过 5 次锁号）——与 login.rs 的快速失败列表同一条安全约定。
+/// 网络抖动类（DNS/超时）才交给队列的重试策略。
+fn cx_credential_error(msg: &str) -> bool {
+    ["密码", "账号", "锁定", "验证码", "不存在", "不能为空"]
+        .iter()
+        .any(|k| msg.contains(k))
+}
+
+/// 执行单个学习通任务：登录（cx_login）→ 扫描 + 刷必学/积分视频（cx_scan/cx_study）。
+///
+/// 与学校任务的差别：
+/// - 登录协议完全不同（AES 加密表单 /fanyalogin），且学习通会话不落盘复用，
+///   每个任务登录一次；凭据错误立即终态（见 [`cx_credential_error`]）。
+/// - 执行器自带节奏（cx_study 按视频时长自适应上报），不消费 speed_mode。
+async fn execute_chaoxing_job(state: &AppState, job: &QueueJob) {
+    // 密码：orders 明文列优先（load_password 兼容历史密文），解不到才回退任务行
+    let password = {
+        let db = state.db.clone_pool();
+        let oid = job.order_id.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = db.get().ok()?;
+            crate::crypto::load_password(&conn, &oid)
+        })
+        .await
+        .ok()
+        .flatten()
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| job.password.clone())
+    };
+
+    let session = match crate::cx_login::login(&job.username, &password).await {
+        Ok(s) => s,
+        Err(e) => {
+            // 平台原文（login 会把响应 JSON 一起带出来）只进日志；写给客户端的
+            // admin_note 必须是干净文案 —— 顾客不该看到 {"msg2":...} 这种原始报文
+            let raw = e.to_string();
+            let credential = cx_credential_error(&raw);
+            let msg = if credential {
+                "学习通账号或密码不正确（或账号被锁定），请确认后重试".to_string()
+            } else {
+                format!("学习通登录失败：{raw}")
+            };
+            tracing::warn!(job_id = %job.job_id, error = %raw, "学习通登录失败");
+            if credential {
+                // 凭据类失败：直接终态，不进入重试（避免把账号刷到锁定）
+                let _ = update_job(state, job, QueueKind::Chaoxing,
+                                   &[("status", "failed".into()),
+                                     ("error_message", msg.clone()),
+                                     ("finished_at", now_str())]).await;
+                sync_order_state(state, job, "failed", &msg).await;
+            } else {
+                handle_job_failure(state, job, QueueKind::Chaoxing, &msg).await;
+            }
+            return;
+        }
+    };
+
+    // course_ids 解析（JSON 数组或 "cid,cid" 字符串；cx 侧过滤只用 courseId 段）
+    let course_ids: Vec<String> = serde_json::from_str(&job.course_ids)
+        .unwrap_or_else(|_| job.course_ids.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect());
+
+    let task = crate::cx_scan::ScanCxTaskInput {
+        order_id: if job.order_id.is_empty() { job.job_id.clone() } else { job.order_id.clone() },
+        cookie_str: session.cookie_str.clone(),
+        uid: session.uid.clone(),
+        fid: session.fid.clone(),
+        ua: String::new(), // 空 → 执行器用默认桌面 UA（与登录同栈）
+        course_ids,
+        status_file: None, // 直连执行不需要 Python 时代的中间状态文件
+        push_ws: true,
+    };
+
+    match crate::cx_scan::run_cx_scan_and_study(&task, &state.push_url, &state.push_token).await {
+        Ok(()) => {
+            let _ = update_job(state, job, QueueKind::Chaoxing,
+                               &[("status", "completed".into()), ("progress", "100".into()),
+                                 ("current_step_name", "学习通刷课完成".into()),
+                                 ("finished_at", now_str())]).await;
+            sync_completed_steps(state, job, QueueKind::Chaoxing).await;
+            sync_order_state(state, job, "completed", "").await;
+            tracing::info!(job_id = %job.job_id, "学习通任务完成");
+        }
+        Err(e) => handle_job_failure(state, job, QueueKind::Chaoxing, &e.to_string()).await,
     }
 }
 
@@ -505,15 +647,16 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
 /// 既不会重试也不会失败，只能人工改库。启动瞬间本进程不可能有在跑的任务，
 /// 因此把 running 全部退回 pending 是安全的（幂等）。
 ///
-/// 只处理学校队列表：学习通队列表当前没有任何调度器消费（Rust 侧未实现
-/// 学习通登录），改动它的状态不会带来任何行为收益。
-async fn reclaim_stale_running(state: &AppState) {
+/// 两个队列都要回收：调度器只挑 pending/retrying，崩溃/重启遗留的 running
+/// 行会永久卡住（订单永远停在"执行中"），本进程启动瞬间不可能有在跑任务。
+async fn reclaim_stale_running(state: &AppState, kind: QueueKind) {
     let pool = state.db.clone_pool();
+    let table = kind.table();
     let result = tokio::task::spawn_blocking(move || -> Result<usize> {
         let conn = pool.get()?;
         let n = conn.execute(
             &format!(
-                "UPDATE {SCHOOL_TABLE} SET status='pending', started_at=NULL
+                "UPDATE {table} SET status='pending', started_at=NULL
                  WHERE status='running' AND deleted_at IS NULL"
             ),
             [],
@@ -523,9 +666,11 @@ async fn reclaim_stale_running(state: &AppState) {
     .await;
     match result {
         Ok(Ok(0)) => {}
-        Ok(Ok(n)) => tracing::warn!(count = n, "已把上次运行遗留的 running 任务退回 pending，即将重新调度"),
-        Ok(Err(e)) => tracing::error!(error = %e, "回收遗留 running 任务失败"),
-        Err(e) => tracing::error!(error = %e, "回收遗留 running 任务失败（spawn_blocking 异常）"),
+        Ok(Ok(n)) => tracing::warn!(count = n, queue = kind.name(),
+                                    "已把上次运行遗留的 running 任务退回 pending，即将重新调度"),
+        Ok(Err(e)) => tracing::error!(error = %e, queue = kind.name(), "回收遗留 running 任务失败"),
+        Err(e) => tracing::error!(error = %e, queue = kind.name(),
+                                  "回收遗留 running 任务失败（spawn_blocking 异常）"),
     }
 }
 
@@ -538,9 +683,9 @@ async fn reclaim_stale_running(state: &AppState) {
 ///
 /// 两条通道额度独立、互不挤占：每轮先填付费槽位再填免费槽位，因此付费单永远
 /// 不会排在免费积压后面；免费人流吃满了也只会卡住免费通道自己。
-pub async fn dispatcher_loop(state: Arc<AppState>) {
-    tracing::info!("Rust 队列调度器启动（学校任务）");
-    reclaim_stale_running(&state).await;
+pub async fn dispatcher_loop(state: Arc<AppState>, kind: QueueKind) {
+    tracing::info!(queue = kind.name(), table = kind.table(), "Rust 队列调度器启动");
+    reclaim_stale_running(&state, kind).await;
     // 配置缓存：(上次刷新时间, 付费上限, 免费上限, 是否暂停)，避免每轮都查库
     let mut cfg_cache: RuntimeConfig = RuntimeConfig::initial();
     loop {
@@ -550,7 +695,7 @@ pub async fn dispatcher_loop(state: Arc<AppState>) {
             continue;
         }
         if cfg_cache.refreshed_at.elapsed() > std::time::Duration::from_secs(5) {
-            cfg_cache = read_runtime_config(&state.db).await;
+            cfg_cache = read_runtime_config(&state.db, kind).await;
         }
         if cfg_cache.paused {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -562,23 +707,26 @@ pub async fn dispatcher_loop(state: Arc<AppState>) {
         let mut claimed_any = false;
         let mut errored = false;
         for lane in LANE_ATTEMPT_ORDER {
-            if active_workers_in(lane) >= cfg_cache.max_workers(lane) {
+            if active_workers_in_kind(kind, lane) >= cfg_cache.max_workers(lane) {
                 continue;
             }
-            // 额度变量、认领通道、槽位通道必须来自同一个 lane，
+            // 额度变量、认领通道、槽位通道必须来自同一个 (队列, lane)，
             // 否则会出现"按付费额度放行、却认领了免费单"的错配
-            match claim_next_job(&state, lane).await {
+            match claim_next_job(&state, kind, lane).await {
                 Ok(Some(job)) => {
                     claimed_any = true;
                     let state2 = state.clone();
                     // 槽位由 RAII 守卫持有：任务 panic 时 Drop 依然会归还槽位，
-                    // 且归还到它所属通道的计数器上
-                    let slot = WorkerSlot::acquire(lane);
+                    // 且归还到它所属队列与通道的计数器上
+                    let slot = WorkerSlot::acquire(kind, lane);
                     let order_id = job.order_id.clone();
                     let order_id_task = order_id.clone();
                     let handle = tokio::spawn(async move {
                         let _slot = slot;
-                        execute_school_job(&state2, &job).await;
+                        match kind {
+                            QueueKind::School => execute_school_job(&state2, &job).await,
+                            QueueKind::Chaoxing => execute_chaoxing_job(&state2, &job).await,
+                        }
                         // 跑完自行摘除登记，避免表无限增长（panic 时留一条无效句柄，
                         // 对外部 abort 一个已结束的任务是无害空操作）
                         if !order_id_task.is_empty() {
@@ -655,7 +803,7 @@ fn default_max_workers() -> usize {
 }
 
 /// 读取运行期配置（两条通道的并发上限 + 暂停），失败时退回默认值
-async fn read_runtime_config(db: &Db) -> RuntimeConfig {
+async fn read_runtime_config(db: &Db, kind: QueueKind) -> RuntimeConfig {
     // 夹在 1..=64：管理端写入的值不应能把进程拖垮（每个 worker 都是一条
     // 常驻 tokio 任务 + 一个临时目录），越界值一律按边界处理而不是照单全收。
     let paid_max = config_get(db, "queue_max_workers").await
@@ -669,7 +817,7 @@ async fn read_runtime_config(db: &Db) -> RuntimeConfig {
         .unwrap_or_else(default_free_max_workers)
         .clamp(1, MAX_FREE_WORKERS_CEILING);
     let paused = config_get(db, "queue_paused").await.map(|v| v == "1").unwrap_or(false)
-        || config_get(db, "queue_paused_school").await.map(|v| v == "1").unwrap_or(false);
+        || config_get(db, kind.paused_key()).await.map(|v| v == "1").unwrap_or(false);
     RuntimeConfig { refreshed_at: std::time::Instant::now(), paid_max, free_max, paused }
 }
 

@@ -124,10 +124,7 @@ pub fn price_courses(cfg: &Value, courses: &[Value]) -> (Vec<Value>, f64) {
     (entries, total)
 }
 
-/// 考试单价（缺省 5 元/门课）
-fn price_exam_of(cfg: &Value) -> f64 {
-    cfg["price_exam_only"].as_f64().unwrap_or(5.0)
-}
+
 
 /// 单门课定价。
 ///
@@ -158,38 +155,51 @@ fn price_single_course(cd: &Value, cfg: &Value) -> f64 {
     0.0
 }
 
-/// 后端总价（对齐 order_service.compute_batch_price）
-pub async fn compute_batch_price(db: &Db, orders: &[Value]) -> Result<f64> {
-    let cfg = pricing_config(db).await?;
-    Ok(compute_item_prices(&cfg, orders).iter().sum::<f64>().round_to_2())
-}
-
-/// 逐单后端价（唯一真相源）。有明细按课程计价，否则按打包/学习通口径。
+/// 逐单后端价（唯一真相源）。
 ///
-/// 抽成函数是为了让下单路径能**逐单覆盖**客户端传来的价格：
-/// 客户端只要把所有 price 传 0，旧逻辑里 "front_total=0 时不重算" 的分支就会让
-/// 0 元订单落库（支付金额取自库里的价格）—— 等于白嫖。现在一律以后端算出的价为准。
-fn compute_item_prices(cfg: &Value, orders: &[Value]) -> Vec<f64> {
-    orders.iter().map(|item| {
+/// 事实来源是**服务端扫描快照**（见 [`crate::scan_snapshot`]），而不是客户端回传的
+/// `course_details`：定价要知道"这门课还剩几场考试"，此前这个事实由客户端提供 ——
+/// 伪造 `exam_total: 0` 就能把付费考试算成 0 元，白做整批考试。现在客户端只能
+/// "选择课程"（course_ids），事实一律回查快照；查不到就拒绝整批，宁可让用户
+/// 重新扫描一次，也不接受一份无法核实的价格。
+///
+/// 逐单覆盖客户端传来的 price：客户端把 price 全传 0 也不会让 0 元订单落库。
+pub fn compute_item_prices(cfg: &Value, orders: &[Value], username: &str) -> Result<Vec<f64>> {
+    let mut prices = Vec::with_capacity(orders.len());
+    for item in orders {
         let website_id = item["website_id"].as_i64().unwrap_or(1);
-        let details = item["course_details"].as_array().cloned().unwrap_or_default();
-        if website_id == 4 {
+        let price = if website_id == 4 {
+            // 学习通一口价（与前端展示一致，不按课程明细计价）
             cfg["price_chaoxing"].as_f64().unwrap_or(8.0)
-        } else if !details.is_empty() {
-            details.iter().map(|cd| price_single_course(cd, cfg)).sum::<f64>().round_to_2()
         } else {
-            // 无课程明细（老前端或手工调用）：视频不计费，只看有没有待完成的考试。
-            // 明细缺失时无法知道考试分布在哪些课，按"选中课程数"兜底计费 ——
-            // 宁可对老调用多收，也不能让"少传明细"变成少付钱的后门
-            // （否则可用 N 门课的 course_ids + 一笔考试费把全部考试做完）。
-            let exam_count = item["exam_count"].as_i64().unwrap_or(0);
-            if exam_count <= 0 {
-                return 0.0;
+            let course_ids: Vec<String> = item["course_ids"].as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+            if course_ids.is_empty() {
+                // 没选具体课程：只可能是"纯视频"诉求（视频对所有人免费）。
+                // 考试必须有明确课程才能执行，调用方会把这类单的任务类型收敛为
+                // video，因此这里一律 0 元，不存在"少传课程 = 少付考试费"的空间。
+                0.0
+            } else {
+                match crate::scan_snapshot::resolve(username, website_id, &course_ids) {
+                    Ok(facts) => facts.iter()
+                        .map(|cd| price_single_course(cd, cfg))
+                        .sum::<f64>().round_to_2(),
+                    Err(_) => {
+                        // 没有可用快照（没扫过 / 扫描失败 / 进程刚重启）：既不信任
+                        // 客户端明细（那是白嫖通道），也不拒单（会误伤正常用户）。
+                        // 按选中课程数保守计考试费 —— 与"宁可多收，也不让少传明细
+                        // 变成少付钱的后门"的既有原则一致。正常流程总是先扫描，
+                        // 命中快照时按真实数据精确计价。
+                        (cfg["price_exam_only"].as_f64().unwrap_or(5.0)
+                            * course_ids.len() as f64).round_to_2()
+                    }
+                }
             }
-            let courses = item["course_ids"].as_array().map(|a| a.len()).unwrap_or(0).max(1);
-            price_exam_of(cfg) * courses as f64
-        }
-    }).collect()
+        };
+        prices.push(price);
+    }
+    Ok(prices)
 }
 
 /// 创建订单（对齐 db.create_order）
@@ -267,17 +277,10 @@ pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
     let password = body["password"].as_str().unwrap_or("").to_string();
     let mut orders: Vec<Value> = body["orders"].as_array().cloned().unwrap_or_default();
 
-    // 学习通（website_id=4）执行链路尚未接入：订单会被塞进学校队列，用学校协议去打
-    // mooc1（登录协议完全不同），必然失败还会白刷平台的错误次数。入口先拦下。
-    if orders.iter().any(|o| o["website_id"].as_i64() == Some(4)) {
-        anyhow::bail!("学习通暂未开放下单（课程扫描已可用，刷课链路接入中）");
-    }
-
-    // 价格唯一真相源是后端：逐单用后端算出的价覆盖客户端传值。
-    // 旧实现只在"客户端总价与后端不一致且客户端总价>0"时才重算，
-    // 于是把 price 全传 0 就能让 0 元订单落库（支付金额读库里的价格）→ 白嫖。
+    // 价格唯一真相源是后端：逐单用后端算出的价覆盖客户端传值，且定价事实来自
+    // 服务端扫描快照（见 compute_item_prices）。快照缺失/过期会直接拒绝整批。
     let cfg = pricing_config(db).await?;
-    let item_prices = compute_item_prices(&cfg, &orders);
+    let item_prices = compute_item_prices(&cfg, &orders, &username)?;
     for (item, price) in orders.iter_mut().zip(item_prices.iter()) {
         item["price"] = json!(price);
     }
@@ -289,6 +292,8 @@ pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
     let mut free_ids: Vec<String> = Vec::new();
     let mut payable_ids: Vec<String> = Vec::new();
     let mut payable_total = 0.0f64;
+    // 卡的额度只被"卡真正免掉的钱"消耗：纯视频单本来就免费，不该扣卡额度
+    let mut card_charged = 0i64;
 
     for item in &orders {
         let course_ids = item["course_ids"].as_array().cloned().unwrap_or_default();
@@ -296,9 +301,13 @@ pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
             continue;
         }
         let mut item = item.clone();
+        let original_price = item["price"].as_f64().unwrap_or(0.0);
         if card_free {
             // 持卡：考试费清零，该单变 0 元
             item["price"] = json!(0.0);
+            if original_price > 0.0 {
+                card_charged += 1;
+            }
         }
         // 免费单一律只能用保守档：适中/暴力是付费权益。必须在服务端强制——
         // 只靠前端置灰的话，直接调接口传 turbo 就白嫖了加速。
@@ -307,6 +316,13 @@ pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
         let is_free_item = item["price"].as_f64().unwrap_or(0.0) <= 0.0;
         if is_free_item {
             item["speed_mode"] = json!(crate::speed::SpeedMode::Gentle.as_str());
+            // 免费单不得执行考试/作业：只有"持卡/全局免费"覆盖考试费，"视频免费"
+            // 不覆盖。算价已经改用服务端快照（伪造不了），这里再兜一道 ——
+            // 即使未来算价再出漏洞，免费单也只会刷视频，不会把付费考试白做掉。
+            let task_type = item["task_type"].as_str().unwrap_or("").to_string();
+            if !card_free && (task_type == "exam" || task_type == "full") {
+                item["task_type"] = json!("video");
+            }
         }
         let order = create_order(db, &username, &password, &item, "").await?;
         let oid = order["order_id"].as_str().unwrap_or("").to_string();
@@ -358,11 +374,14 @@ pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
         }
     }
 
-    // 一卡按张数计额度：一次提交建了 N 单就扣 N 次，
-    // 否则把多门课塞进一批就能用 1 次额度刷 N 单
+    // 额度按"卡真正免掉的单数"计：纯视频单本来就免费，不该消耗卡的免考试费额度；
+    // 全局免费（reason=global）没有卡号，consume_card 会自行跳过。
     if card_free {
-        crate::promo::consume_card(db, &benefit.card_id, created.len() as i64).await;
-        tracing::info!(orders = created.len(), reason = %benefit.reason, "持卡订单已创建并直接入队");
+        if card_charged > 0 {
+            crate::promo::consume_card(db, &benefit.card_id, card_charged).await;
+        }
+        tracing::info!(orders = created.len(), charged = card_charged, reason = %benefit.reason,
+                       "持卡订单已创建并直接入队");
     }
     if !free_ids.is_empty() {
         tracing::info!(free = free_ids.len(), payable = payable_ids.len(),
@@ -457,24 +476,52 @@ mod tests {
     #[test]
     fn test_video_only_batch_prices_to_zero() {
         let cfg = test_cfg();
+        crate::scan_snapshot::save("u_price_video", 1, &[json!({
+            "course_id": "c1", "records_loaded": true,
+            "video_total": 60, "video_completed": 0, "exam_total": 0, "exam_done": 0,
+        })]);
         let orders = vec![json!({
-            "website_id": 1, "video_count": 120, "exam_count": 0,
-            "course_details": [{"video_total": 60, "video_completed": 0,
-                                "exam_total": 0, "exam_done": 0,
-                                "homework_total": 0, "homework_done": 0}]
+            "website_id": 1, "video_count": 120, "exam_count": 0, "course_ids": ["c1"],
         })];
-        assert_eq!(compute_item_prices(&cfg, &orders), vec![0.0]);
+        assert_eq!(compute_item_prices(&cfg, &orders, "u_price_video").unwrap(), vec![0.0]);
     }
 
-    /// 少了课程明细不能变成少付钱的后门：明细缺失时按选中课程数兜底，
-    /// 否则可用 N 门课的 course_ids + 一笔考试费把全部考试做完。
+    /// 定价事实只认服务端快照：客户端把 exam_total 传 0 也没用 ——
+    /// 快照里这门课有未完成考试，就必须付考试费（0 元白嫖考试通道已封死）。
     #[test]
-    fn test_missing_details_charges_per_course_not_once() {
+    fn test_client_cannot_forge_free_exam() {
+        let cfg = test_cfg();
+        crate::scan_snapshot::save("u_price_forge", 1, &[json!({
+            "course_id": "c1", "records_loaded": true,
+            "video_total": 10, "video_completed": 10, "exam_total": 2, "exam_done": 0,
+        })]);
+        let orders = vec![json!({
+            "website_id": 1, "video_count": 0, "exam_count": 0, "course_ids": ["c1"],
+            // 客户端伪造：声称这门课没有考试
+            "course_details": [{"video_total": 10, "video_completed": 10,
+                                "exam_total": 0, "exam_done": 0}],
+        })];
+        assert_eq!(compute_item_prices(&cfg, &orders, "u_price_forge").unwrap(), vec![5.0]);
+    }
+
+    /// 没有扫描快照（没扫过、扫描失败或进程刚重启）→ **保守计价**而不是按客户端
+    /// 数据算价：2 门课按 2×考试单价收，既不会 0 元白嫖，也不会因拒单误伤用户。
+    #[test]
+    fn test_pricing_without_snapshot_charges_conservatively() {
         let cfg = test_cfg();
         let orders = vec![json!({
-            "website_id": 1, "video_count": 0, "exam_count": 4,
-            "course_ids": ["c1", "c2", "c3"]
+            "website_id": 1, "video_count": 5, "exam_count": 0, "course_ids": ["c1", "c2"],
+            // 客户端声称没有考试 —— 没有快照时这份声明一律不采信
+            "course_details": [{"exam_total": 0, "exam_done": 0}],
         })];
-        assert_eq!(compute_item_prices(&cfg, &orders), vec![15.0]); // 3 门 × 5
+        assert_eq!(compute_item_prices(&cfg, &orders, "u_price_nobody").unwrap(), vec![10.0]);
+    }
+
+    /// 学习通一口价：不依赖课程明细快照
+    #[test]
+    fn test_chaoxing_flat_price() {
+        let cfg = test_cfg();
+        let orders = vec![json!({"website_id": 4, "course_ids": ["c9"]})];
+        assert_eq!(compute_item_prices(&cfg, &orders, "anyone").unwrap(), vec![8.0]);
     }
 }

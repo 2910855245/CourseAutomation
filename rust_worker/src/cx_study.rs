@@ -49,7 +49,10 @@ pub struct CxTaskInput {
     #[serde(default)]
     pub course_name: String,
     pub points: Vec<CxPoint>,
-    pub status_file: String,
+    /// 中间状态文件（Python daemon 时代产物，供外部读进度）。
+    /// 队列直连执行时传 None —— 进度改由进度推送（push_url）回传，不再落盘。
+    #[serde(default)]
+    pub status_file: Option<String>,
     #[serde(default)]
     pub push_ws: bool,
 }
@@ -349,9 +352,11 @@ struct CxProgress {
     failed: u64,
 }
 
-async fn write_cx_status(status_file: &str, course_name: &str,
+async fn write_cx_status(status_file: Option<&str>, course_name: &str,
                          progress: &Mutex<CxProgress>, phase: &str,
                          message: &str, done_flag: Option<bool>, success: Option<bool>) {
+    // 没有状态文件（队列直连执行）→ 不落盘；进度走 push_ws 推送
+    let Some(status_file) = status_file else { return };
     let p = progress.lock().await;
     let mut map = serde_json::Map::new();
     map.insert("phase".into(), phase.into());
@@ -453,7 +458,7 @@ pub async fn run_cx_study(task: &CxTaskInput, push_url: &str,
     }));
     let total = task.points.len() as u64;
 
-    write_cx_status(&task.status_file, &task.course_name, &progress, "study_must_learn",
+    write_cx_status(task.status_file.as_deref(), &task.course_name, &progress, "study_must_learn",
                     &format!("[{}] 开始刷必学/积分视频 (共{}个知识点)", task.course_name, total),
                     None, None).await;
 
@@ -461,7 +466,7 @@ pub async fn run_cx_study(task: &CxTaskInput, push_url: &str,
     let mut failed_total = 0u64;
     for (i, point) in task.points.iter().enumerate() {
         let kname = point.name.clone();
-        write_cx_status(&task.status_file, &task.course_name, &progress, "study_must_learn",
+        write_cx_status(task.status_file.as_deref(), &task.course_name, &progress, "study_must_learn",
                         &format!("[{}] 必学 {}/{}: {}",
                                  task.course_name, i + 1, total,
                                  truncate(&kname, 30)),
@@ -478,7 +483,7 @@ pub async fn run_cx_study(task: &CxTaskInput, push_url: &str,
                     p.done = done_total;
                     p.failed = failed_total;
                 }
-                write_cx_status(&task.status_file, &task.course_name, &progress,
+                write_cx_status(task.status_file.as_deref(), &task.course_name, &progress,
                                 "study_must_learn",
                                 &format!("[{}] {} 完成", task.course_name, truncate(&kname, 20)),
                                 None, None).await;
@@ -490,7 +495,7 @@ pub async fn run_cx_study(task: &CxTaskInput, push_url: &str,
                     p.failed = failed_total;
                 }
                 eprintln!("[cx_study] 知识点处理失败 kid={} err={}", point.kid, e);
-                write_cx_status(&task.status_file, &task.course_name, &progress,
+                write_cx_status(task.status_file.as_deref(), &task.course_name, &progress,
                                 "study_must_learn",
                                 &format!("[{}] {} 失败: {}", task.course_name,
                                          truncate(&kname, 20), e),
@@ -498,9 +503,13 @@ pub async fn run_cx_study(task: &CxTaskInput, push_url: &str,
             }
         }
 
-        // WS 推送进度
+        // 进度推送。字段名与学校链路（study.rs）对齐：服务端
+        // progress::persist_job_progress 只认 progress/done/total/step 才会落库，
+        // 此前这里只发 study_done/study_total —— 订单页进度永远 0%。
         if task.push_ws {
             let p = progress.lock().await;
+            let pct = if p.total > 0 { (p.done as f64 / p.total as f64 * 100.0).round() } else { 0.0 };
+            let step = format!("[{}] {}", task.course_name, truncate(&kname, 20));
             let _ = session_client.post(push_url)
                 .header("Content-Type", "application/json")
                 .header("X-Worker-Token", push_token)
@@ -509,9 +518,13 @@ pub async fn run_cx_study(task: &CxTaskInput, push_url: &str,
                     // 服务端据此确定广播 topic：order:{order_id}
                     "order_id": task.order_id.clone(),
                     "phase": "study_must_learn",
+                    "progress": pct,
+                    "done": p.done,
+                    "total": p.total,
+                    "step": step.clone(),
+                    "message": step,
                     "study_done": p.done,
                     "study_total": p.total,
-                    "message": format!("[{}] {}", task.course_name, truncate(&kname, 20)),
                 }))
                 .timeout(Duration::from_secs(2))
                 .send().await;
@@ -519,7 +532,7 @@ pub async fn run_cx_study(task: &CxTaskInput, push_url: &str,
     }
 
     let success = failed_total == 0;
-    write_cx_status(&task.status_file, &task.course_name, &progress, "done",
+    write_cx_status(task.status_file.as_deref(), &task.course_name, &progress, "done",
                     &format!("学习通视频刷课完成 done={done_total} failed={failed_total}"),
                     Some(true), Some(success)).await;
     eprintln!("[cx_study] 任务完成 order_id={} done={done_total} failed={failed_total}",
