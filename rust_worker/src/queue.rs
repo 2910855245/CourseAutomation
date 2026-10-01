@@ -496,8 +496,23 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
     let session = match crate::session::get_session(&base_url, &job.username, &password).await {
         Ok(s) => s,
         Err(e) => {
-            let msg = format!("登录失败: {e}");
-            handle_job_failure(state, job, QueueKind::School, &msg).await;
+            let raw = e.to_string();
+            tracing::warn!(job_id = %job.job_id, error = %raw, "学校平台登录失败");
+            let msg = if school_credential_error(&raw) {
+                "登录失败：账号或密码不正确（或账号不存在/被锁定），请核对后重新提交".to_string()
+            } else {
+                format!("登录失败: {raw}")
+            };
+            if school_credential_error(&raw) {
+                // 凭据类失败：直接终态，不进入队列重试（避免把账号刷到锁定）
+                let _ = update_job(state, job, QueueKind::School,
+                                   &[("status", "failed".into()),
+                                     ("error_message", msg.clone()),
+                                     ("finished_at", now_str())]).await;
+                sync_order_state(state, job, "failed", &msg).await;
+            } else {
+                handle_job_failure(state, job, QueueKind::School, &msg).await;
+            }
             return;
         }
     };
@@ -548,15 +563,21 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
     }
 }
 
-/// 学习通登录失败何时该"立刻终态、不再重试"。
+/// 凭据类登录失败何时该"立刻终态、不再重试"（学校与学习通共用）。
 ///
-/// 凭据类失败（密码错/账号被锁/需要验证码）重试只会**白刷平台的错误次数**
-/// （超星同样超过 5 次锁号）——与 login.rs 的快速失败列表同一条安全约定。
+/// 密码错/账号被锁/账号不存在这类失败重试只会**白刷平台的错误次数**
+/// （两个平台都是超过 5 次即锁号）——与 login.rs 的快速失败列表同一条安全约定。
 /// 网络抖动类（DNS/超时）才交给队列的重试策略。
 fn cx_credential_error(msg: &str) -> bool {
     ["密码", "账号", "锁定", "验证码", "不存在", "不能为空"]
         .iter()
         .any(|k| msg.contains(k))
+}
+
+/// 学校平台侧同名判定：登录错误里出现这些词就不要再让队列重试 3 轮
+/// （实测一个不存在的学号会打满 3×10 次登录请求，白白逼近平台锁号线）
+fn school_credential_error(msg: &str) -> bool {
+    cx_credential_error(msg)
 }
 
 /// 执行单个学习通任务：登录（cx_login）→ 扫描 + 刷必学/积分视频（cx_scan/cx_study）。
