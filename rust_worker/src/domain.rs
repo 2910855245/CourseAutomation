@@ -799,23 +799,21 @@ mod tests {
         );
     }
 
-    /// 缓存为空时必须回退到静态表，且学习通 id=4 绝不能落到平台 1 的兜底
+    /// 缓存为空时必须回退到静态表，且学习通 id=4 绝不能落到平台 1 的兜底。
+    /// 直接测纯函数：改进程环境变量的测试会与并行用例互相污染。
     #[test]
     fn test_base_url_static_fallback() {
-        if std::env::var("RUST_TEST_BASE_URL").is_ok() {
-            return;
-        }
-        assert_eq!(crate::scan::platform_base_url(4), "https://mooc1.chaoxing.com");
-        assert_eq!(crate::scan::platform_base_url(2), "https://cdcas.duxingkej.com");
-        assert_eq!(crate::scan::platform_base_url(99), "https://cdcass.taiskeji.com");
+        assert_eq!(crate::scan::resolve_base_url(None, 4), "https://mooc1.chaoxing.com");
+        assert_eq!(crate::scan::resolve_base_url(None, 2), "https://cdcas.duxingkej.com");
+        assert_eq!(crate::scan::resolve_base_url(None, 3), "https://cdcas.chaoxiankeji.com");
+        assert_eq!(crate::scan::resolve_base_url(None, 99), "https://cdcass.taiskeji.com");
     }
 
     /// E2E mock 平台的最高优先钩子不能被缓存/静态表削弱
     #[test]
     fn test_env_override_top_priority() {
-        std::env::set_var("RUST_TEST_BASE_URL", "http://127.0.0.1:9/mock");
-        assert_eq!(crate::scan::platform_base_url(1), "http://127.0.0.1:9/mock");
-        assert_eq!(crate::scan::platform_base_url(4), "http://127.0.0.1:9/mock");
-        std::env::remove_var("RUST_TEST_BASE_URL");
+        let mock = Some("http://127.0.0.1:9/mock".to_string());
+        assert_eq!(crate::scan::resolve_base_url(mock.clone(), 1), "http://127.0.0.1:9/mock");
+        assert_eq!(crate::scan::resolve_base_url(mock.clone(), 4), "http://127.0.0.1:9/mock");
     }
 }

@@ -293,12 +293,25 @@ async fn claim_next_job(state: &AppState, lane: Lane) -> Result<Option<QueueJob>
     Ok(row)
 }
 
-/// 任务状态落库 —— 队列状态变更的唯一扼流点。
-///
-/// 写成功后统一广播 `job.update`（topic `queue`），若任务挂在订单上，
-/// 额外向 `order:{order_id}` 发一条 `order.update` 作为「该订单有变化」的信号。
-/// 注意：这里只发信号，不带订单表语义 —— 前端收到后应重新拉取该订单，
-/// 而不是把队列状态直接当作订单状态。
+/// 任务成功收口：把"已刷节数"对齐到整单总节数（见调用点的说明）
+async fn sync_completed_steps(state: &AppState, job: &QueueJob) {
+    let pool = state.db.raw_pool().clone();
+    let job_id = job.job_id.clone();
+    let _ = tokio::task::spawn_blocking(move || -> Result<()> {
+        let conn = pool.get()?;
+        conn.execute(
+            &format!("UPDATE {SCHOOL_TABLE} SET completed_steps = total_steps WHERE job_id = ?1"),
+            rusqlite::params![job_id],
+        )?;
+        Ok(())
+    })
+    .await;
+}
+
+/// 写成功后统一广播 `job.update`（topic `queue`）——队列状态变更的唯一扼流点。
+/// 若任务挂在订单上，额外向 `order:{order_id}` 发一条 `order.update` 作为
+/// 「该订单有变化」的信号；前端收到后应重新拉取该订单，而不是把队列状态
+/// 直接当作订单状态。
 async fn update_job(state: &AppState, job: &QueueJob, fields: &[(&str, String)]) -> Result<()> {
     if fields.is_empty() {
         return Ok(());
@@ -474,6 +487,10 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
                                &[("status", "completed".into()), ("progress", "100".into()),
                                  ("current_step_name", "刷课完成".into()),
                                  ("finished_at", now_str())]).await;
+            // 步数收口：成功路径上"已刷节数"必然等于整单总节数（引擎零失败才返回 Ok）。
+            // 此前只改文案不改步数，重扫后无待刷的任务会停在上一轮的旧值（如 52/89），
+            // 与平台已 100% 的状态对不上，看起来就像"进度少了几节"。
+            sync_completed_steps(state, job).await;
             sync_order_state(state, job, "completed", "").await;
             tracing::info!(job_id = %job.job_id, "任务完成");
         }

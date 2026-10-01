@@ -102,6 +102,21 @@ pub struct Video {
     /// 进度条爬到 100%、平台上一节都没动。拿不到时长就必须能表达"不知道"。
     #[serde(default)]
     pub duration: Option<u64>,
+    /// 平台自报的时长（`videoDuration` 原值，未经媒体探测校准）。
+    ///
+    /// **判"是否已学"用它，判"还要刷多久"用 `duration`**：平台按它自己的
+    /// 元数据算已学时长，所以"平台显示已学"的节必须按它的口径跳过、计入进度基数，
+    /// 否则我们的进度永远比平台少几节（平台的元数据偶尔偏短，真实文件更长）。
+    /// 真刷时仍以校准后的 `duration` 为准 —— 报满文件真长度平台才一定认账。
+    #[serde(default)]
+    pub platform_duration: Option<u64>,
+    /// 平台**自己**的"已学"判定（节点 `state` 字段带"已学"）。
+    ///
+    /// 这是与平台页面 100% 对齐的唯一可靠依据：平台的判定比"看满总时长"宽
+    /// （线上实测 `progress=0.98`、比 videoDuration 少 19 秒也照样标"已学"），
+    /// 而校准后的文件真值又比平台元数据长 —— 拿数值比较必然少算几节。
+    #[serde(default)]
+    pub platform_done: bool,
     #[serde(default)]
     pub viewed_duration: u64,
     /// 视频文件地址。平台列表接口不返回时长，补时长要从文件本身读（见 scan 的媒体探测）。
@@ -119,8 +134,19 @@ pub struct Video {
 /// 此前两边各写一套等价但不一致的判断，`duration` 一旦解析失败就会分叉：
 /// 扫描判"要刷"（计费、入队），刷课判"已完成"（秒过、报 100%）。
 /// 时长未知一律**不算已完成** —— 不知道就不许替客户宣布成功。
+///
+/// 口径以**平台自己的判定**为准（2026-10-01 用户拍板）：平台标"已学"的节，
+/// 我们直接跳过并计入进度基数，后台进度才与平台页面一致；平台没给判定时，
+/// 退回"看满平台自报时长"的数值比较，最后才用校准值兜底（仍保证
+/// "不知道就不算完成"）。
 pub fn video_is_done(v: &Video) -> bool {
-    matches!(v.duration, Some(d) if v.viewed_duration >= d)
+    if v.platform_done {
+        return true;
+    }
+    match v.platform_duration.or(v.duration) {
+        Some(d) => v.viewed_duration >= d,
+        None => false,
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -698,6 +724,15 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
     // 分母 = 已完成的 + 本轮待刷的 = 整单总节数
     let total_videos = task.already_done + queue.len() as u64;
 
+    // 扫描后的第一帧立刻把基数报上去：不清这一下，重扫/重启后进度条会一直停在
+    // 上一轮的旧值，直到下一节刷完才跳变 —— 后台看起来就像"进度比平台少几节"。
+    push_ws(&shared, serde_json::json!({
+        "type": "progress", "phase": "video",
+        "progress": pct_of(task.already_done, total_videos),
+        "done": task.already_done, "failed": 0, "total": total_videos,
+        "step": format!("已刷 {}/{} 节", task.already_done, total_videos),
+    }), &push_url, &push_token).await;
+
     // 视频并发闸：档位决定同时在跑几路会话（急速 8 / 均衡 4 / 温柔 1）。
     // 槽位满时后面的视频在此排队（不产生任何请求）。
     let video_sem = Arc::new(tokio::sync::Semaphore::new(profile.video_concurrency.max(1)));
@@ -890,6 +925,8 @@ mod tests {
         (0..count).map(|i| Video {
             node_id: format!("{course}-n{i}"),
             duration: Some(duration),
+            platform_duration: Some(duration),
+            platform_done: false,
             viewed_duration: 0,
             local_file: None,
             name: format!("{course} 第{i}节"),

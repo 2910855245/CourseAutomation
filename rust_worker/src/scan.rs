@@ -72,15 +72,26 @@ pub struct CourseItem {
 /// 学校平台 base_url：测试钩子 → 域名监控缓存（动态）→ 静态默认表
 /// 测试钩子：RUST_TEST_BASE_URL 环境变量覆盖（mock 平台 E2E 用）
 pub fn platform_base_url(website_id: i64) -> String {
-    if let Ok(url) = std::env::var("RUST_TEST_BASE_URL") {
-        if !url.is_empty() {
-            return url;
-        }
+    let override_url = std::env::var("RUST_TEST_BASE_URL")
+        .ok()
+        .filter(|u| !u.is_empty());
+    resolve_base_url(override_url, website_id)
+}
+
+/// 优先级实现（与进程环境解耦，便于确定性地单测三层回退）
+pub(crate) fn resolve_base_url(override_url: Option<String>, website_id: i64) -> String {
+    if let Some(url) = override_url {
+        return url;
     }
     // 域名监控（domain.rs）写库后即时生效：域名一换，新起的任务立刻用新域名
     if let Some(url) = crate::domain::cached_base_url(website_id) {
         return url;
     }
+    static_base_url(website_id)
+}
+
+/// 静态默认表（缓存与钩子都未命中时的兜底）
+fn static_base_url(website_id: i64) -> String {
     // 注意：这里是**静默兜底**——未列出的 website_id 会被当成学校平台 1 去登录。
     // 学习通（id=4）绝不能落到这条兜底上：那会拿用户的手机号+密码去登录
     // 在线课程测评考试平台，若该手机号在那边也存在，就会刷错人的课。
@@ -413,7 +424,12 @@ pub async fn fetch_course_videos(client: &Client, cookie: &str, base_url: &str,
             }
             out.push(Video {
                 node_id,
+                // 校准值（会被媒体探测抬高）用于"还要刷多久"，平台原值用于"是否已学"
                 duration,
+                platform_duration: duration,
+                // 平台自己的判定（state 里带"已学"）：与平台页面一致，优先采信
+                platform_done: item["state"].as_str()
+                    .map(|s| s.contains("\u{5df2}\u{5b66}")).unwrap_or(false),
                 viewed_duration: viewed_secs(item),
                 local_file: field(item, "localFile", "local_file").as_str()
                     .filter(|s| !s.is_empty()).map(str::to_string),
@@ -750,6 +766,8 @@ mod tests {
         let mk = |duration: Value, viewed: u64| crate::study::Video {
             node_id: "n1".into(),
             duration: duration.as_u64(),
+            platform_duration: duration.as_u64(),
+            platform_done: false,
             viewed_duration: viewed,
             local_file: None,
             name: "v".into(),
@@ -763,6 +781,59 @@ mod tests {
         // 时长未知 → **绝不算已学**（不知道就不许宣布完成）
         assert!(!crate::study::video_is_done(&mk(Value::Null, 0)));
         assert!(!crate::study::video_is_done(&mk(Value::Null, 999)));
+    }
+
+    /// 进度口径以平台为准：媒体探测把时长抬高后，"平台已学"的节不能被算成待刷
+    #[test]
+    fn test_video_is_done_uses_platform_length() {
+        let mut v = crate::study::Video {
+            node_id: "n1".into(),
+            duration: Some(710),          // 文件真值（平台元数据失真时更长）
+            platform_duration: Some(155), // 平台自己的元数据
+            platform_done: false,
+            viewed_duration: 160,
+            local_file: None,
+            name: "v".into(),
+            course_id: "c".into(),
+        };
+        assert!(crate::study::video_is_done(&v), "平台显示已学 → 我们也要算已完成");
+        v.viewed_duration = 100;
+        assert!(!crate::study::video_is_done(&v), "平台还没看满 → 仍待刷");
+        // 平台元数据缺失时退回校准值，结论不变
+        v.platform_duration = None;
+        assert!(!crate::study::video_is_done(&v));
+        v.viewed_duration = 710;
+        assert!(crate::study::video_is_done(&v));
+    }
+
+    /// 线上实测：平台 state 标"已学"、但 viewed 比 videoDuration 少 19 秒、
+    /// 又比文件真值短得多 —— 这种节必须算已完成，否则进度永远少于平台页面
+    #[test]
+    fn test_video_is_done_follows_platform_state() {
+        let raw = json!({
+            "id": "1838899",
+            "videoDuration": "00:14:44",
+            "viewedDuration": "00:14:25",
+            "state": "<span style=\"color: #2bbc66\">已学</span>",
+        });
+        let v = crate::study::Video {
+            node_id: "1838899".into(),
+            duration: Some(900),  // 媒体探测抬高后的真值
+            platform_duration: meta_duration_secs(&raw),
+            platform_done: raw["state"].as_str().map(|s| s.contains("已学")).unwrap_or(false),
+            viewed_duration: viewed_secs(&raw),
+            local_file: None,
+            name: "5.2 科学运动".into(),
+            course_id: "1023687".into(),
+        };
+        assert_eq!(v.platform_duration, Some(884));
+        assert_eq!(v.viewed_duration, 865);
+        assert!(crate::study::video_is_done(&v), "平台标已学的节必须算完成（与页面一致）");
+        // 同一节若平台标的是"未学完"，则按数值判未完成
+        let mut v2 = v.clone();
+        v2.platform_done = false;
+        v2.viewed_duration = 100;
+        assert!(!crate::study::video_is_done(&v2));
     }
 
     /// 构造一个 version 0 的 mvhd 片段（线上实测就是这么排布的）
