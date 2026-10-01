@@ -106,15 +106,15 @@ export function useHomeState() {
   }
   loadPackagePricing()
 
-  // ── 刷课节奏档位（暴力 / 适中 / 保守）──
-  // 与后端 speed.rs 的 SpeedMode 一一对应（turbo/balanced/gentle 是落库标识）；
-  // 默认适中；保守档是"一节课接一节课"的串行档，免费刷默认走它
+  // ── 刷课节奏档位（暴力 / 保守）──
+  // 与后端 speed.rs 的 SpeedMode 对应（turbo/gentle 是落库标识；balanced 已下线，
+  // 仅存在于历史订单里）。默认保守：免费单只能用保守，且它最稳
   const SPEED_LS_KEY = 'course_speed_mode'
-  type SpeedMode = 'turbo' | 'balanced' | 'gentle'
-  const hasSavedSpeed = (['turbo', 'balanced', 'gentle'] as const)
+  type SpeedMode = 'turbo' | 'gentle'
+  const hasSavedSpeed = (['turbo', 'gentle'] as const)
     .includes(localStorage.getItem(SPEED_LS_KEY) as SpeedMode)
   const speedMode = ref<SpeedMode>(
-    hasSavedSpeed ? (localStorage.getItem(SPEED_LS_KEY) as SpeedMode) : 'balanced'
+    hasSavedSpeed ? (localStorage.getItem(SPEED_LS_KEY) as SpeedMode) : 'gentle'
   )
   function setSpeedMode(mode: SpeedMode) {
     // 免费待遇下只能串行：付费档位在此被拦下（服务端同样会强制，双保险）

@@ -88,7 +88,7 @@ export interface OrderItem {
   progress?: number; task_id?: string; admin_note?: string; exam_count?: number;
   /** 队列当前步骤（如"已刷 12/40 节"），由查单接口从队列任务注入 */
   current_step_name?: string;
-  /** 刷课节奏档位：turbo 急速 / balanced 均衡 / gentle 温柔 */
+  /** 刷课节奏档位：turbo 暴力 / gentle 保守（balanced 已下线，仅历史订单存在） */
   speed_mode?: string;
   created_at: string; updated_at?: string; accepted_at?: string; started_at?: string; finished_at?: string;
 }

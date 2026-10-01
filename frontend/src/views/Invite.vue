@@ -27,6 +27,10 @@ const progress = computed(() => {
   const d = data.value
   if (!d) return { done: 0, need: 1, pct: 0 }
   const need = Math.max(1, d.threshold || 1)
+  // 进度条语义 = "距下一张卡的推进度"：
+  //   - 手上已经有可领的卡 → 满格（此前直接取模，邀请 6 人时会显示 0/3，看起来像 bug）
+  //   - 否则 → 本轮已积累人数（取模才是"距下一张还差几个"的正确口径）
+  if ((d.can_claim || 0) > 0) return { done: need, need, pct: 100 }
   const done = (d.invited_valid || 0) % need
   return { done, need, pct: Math.round((done / need) * 100) }
 })
@@ -211,7 +215,7 @@ onMounted(load)
             <li>每满 {{ data.threshold }} 位有效邀请，可领取 1 张 {{ data.valid_days }} 天刷课卡，可重复领取。</li>
             <li>持卡期间<b>答题 / 考试免单</b>（刷视频本来就免费），额度内可重复使用。</li>
             <li>持卡下单<b>优先排队</b>：排在所有普通免费单之前，不用等免费队列。</li>
-            <li>免费单（含持卡）走<b>免费队列</b>且只能用<b>保守档</b>；想用适中 / 暴力档提速，需按门课付费 —— 付费订单走独立通道，永远不排在免费队列后面。</li>
+            <li>免费单（含持卡）走<b>免费队列</b>且只能用<b>保守档</b>；想用暴力档提速，需按门课付费 —— 付费订单走独立通道，永远不排在免费队列后面。</li>
             <li>卡片与当前浏览器身份绑定；领卡时填了联系方式的，换设备 / 清缓存后联系客服可找回。</li>
             <li>同一好友仅计一次；需通过你的链接进入并完成下单才计入，自己邀请自己不计。</li>
           </ol>

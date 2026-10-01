@@ -32,17 +32,16 @@ const {
   benefit, inviteInfo, myCard, loadBenefit,
 } = useHomeState()
 
-// 刷课节奏三档（与后端 speed.rs 的 SpeedMode 对应）
+// 刷课节奏档位（与后端 speed.rs 的 SpeedMode 对应）
 // "并发"指同时在推进的视频会话数（平台按 beginTime/finalTime 重叠数判定）
+// 两档（用户 2026-10-02 删掉"适中"档）：免费只能保守、付费解锁暴力
 const speedOptions = [
-  { key: 'turbo' as const, name: '暴力', sub: '8 路并行 · 最快' },
-  { key: 'balanced' as const, name: '适中', sub: '推荐 · 兼顾安全' },
-  { key: 'gentle' as const, name: '保守', sub: '一节课一节课 · 最稳' },
+  { key: 'gentle' as const, name: '保守', sub: '默认 · 一节课一节课 · 最稳' },
+  { key: 'turbo' as const, name: '暴力', sub: '付费解锁 · 8 路并行 · 最快' },
 ]
 const speedModeDesc = computed(() => ({
   turbo: '整单最多 8 节同时推进，整体完成最快，风控风险最高。',
-  balanced: '4 节同时推进 + 启动错峰，完成时间与账号安全的平衡点。',
-  gentle: '完全串行：一节课刷完再刷下一节，课程间自动拉长间隔，最接近真人。',
+  gentle: '完全串行：一节课刷完再刷下一节，课程间自动拉开间隔，最接近真人。',
 }[speedMode.value]))
 
 // 商业规则：刷视频免费、答题/考试付费。免费的单只能跑保守档（串行）。
@@ -69,9 +68,9 @@ const freeTagText = computed(() => {
 function isSpeedLocked(key: string) {
   return key !== 'gentle' && freeTotal.value
 }
-function pickSpeed(key: 'turbo' | 'balanced' | 'gentle') {
+function pickSpeed(key: 'turbo' | 'gentle') {
   if (isSpeedLocked(key)) {
-    store.toast('免费刷课只能使用保守档，付费答题可解锁适中 / 暴力档', 'warning')
+    store.toast('免费刷课只能使用保守档，付费答题可解锁暴力档', 'warning')
     return
   }
   setSpeedMode(key)

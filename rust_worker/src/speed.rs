@@ -5,14 +5,15 @@
 //! 并发（见 CHANGELOG 2026-05-24）。因此**任何档位**同时在推进的视频会话数都不得超过 8，
 //! 暴力档只是取到这条上界，而不是无限制并发。
 //!
-//! 三档定位：
-//!   - 暴力：同时推进 8 路视频会话、无启动等待 —— 最快，风控风险最高
-//!   - 适中：默认档。4 路会话 + 每路启动错峰，速度与安全的平衡点
+//! 两档定位（用户 2026-10-02 拍板删掉"适中"档：它既不是最快也不是最稳，
+//! 夹在两档之间只是增加选择成本）：
+//!   - 暴力：同时推进 8 路视频会话、无启动等待 —— 最快，风控风险最高（付费档位）
 //!   - 保守（纯串行）：一节课刷完立即刷下一节，并发全为 1 是它唯一的收敛点。
 //!     没有尾等待、没有长间隔、上报不加额外停顿 —— 串行本身已是最保守的形态，
-//!     再靠"白等"凑时长只会白白拖慢订单（用户 2026-09-30 拍板）
+//!     再靠"白等"凑时长只会白白拖慢订单（用户 2026-09-30 拍板）。免费单与未知取值一律走它。
 //!
-//! 落库标识沿用 turbo/balanced/gentle（历史订单与新前端不用迁移数据）。
+//! 落库标识沿用 turbo/balanced/gentle：`Balanced` 只保留给历史订单/历史任务回放，
+//! 新前端不再提供该选项，新订单也不会写入它。
 
 use std::time::Duration;
 
@@ -30,15 +31,15 @@ const DEFAULT_WALL_RATIO: f64 = 2.1;
 pub enum SpeedMode {
     /// 暴力档：全量并行，刷完立即衔接下一节
     Turbo,
-    /// 适中档（默认）
+    /// 适中档已下线（用户 2026-10-02 删掉）：仅为历史订单/任务的落库值保留解析
     Balanced,
-    /// 保守档：严格串行，一节课接一节课
+    /// 保守档：严格串行，一节课接一节课（默认档）
     Gentle,
 }
 
 impl Default for SpeedMode {
     fn default() -> Self {
-        SpeedMode::Balanced
+        SpeedMode::Gentle
     }
 }
 
@@ -52,12 +53,14 @@ impl SpeedMode {
         }
     }
 
-    /// 宽松解析：未知值一律回退均衡（向后兼容空串/历史脏数据）
+    /// 宽松解析：未知值一律回退保守档（向后兼容空串/历史脏数据；免费与未知都取最保守形态），
+    /// 只有显式写了 balanced 的历史订单才会解析回已下线的适中档
     pub fn parse(s: &str) -> Self {
         match s.trim().to_lowercase().as_str() {
             "turbo" | "fast" | "extreme" => SpeedMode::Turbo,
+            "balanced" | "medium" | "normal" => SpeedMode::Balanced,
             "gentle" | "slow" | "soft" => SpeedMode::Gentle,
-            _ => SpeedMode::Balanced,
+            _ => SpeedMode::Gentle,
         }
     }
 
@@ -186,9 +189,12 @@ mod tests {
         assert_eq!(SpeedMode::parse("turbo"), SpeedMode::Turbo);
         assert_eq!(SpeedMode::parse("TURBO"), SpeedMode::Turbo);
         assert_eq!(SpeedMode::parse("gentle"), SpeedMode::Gentle);
-        // 空串与脏数据都回退均衡，保证老订单行为不变
-        assert_eq!(SpeedMode::parse(""), SpeedMode::Balanced);
-        assert_eq!(SpeedMode::parse("unknown"), SpeedMode::Balanced);
+        // 适中档已下线：空串与脏数据一律回退保守档（免费与未知都取最保守形态）
+        assert_eq!(SpeedMode::parse(""), SpeedMode::Gentle);
+        assert_eq!(SpeedMode::parse("unknown"), SpeedMode::Gentle);
+        // 但历史订单里显式写过 balanced 的仍解析回适中档，保证老单行为不变
+        assert_eq!(SpeedMode::parse("balanced"), SpeedMode::Balanced);
+        assert_eq!(SpeedMode::default(), SpeedMode::Gentle);
     }
 
     #[test]
