@@ -227,17 +227,28 @@ function canCancel(o: OrderItem) {
 }
 
 async function clearHistory() {
-  const ok = await showConfirm({ title: '清空历史', message: '确认清空所有已完成/失败/已取消的订单？此操作不可撤销。', type: 'danger' })
+  // 只清终态单：进行中的单必须保留 —— 游客查单的凭证只存在本地，
+  // 一并清掉的话顾客再也看不到自己那笔还在跑的单（此前正是如此）
+  const keep = orders.value.filter(o => !TERMINAL.includes(o.status))
+  const ok = await showConfirm({
+    title: '清空历史',
+    message: keep.length
+      ? `确认清空已完成/失败/已取消的订单？${keep.length} 笔进行中的订单会保留。`
+      : '确认清空所有已完成/失败/已取消的订单？此操作不可撤销。',
+    type: 'danger',
+  })
   if (!ok) return
   try {
     await api.orders.clearHistory()
-    orderIds.value = []
-    sessionStorage.removeItem('last_order_ids')
-    localStorage.removeItem('last_order_ids')
-    sessionStorage.removeItem('last_order_tokens')
-    localStorage.removeItem('last_order_tokens')
-    orders.value = []
-    store.toast('历史订单已清空', 'success')
+    orderIds.value = keep.map(o => o.order_id)
+    orders.value = keep
+    const idsStr = keep.map(o => o.order_id).join(',')
+    const tokStr = keep.map(o => `${o.order_id}:${orderTokens[o.order_id] || ''}`).join(',')
+    for (const [key, val] of [['last_order_ids', idsStr], ['last_order_tokens', tokStr]] as const) {
+      if (val) { sessionStorage.setItem(key, val); localStorage.setItem(key, val) }
+      else { sessionStorage.removeItem(key); localStorage.removeItem(key) }
+    }
+    store.toast(keep.length ? `已清空历史，保留 ${keep.length} 笔进行中的订单` : '历史订单已清空', 'success')
   } catch (e: any) { store.toast(e.message, 'error') }
 }
 
@@ -250,6 +261,8 @@ const payBatchOutTradeNo = ref('')
 const payMethod = ref<'ypay_wxpay' | 'ypay_alipay'>('ypay_wxpay')
 const payPollTimer = ref<number | null>(null)
 const payTimedOut = ref(false)
+/** 通道已收款但业务未入账：提示用户"已在入账，别重复支付" */
+const payUncredited = ref(false)
 const payingOrderIds = ref<string[]>([])
 
 async function repay(orderIds2: string[]) {
@@ -264,6 +277,7 @@ async function createPay(method: 'ypay_wxpay' | 'ypay_alipay') {
   payMethod.value = method
   payQrCode.value = ''
   payTimedOut.value = false
+  payUncredited.value = false
   try {
     const payRes = await api.payment.batchCreate({
       order_ids: payingOrderIds.value,
@@ -285,16 +299,24 @@ function startPayPoll() {
   if (payPollTimer.value) { clearTimeout(payPollTimer.value); payPollTimer.value = null }
   if (!payBatchId.value) return
   let pollCount = 0
+  let uncreditedHits = 0
   async function tick() {
     pollCount++
     try {
       const r = await api.payment.batchCheck(payBatchId.value, payBatchOutTradeNo.value) as any
       if (r?.paid) {
-        if (payPollTimer.value) { clearTimeout(payPollTimer.value); payPollTimer.value = null }
-        store.toast('支付成功！', 'success')
-        showPayModal.value = false
-        load()
-        return
+        // credited ≠ paid：paid 只说明钱到了通道，credited 才说明业务已入账。
+        // 此前这里一见 paid 就报"支付成功"，可能出现"界面说成功、任务却没派发"
+        if (r.credited === false) {
+          uncreditedHits++
+          payUncredited.value = uncreditedHits >= 3
+        } else {
+          if (payPollTimer.value) { clearTimeout(payPollTimer.value); payPollTimer.value = null }
+          store.toast('支付成功！', 'success')
+          showPayModal.value = false
+          load()
+          return
+        }
       }
       if (r?.expired || pollCount >= 120) {
         payTimedOut.value = true
@@ -541,7 +563,9 @@ const fmtMoney = (n: number) => `¥${(n || 0).toFixed(2)}`
               <img v-if="payQrCode" :src="payQrCode" alt="支付二维码" class="pm-qr-img" />
               <div v-else class="pm-qr-placeholder">生成中…</div>
             </div>
+            <p v-if="payUncredited" class="pm-uncredited">已收到支付，正在入账（通常 1 分钟内）—— 请勿重复支付</p>
             <p class="pm-hint">保存二维码后使用{{ payMethod === 'ypay_wxpay' ? '微信' : '支付宝' }}扫一扫支付</p>
+            <p class="pm-hint2">手机可直接<strong>长按二维码</strong>识别支付；保存失败时也可长按图片保存</p>
           </template>
         </div>
         <div v-if="!payTimedOut" class="modal-footer col">
@@ -761,6 +785,18 @@ const fmtMoney = (n: number) => `¥${(n || 0).toFixed(2)}`
 /* ==================== 支付 ==================== */
 .pay-modal { max-width: 380px; width: 100%; }
 .pm-warn { font-size: 12px; color: var(--c-warning); text-align: center; margin-bottom: 6px; }
+/* 已收款未入账：明确"别重复支付"，避免顾客二次付款 */
+.pm-uncredited {
+  margin-top: 12px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--c-warning-bg);
+  color: var(--c-warning);
+  font-size: 12.5px;
+  line-height: 1.5;
+  text-align: center;
+}
+.pm-hint2 { margin-top: 8px; font-size: 12px; color: var(--c-text-muted); text-align: center; line-height: 1.55; }
 .pm-desc { font-size: 13px; color: var(--c-text-secondary); text-align: center; margin-bottom: 16px; }
 .pm-amount {
   font-size: 30px;

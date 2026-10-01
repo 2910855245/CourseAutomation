@@ -196,6 +196,8 @@ onMounted(async () => {
               <span class="hero-eyebrow">课程进度自动化</span>
               <h1 class="hero-title">登录平台账号</h1>
               <p class="hero-sub">系统自动扫描各平台未完成课程，并生成可直接提交的任务。</p>
+              <!-- 价格口径前置：先入为主的"要花多少钱"焦虑是首屏最大的劝退点 -->
+              <p class="hero-note">刷视频免费 · 答题/考试按门计费 · 提交前逐门显示价格</p>
             </header>
 
             <div class="login-card">
@@ -265,7 +267,7 @@ onMounted(async () => {
               </li>
               <li>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3l8 4v5c0 4.4-3 8.4-8 9.5-5-1.1-8-5.1-8-9.5V7z" /></svg>
-                凭据加密存储
+                凭据仅用于本次任务
               </li>
             </ul>
           </div>
@@ -395,6 +397,8 @@ onMounted(async () => {
                   <span v-else-if="loadingPrices" class="cr-done-tag">计价中…</span>
                   <span v-else-if="isCourseDone(c)" class="cr-done-tag">已完成</span>
                   <span v-else-if="isCourseEnded(c)" class="cr-done-tag">已结束</span>
+                  <!-- 计价已返回且为 0：明确写"免费"，否则用户分不清"免费"和"还没算出来" -->
+                  <span v-else class="cr-free-tag">免费</span>
                 </div>
               </div>
             </div>
@@ -548,7 +552,7 @@ onMounted(async () => {
           >
             {{ payRechecking ? '查询中…' : '重新检查到账' }}
           </button>
-          <button v-else class="btn btn-primary btn-block" @click="goToOrders(); closePay()">重新支付</button>
+          <button v-else class="btn btn-primary btn-block" @click="goToOrders(); closePay()">去订单页继续支付</button>
           <button class="btn btn-ghost btn-block" @click="goToOrders(); closePay()">查看订单</button>
         </div>
       </template>
@@ -580,6 +584,7 @@ onMounted(async () => {
               生成二维码中…
             </div>
             <p class="qr-label">保存二维码后使用{{ { ypay_alipay: '支付宝', ypay_wxpay: '微信' }[selectedPayMethod] || '扫码' }}扫一扫支付</p>
+            <p class="qr-hint">手机可<strong>长按二维码</strong>直接识别支付；保存失败时也可长按图片保存</p>
           </div>
         </div>
         <div class="modal-footer col">
@@ -806,6 +811,13 @@ onMounted(async () => {
   color: var(--c-text-secondary);
   max-width: 30ch;
   margin: 0 auto;
+}
+/* 首屏价格口径：把"花多少钱"提前说清楚，降低下单心理门槛 */
+.hero-note {
+  margin-top: var(--space-4);
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+  letter-spacing: .01em;
 }
 
 /* ---------- 悬浮玻璃卡 ---------- */
@@ -1175,6 +1187,16 @@ onMounted(async () => {
 .cr-side { flex: 0 0 auto; text-align: right; min-width: 62px; }
 .cr-price { font-size: var(--fs-base); font-weight: 600; }
 .cr-done-tag { font-size: var(--fs-xs); color: var(--c-text-muted); }
+/* 免费标签：和"计价中/已完成"区分开，绿色表示确实不花钱 */
+.cr-free-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--c-success-bg);
+  color: var(--c-success);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
 
 /* ==================== 刷课节奏 ==================== */
 .speed-picker {
@@ -1364,6 +1386,8 @@ onMounted(async () => {
   font-size: var(--fs-sm);
 }
 .qr-label { font-size: var(--fs-xs); color: var(--c-text-muted); }
+/* 手机扫码引导：iOS/微信内置浏览器点 <a download> 存图不可靠，长按才是通用解法 */
+.qr-hint { margin-top: 6px; font-size: var(--fs-xs); color: var(--c-text-muted); opacity: .85; }
 .modal-footer.col { flex-direction: column; gap: var(--space-2); }
 
 /* ==================== 公告 ==================== */
