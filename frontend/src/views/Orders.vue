@@ -54,9 +54,14 @@ function tagClass(o: OrderItem) {
   if (g === 'todo') return 'warn'
   return 'primary'
 }
-/** 进度条只在真的在跑的时候出现 */
-function showProgress(o: OrderItem) { return group(o) === 'running' && pct(o) > 0 }
+/** 进度条：只要还在跑就显示（0% 也显示，配"等待开始"文案）——
+    此前 0% 时整条隐藏，用户看到"处理中"却什么都没有，以为卡住了 */
+function showProgress(o: OrderItem) { return group(o) === 'running' }
 function pct(o: OrderItem) { return o.progress != null ? o.progress : 0 }
+/** 正在跑但进度还是 0：给一条流动的占位进度，表达"已接单、正在启动" */
+function isIdleProgress(o: OrderItem) { return showProgress(o) && pct(o) <= 0 }
+/** 后端注入的当前步骤（如"已刷 12/40 节"）；没有就不显示这一行 */
+function stepText(o: OrderItem) { return (o.current_step_name || '').trim() }
 /** 显示用：历史数据里存过未取整的浮点（如 1.639344262295082），统一收敛到 1 位小数 */
 function pctText(o: OrderItem) {
   const s = Number(pct(o)).toFixed(1)
@@ -79,6 +84,22 @@ const hasPending = computed(() => orders.value.some(o => {
   const g = group(o)
   return g === 'todo' || g === 'running'
 }))
+
+/** 筛选条计数：不点开就知道每一类有多少单 */
+const filterCounts = computed(() => {
+  const c: Record<string, number> = { '': orders.value.length, active: 0, done: 0, failed: 0 }
+  for (const o of orders.value) {
+    const g = group(o)
+    if (g === 'todo' || g === 'running') c.active++
+    else c[g]++
+  }
+  return c
+})
+
+/** 待支付提醒：一键合并支付，避免"下完单忘了付" */
+const unpaidOrders = computed(() => orders.value.filter(o => group(o) === 'todo'))
+const unpaidTotal = computed(() => unpaidOrders.value.reduce((s, o) => s + (o.price || 0), 0))
+function payAllUnpaid() { repay(unpaidOrders.value.map(o => o.order_id)) }
 
 let inFlight = false
 async function load() {
@@ -336,9 +357,27 @@ const fmtMoney = (n: number) => `¥${(n || 0).toFixed(2)}`
             @click="statusFilter = f.key"
           >
             {{ f.label }}
+            <span v-if="filterCounts[f.key]" class="chip-num mono">{{ filterCounts[f.key] }}</span>
           </button>
         </div>
-        <span class="result-count"><span class="mono">{{ shown.length }}</span> 条</span>
+      </div>
+
+      <!-- 待支付优先：一键合并支付，避免"下完单忘了付" -->
+      <div v-if="unpaidOrders.length" class="due-banner anim-rise">
+        <div class="db-main">
+          <span class="db-title"><span class="mono">{{ unpaidOrders.length }}</span> 笔订单待支付</span>
+          <span class="db-sub">合计 {{ fmtMoney(unpaidTotal) }} · 支付后立即开始处理</span>
+        </div>
+        <button class="btn btn-primary btn-sm" @click.stop="payAllUnpaid">立即支付</button>
+      </div>
+
+      <!-- 首屏骨架：避免加载时"空白一闪" -->
+      <div v-if="loading && !orders.length" class="order-list" aria-hidden="true">
+        <div v-for="n in 3" :key="n" class="order-card skeleton-card">
+          <span class="sk sk-w45"></span>
+          <span class="sk sk-w70"></span>
+          <span class="sk sk-w30"></span>
+        </div>
       </div>
 
       <div v-if="!orders.length && !loading" class="empty anim-rise">
@@ -373,21 +412,35 @@ const fmtMoney = (n: number) => `¥${(n || 0).toFixed(2)}`
           </header>
 
           <div class="oc-meta">
-            <span>{{ getPlatformName(o.website_id) }}</span>
+            <span class="oc-plat">{{ getPlatformName(o.website_id) }}</span>
             <span class="oc-sep">·</span>
             <span>{{ taskTypeNames[o.task_type] || o.task_type }}</span>
             <span class="oc-sep">·</span>
-            <span class="mono">{{ fmtMoney(o.price) }}</span>
+            <span class="mono">{{ o.course_ids?.length || 0 }} 门</span>
             <span class="oc-sep">·</span>
             <span class="mono">{{ fmtDate(o.created_at) }}</span>
+            <svg class="oc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+              <path d="M9 6l6 6-6 6" />
+            </svg>
+          </div>
+
+          <!-- 金额独立成行并加重：顾客扫一眼先看"花了多少 / 还要不要付" -->
+          <div class="oc-price-row">
+            <span class="oc-price mono">{{ (o.price || 0) > 0 ? fmtMoney(o.price) : '免费' }}</span>
+            <span v-if="group(o) === 'todo'" class="oc-price-hint warn">待支付</span>
+            <span v-else-if="group(o) === 'done'" class="oc-price-hint ok">已支付</span>
           </div>
 
           <div v-if="showProgress(o)" class="oc-progress">
             <div class="ocp-bar">
-              <div class="ocp-fill" :style="{ width: pct(o) + '%' }" />
+              <div
+                :class="['ocp-fill', { idle: isIdleProgress(o) }]"
+                :style="isIdleProgress(o) ? undefined : { width: pct(o) + '%' }"
+              />
             </div>
-            <span class="ocp-pct mono">{{ pctText(o) }}%</span>
+            <span class="ocp-pct mono">{{ isIdleProgress(o) ? '启动中' : pctText(o) + '%' }}</span>
           </div>
+          <p v-if="stepText(o)" class="oc-step">{{ stepText(o) }}</p>
 
           <footer
             v-if="!o.paid || canCancel(o)"
@@ -522,12 +575,55 @@ const fmtMoney = (n: number) => `¥${(n || 0).toFixed(2)}`
 .filter-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   margin-bottom: var(--space-4);
   flex-wrap: wrap;
 }
-.result-count { font-size: 12.5px; color: var(--c-text-muted); }
+/* 筛选计数：小号等宽数字，随选中态高亮（用 currentColor 免写两套色） */
+.chip-num {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 13%, transparent);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+/* 待支付横幅：页面唯一的强提示，直接给出"下一步动作" */
+.due-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: var(--space-4);
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--c-warning) 32%, var(--c-border));
+  background: color-mix(in srgb, var(--c-warning) 9%, var(--c-surface));
+}
+.db-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.db-title { font-size: 14px; font-weight: 600; color: var(--c-text); }
+.db-sub { font-size: 12.5px; color: var(--c-text-secondary); }
+
+/* 首屏骨架：加载时占位，不再是"空白一闪" */
+.skeleton-card { cursor: default; display: flex; flex-direction: column; gap: 10px; }
+.skeleton-card:hover { transform: none; box-shadow: none; border-color: var(--c-border); }
+.sk {
+  display: block;
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg,
+      var(--c-surface-2) 25%, var(--c-surface-3) 37%, var(--c-surface-2) 63%);
+  background-size: 400% 100%;
+  animation: sk-shimmer 1.4s ease-in-out infinite;
+}
+.sk-w45 { width: 45%; }
+.sk-w70 { width: 70%; }
+.sk-w30 { width: 30%; }
+@keyframes sk-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: 0 0; }
+}
 
 .order-list { display: flex; flex-direction: column; gap: 12px; }
 
@@ -544,6 +640,8 @@ const fmtMoney = (n: number) => `¥${(n || 0).toFixed(2)}`
   box-shadow: var(--shadow-sm);
   transform: translateY(-1px);
 }
+/* 触屏按下反馈：卡片可点开详情，给一个明确的物理回应 */
+.order-card:active { transform: translateY(0) scale(.995); }
 
 .oc-head {
   display: flex;
@@ -571,12 +669,41 @@ const fmtMoney = (n: number) => `¥${(n || 0).toFixed(2)}`
   color: var(--c-text-secondary);
 }
 .oc-sep { color: var(--c-text-muted); }
+.oc-plat { font-weight: 600; color: var(--c-text); }
+/* 卡片可点开详情：右侧一个克制的指示符，别让用户猜 */
+.oc-chev { margin-left: auto; flex: none; color: var(--c-text-muted); opacity: .55; }
+
+/* 金额行：扫一眼先看到"花了多少 / 还要不要付" */
+.oc-price-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 10px;
+}
+.oc-price { font-size: 18px; font-weight: 700; letter-spacing: -.01em; color: var(--c-text); }
+.oc-price-hint {
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.oc-price-hint.warn { color: var(--c-warning); background: var(--c-warning-bg); }
+.oc-price-hint.ok { color: var(--c-success); background: var(--c-success-bg); }
 
 .oc-progress {
   display: flex;
   align-items: center;
   gap: 10px;
   margin-top: 12px;
+}
+/* 当前步骤（"已刷 12/40 节"）：让用户看到系统真的在推进 */
+.oc-step {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--c-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .ocp-bar {
   flex: 1;
@@ -591,7 +718,21 @@ const fmtMoney = (n: number) => `¥${(n || 0).toFixed(2)}`
   background: var(--c-primary);
   transition: width .4s cubic-bezier(.32, .72, .35, 1);
 }
-.ocp-pct { font-size: 11.5px; color: var(--c-text-muted); min-width: 34px; text-align: right; }
+/* 已接单但进度还是 0：用流动光带表示"正在启动"，
+   而不是一条空槽 —— 空槽看起来像卡住了 */
+.ocp-fill.idle {
+  width: 32%;
+  background: linear-gradient(90deg,
+      color-mix(in srgb, var(--c-primary) 22%, transparent),
+      var(--c-primary),
+      color-mix(in srgb, var(--c-primary) 22%, transparent));
+  animation: ocp-sweep 1.6s ease-in-out infinite;
+}
+@keyframes ocp-sweep {
+  0% { transform: translateX(-95%); }
+  100% { transform: translateX(325%); }
+}
+.ocp-pct { font-size: 11.5px; color: var(--c-text-muted); min-width: 48px; white-space: nowrap; text-align: right; }
 
 .oc-actions {
   display: flex;

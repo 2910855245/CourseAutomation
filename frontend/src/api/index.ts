@@ -86,6 +86,8 @@ export interface OrderItem {
   website_id: number; task_type: string; course_ids: string[];
   video_count: number; price: number; status: string; paid?: boolean;
   progress?: number; task_id?: string; admin_note?: string; exam_count?: number;
+  /** 队列当前步骤（如"已刷 12/40 节"），由查单接口从队列任务注入 */
+  current_step_name?: string;
   /** 刷课节奏档位：turbo 急速 / balanced 均衡 / gentle 温柔 */
   speed_mode?: string;
   created_at: string; updated_at?: string; accepted_at?: string; started_at?: string; finished_at?: string;
@@ -249,7 +251,9 @@ export const api = {
       priceChaoxing: number;
     }>>('/api/pricing'),
     applyPackage: (d: Record<string, number>) => post<ApiResponse<any>>('/api/pricing/apply-package', d),
-    calculate: (d: { courses: { course_id: string; video_total: number; video_completed: number; exam_total: number; exam_done: number; homework_total: number; homework_done: number }[] }) =>
+    // username：服务端据此回查自己扫描时留下的快照（定价事实只认快照，
+    // 客户端传的明细仅作老调用兜底）；website_id 让服务端知道该查哪个平台的快照
+    calculate: (d: { username?: string; courses: { course_id: string; website_id?: number; video_total: number; video_completed: number; exam_total: number; exam_done: number; homework_total: number; homework_done: number }[] }) =>
       post<ApiResponse<{ courses: { course_id: string; type: string; price: number; label: string }[]; total: number; pricing_mode: string }>>('/api/pricing/calculate', d),
   },
   ypay: {

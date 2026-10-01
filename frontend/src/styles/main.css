@@ -1762,3 +1762,17 @@ input:disabled {
     display: block;
   }
 }
+
+/* ==================== 动效偏好 ==================== */
+/* 系统开了「减少动态效果」（晕动症 / 省电）时收掉入场、流光、骨架屏这类
+   循环动画：保留 .01ms 的过渡而不是 0，避免状态切换变成硬闪烁。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

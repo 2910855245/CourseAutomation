@@ -201,14 +201,17 @@ export function useHomeState() {
   const backendPrices = ref<Record<string, { price: number; type: string; label: string }>>({})
   let priceSeq = 0   // 定价请求序号（丢弃乱序返回的旧结果）
   const loadingPrices = ref(false)
+  // 「扫描数据已过期」只提示一次，避免每次勾选都弹一条
+  let stalePriceNotified = false
 
   async function fetchBackendPrices() {
-    const courses: { course_id: string; video_total: number; video_completed: number; exam_total: number; exam_done: number; exam_actionable: number; homework_total: number; homework_done: number }[] = []
+    const courses: { course_id: string; website_id: number; video_total: number; video_completed: number; exam_total: number; exam_done: number; exam_actionable: number; homework_total: number; homework_done: number }[] = []
     for (const p of scanData.value) {
       for (const c of p.courses) {
         if (checkedCourseIds.value.has(c.course_id)) {
           courses.push({
-            course_id: c.course_id, video_total: c.video_total, video_completed: c.video_completed,
+            course_id: c.course_id, website_id: p.website_id,
+            video_total: c.video_total, video_completed: c.video_completed,
             exam_total: c.exam_total, exam_done: c.exam_done, exam_actionable: c.exam_actionable ?? 0,
             homework_total: c.homework_total || 0, homework_done: c.homework_done || 0,
           })
@@ -221,8 +224,17 @@ export function useHomeState() {
     // 只认最后一次请求的结果，避免旧响应把新选择的价格覆盖掉
     const seq = ++priceSeq
     try {
-      const res = await api.pricing.calculate({ courses })
+      // 带上 username：服务端的定价事实只认它自己扫描时留下的快照，
+      // 客户端传的明细仅作兜底（老调用），不再决定最终价
+      const res = await api.pricing.calculate({ username: username.value.trim(), courses })
       if (seq !== priceSeq) return
+      if ((res as any)?.success === false) {
+        // 扫描快照过期/缺失：明确告诉用户要重新扫描，而不是静默按 0 元展示
+        const msg = (res as any)?.message || '扫描数据已过期，请重新扫描'
+        if (!stalePriceNotified) { stalePriceNotified = true; store.toast(msg, 'warning') }
+        return
+      }
+      stalePriceNotified = false
       if (res.data?.courses) {
         const map: Record<string, { price: number; type: string; label: string }> = {}
         for (const item of res.data.courses) map[item.course_id] = { price: item.price, type: item.type, label: item.label }

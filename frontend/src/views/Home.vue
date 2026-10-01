@@ -48,13 +48,15 @@ const speedModeDesc = computed(() => ({
 // 商业规则：刷视频免费、答题/考试付费。免费的单只能跑保守档（串行）。
 // 因此"要不要付钱"有两种命中方式：领了免单资格（限时免费 / 刷课卡），
 // 或者这单根本只有视频要刷 —— 两者都锁保守档。
-// 判据必须与后端一致（后端按逐单价格是否 0 强制改写档位）。
-// 但不能单看 total<=0：定价还没回来时 total 也是 0，按钮会先显示"免费提交"
-// 再跳成"提交并支付"，档位也被错误锁到保守 —— 所以定价加载中按付费处理。
+//
+// 判据必须与后端一致：后端按"逐单算出的价是不是 0"分流，前端只能看服务端
+// 算出的价格（summary.total 来自 /api/pricing/calculate）：
+//   - 定价还没回来（loadingPrices）→ 一律按付费处理，绝不显示"免费"
+//   - 定价回来了且合计为 0 → 才是真免费（纯视频单）
+// 此前多判了一条"exams === 0"：它在课程明细未加载时恒真（exam_total 默认 0），
+// 于是加载中就显示"免费提交"，与后端实际收费不一致。
 const freeTotal = computed(() =>
-  benefit.value.free ||
-  summary.value.exams === 0 ||
-  (!loadingPrices.value && summary.value.total <= 0),
+  benefit.value.free || (!loadingPrices.value && summary.value.total <= 0),
 )
 /** 合计展示：定价加载中时不显示 ¥0.00（避免"0 元下单"的误导） */
 const totalText = computed(() => loadingPrices.value ? '计价中…' : `¥${summary.value.total.toFixed(2)}`)
@@ -198,10 +200,21 @@ onMounted(async () => {
 
             <div class="login-card">
               <div class="seg">
+                <!-- 滑动指示器：纯装饰，选中态以按钮上的 .active 为准 -->
+                <span :class="['seg-thumb', { 'is-right': activeTab === 'chaoxing' }]" aria-hidden="true"></span>
                 <button :class="['seg-btn', { active: activeTab === 'school' }]" @click="activeTab = 'school'">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21.5 10.9a1 1 0 0 0-.02-1.83l-8.57-3.91a2 2 0 0 0-1.66 0L2.6 9.07a1 1 0 0 0 0 1.84l8.57 3.9a2 2 0 0 0 1.66 0z" />
+                    <path d="M22 10v6" />
+                    <path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5" />
+                  </svg>
                   学校平台
                 </button>
                 <button :class="['seg-btn', { active: activeTab === 'chaoxing' }]" @click="activeTab = 'chaoxing'">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M2 4h6a4 4 0 0 1 4 4v12a3 3 0 0 0-3-3H2z" />
+                    <path d="M22 4h-6a4 4 0 0 0-4 4v12a3 3 0 0 1 3-3h7z" />
+                  </svg>
                   学习通
                 </button>
               </div>
@@ -238,7 +251,7 @@ onMounted(async () => {
                 </button>
               </form>
 
-              <p class="login-foot">支持粟湾、劳动教育、中嘉鑫盛、学习通等平台</p>
+              <p class="login-foot">支持在线课程、劳动课程、公益课程、学习通等平台</p>
             </div>
 
             <ul class="assure-row">
@@ -808,35 +821,55 @@ onMounted(async () => {
   animation-delay: .06s;
 }
 
-/* ---------- 平台切换 ---------- */
+/* ---------- 平台切换：滑动指示器 + 线性图标 ---------- */
 .seg {
+  position: relative;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 3px;
-  padding: 3px;
-  border-radius: 15px;
+  padding: 4px;
+  border-radius: var(--radius-lg);
   background: var(--c-surface-2);
   border: 1px solid var(--c-border-light);
 }
+/* 指示器随选中项平移；发丝边 + primary 微着色保证暗色下也看得见浮起 */
+.seg-thumb {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc(50% - 4px);
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg,
+      color-mix(in srgb, var(--c-primary) 10%, var(--c-surface)) 0%,
+      var(--c-surface) 100%);
+  border: 1px solid color-mix(in srgb, var(--c-primary) 30%, var(--c-border));
+  box-shadow: var(--shadow-sm), var(--hairline-top),
+              0 6px 16px -8px color-mix(in srgb, var(--c-primary) 55%, transparent);
+  transition: transform var(--t-slow) var(--ease-spring);
+  will-change: transform;
+}
+.seg-thumb.is-right { transform: translateX(100%); }
 .seg-btn {
-  padding: 11px;
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 8px;
   border: none;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--c-text-secondary);
   font-family: inherit;
   font-size: var(--fs-sm);
   font-weight: 600;
   cursor: pointer;
-  transition: background var(--t) var(--ease), color var(--t) var(--ease),
-              box-shadow var(--t) var(--ease);
+  transition: color var(--t) var(--ease);
 }
+.seg-btn > svg { flex: none; }
 .seg-btn:hover { color: var(--c-text); }
-.seg-btn.active {
-  background: var(--c-surface);
-  color: var(--c-text);
-  box-shadow: var(--shadow-sm);
-}
+.seg-btn.active { color: var(--c-primary); }
 
 /* ---------- 表单 ---------- */
 .login-form {
