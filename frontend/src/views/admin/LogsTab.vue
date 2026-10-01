@@ -54,13 +54,14 @@ const CATEGORIES: { v: string; t: string }[] = [
   { v: 'queue', t: '队列' },
   { v: 'exam', t: '考试' },
   { v: 'scan', t: '扫描' },
+  { v: 'domain', t: '域名' },
   { v: 'system', t: '系统' },
 ]
 const LEVELS = ['', 'INFO', 'WARN', 'ERROR']
 
 const CAT_LABEL: Record<string, string> = {
   report: '上报', login: '登录', order: '订单', queue: '队列',
-  exam: '考试', scan: '扫描', system: '系统',
+  exam: '考试', scan: '扫描', system: '系统', domain: '域名',
 }
 
 const connText = computed(() => (realtime.connected ? '实时已连接' : '实时未连接'))

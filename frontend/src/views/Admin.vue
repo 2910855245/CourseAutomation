@@ -14,6 +14,7 @@ import AppTopbar from '@/components/AppTopbar.vue'
 import OverviewTab from '@/views/admin/OverviewTab.vue'
 import OrdersTab from '@/views/admin/OrdersTab.vue'
 import QueueTab from '@/views/admin/QueueTab.vue'
+import DomainMonitorTab from '@/views/admin/DomainMonitorTab.vue'
 
 import SecurityTab from '@/views/admin/SecurityTab.vue'
 
@@ -39,10 +40,9 @@ const ypayAdmin = useYpayAdmin()
 const { load: loadPlatformNames, getName: getPlatformName, platformNames } = usePlatformNames()
 
 // ── Tab switching (orchestrates across composables) ──
-// proxy（网络代理）与 risk（风险监控）两页已删除：它们依赖的后端接口
-// 一个都不存在（/api/admin/proxy*、/api/admin/domain-monitor/* 共 11 个），
-// 页面上的每个按钮点了都是 404 —— 留着只会误导操作者以为有这些能力。
-type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'pricing' | 'ypay' | 'promo' | 'announcement' | 'security' | 'logs'
+// proxy（网络代理）与旧 risk（风险监控）两页已删除：对应后端接口不存在，页面按钮全是 404。
+// domain_monitor（域名监控）是**后端先行**重建的：接口齐了才挂页签。
+type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'pricing' | 'ypay' | 'promo' | 'domain_monitor' | 'announcement' | 'security' | 'logs'
 const activeTab = ref<SidebarKey>('overview')
 const expandedSidebarItems = ref<string[]>(['queue'])
 
@@ -312,6 +312,9 @@ useAdminStore().init({
 
           <!-- Logs Tab（运行日志 / 上报记录） -->
           <LogsTab v-if="activeTab === 'logs'" />
+
+          <!-- Domain Monitor Tab（域名监控：平台域名/名称自动纠正） -->
+          <DomainMonitorTab v-if="activeTab === 'domain_monitor'" />
 
 
 

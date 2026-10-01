@@ -48,6 +48,8 @@ pub const CAT_QUEUE: &str = "queue";
 pub const CAT_EXAM: &str = "exam";
 pub const CAT_SCAN: &str = "scan";
 pub const CAT_SYSTEM: &str = "system";
+/// 域名监控（学校首页抓取 / 域名与显示名变更）
+pub const CAT_DOMAIN: &str = "domain";
 
 /// 广播 topic。前端 realtime store 以它为前缀订阅。
 pub const TOPIC: &str = "logs";

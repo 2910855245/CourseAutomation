@@ -250,12 +250,25 @@ async fn claim_next_job(state: &AppState, lane: Lane) -> Result<Option<QueueJob>
         );
         match job {
             Ok(job) => {
+                let now = now_str();
                 tx.execute(
                     &format!(
                         "UPDATE {SCHOOL_TABLE} SET status='running', started_at=?1 WHERE job_id=?2"
                     ),
-                    rusqlite::params![now_str(), job.job_id],
+                    rusqlite::params![now, job.job_id],
                 )?;
+                // 订单侧同步置 running：此前只有支付链路（ypay_db）会写 running，
+                // 后台「立即执行 / 重新入队」进来的任务会一直停在 queued —— 看板按
+                // status='running' 统计"执行中"时漏掉这些订单，客户侧也停在"排队中"。
+                // 已 running 的也一并刷新时间戳：进程重启后任务会被重新认领，旧时间戳
+                // 会让看板的"卡单（执行超 6 小时）"把刚重启的健康单也算进去。
+                if !job.order_id.is_empty() {
+                    tx.execute(
+                        "UPDATE orders SET status='running', started_at=?1, updated_at=?1 \
+                         WHERE order_id=?2 AND status IN ('pending','accepted','queued','paid','running')",
+                        rusqlite::params![now, job.order_id],
+                    )?;
+                }
                 tx.commit()?;
                 Ok(Some(job))
             }

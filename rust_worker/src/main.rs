@@ -13,6 +13,7 @@ mod cx_quiz;
 mod cx_scan;
 mod cx_study;
 mod db;
+mod domain;
 mod exam;
 mod guard;
 mod llm;
@@ -184,6 +185,14 @@ async fn main() -> anyhow::Result<()> {
     // 支付对账：补齐「通道已收款但业务未入账」的悬空订单。
     // 放在后台而不是查单接口里 —— 否则用户付完就关页面就再没人补账。
     tokio::spawn(pay_routes::reconcile_loop(std::sync::Arc::new(state.clone())));
+
+    // 域名监控：先载入缓存（platform_base_url 立即用上动态域名），
+    // 再按「检测间隔」后台抓学校首页（重启不会立刻抓，见 domain::monitor_loop）
+    match domain::refresh_cache(&state.db).await {
+        Ok(n) => tracing::info!(platforms = n, "域名监控缓存已载入"),
+        Err(e) => tracing::warn!(error = %e, "域名监控缓存载入失败（回退静态表）"),
+    }
+    tokio::spawn(domain::monitor_loop(std::sync::Arc::new(state.clone())));
 
     // 已删除 Python 时代遗留的 daemon 端点：/status /submit /submit_cx
     // /submit_cx_full /submit_full /submit_exam /cancel/{order_id} /ocr。

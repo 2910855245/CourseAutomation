@@ -136,6 +136,15 @@ export interface DashboardStats {
   recent_orders: { order_id: string; username: string; website_id: number; task_type: string; price: number; status: string; created_at: string; paid: boolean }[]
 }
 
+/** 域名监控快照（只含 3 个教学平台；首页其余链接不入库） */
+export interface DomainMonitorData {
+  platforms: { website_id: number; name: string; host: string; base_url: string; is_primary: boolean; is_alias: boolean; reachable: number }[]
+  last_check: number
+  last_status: string
+  interval_hours: number
+  monitor_url: string
+}
+
 
 export const api = {
   // 营销推广：免费待遇 / 邀请 / 刷课卡（身份由服务端 cookie 承载，前端不传标识）
@@ -148,6 +157,12 @@ export const api = {
   },
   adminPromo: {
     stats: () => get<ApiResponse<any>>('/api/admin/promo/stats'),
+  },
+  // 域名监控：平台域名/名称由学校首页自动抓取纠正，域名一换即时生效
+  adminDomain: {
+    get: () => get<ApiResponse<DomainMonitorData>>('/api/admin/domain-monitor'),
+    check: () => post<ApiResponse<any>>('/api/admin/domain-monitor/check'),
+    setInterval: (hours: number) => post<ApiResponse<{ interval_hours: number }>>('/api/admin/domain-monitor/interval', { hours }),
   },
   courses: {
     platforms: () => get<ApiResponse<{ id: number; name: string; base_url: string }[]>>('/api/courses/platforms'),

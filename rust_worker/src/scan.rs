@@ -69,7 +69,7 @@ pub struct CourseItem {
     pub detail_link: String,
 }
 
-/// 学校平台 base_url 映射（对齐 config/platforms.py WEBSITES）
+/// 学校平台 base_url：测试钩子 → 域名监控缓存（动态）→ 静态默认表
 /// 测试钩子：RUST_TEST_BASE_URL 环境变量覆盖（mock 平台 E2E 用）
 pub fn platform_base_url(website_id: i64) -> String {
     if let Ok(url) = std::env::var("RUST_TEST_BASE_URL") {
@@ -77,17 +77,20 @@ pub fn platform_base_url(website_id: i64) -> String {
             return url;
         }
     }
+    // 域名监控（domain.rs）写库后即时生效：域名一换，新起的任务立刻用新域名
+    if let Some(url) = crate::domain::cached_base_url(website_id) {
+        return url;
+    }
     // 注意：这里是**静默兜底**——未列出的 website_id 会被当成学校平台 1 去登录。
     // 学习通（id=4）绝不能落到这条兜底上：那会拿用户的手机号+密码去登录
     // 在线课程测评考试平台，若该手机号在那边也存在，就会刷错人的课。
-    // （id 4/5 的来源见 DB system_config.domain_monitor_website_map。）
     match website_id {
         2 => "https://cdcas.duxingkej.com".to_string(),
         3 => "https://cdcas.chaoxiankeji.com".to_string(),
         // 学习通站点本身；登录另需 TLS 指纹伪装（见 school_exam::scan_chaoxing 注释）
         4 => "https://mooc1.chaoxing.com".to_string(),
-        // 同一学校体系的镜像域名（DB 的 domain_monitor 自动发现）
-        5 => "https://cdcas.suwankj.com".to_string(),
+        // 1 及未知 id：平台 1 体系（首页上那条已废弃的 suwankj 不再登记，
+        // 2026-10-01 用户确认）
         _ => "https://cdcass.taiskeji.com".to_string(),
     }
 }

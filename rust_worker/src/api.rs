@@ -54,6 +54,8 @@ pub fn router(state: AppState) -> Router<AppState> {
         .merge(crate::ypay_admin::router())
         // 运行日志面板：列表 / 统计 / 清空（内存环形缓冲 + DB 持久层）
         .merge(crate::logs::router())
+        // 域名监控：平台域名/名称的查看、立即检测、检测间隔（管理员可见）
+        .merge(crate::domain::router())
         // 营销推广统计：必须带管理员鉴权（访客量/转化率/邀请码列表属经营数据）
         .route("/api/admin/promo/stats", get(crate::promo_routes::admin_promo_stats))
         // 公告发布：前端「系统通告」页 + 首页弹窗依赖
@@ -654,7 +656,9 @@ async fn admin_dashboard(State(state): State<AppState>) -> Json<Value> {
         let today_like = format!("{today_prefix}%");
         let yest_like = format!("{}%", day_label(now - 86400).1);
         let week_from = day_label(now - 6 * 86400).1;       // 近 7 天（含今日）
-        // 卡单判定阈值：排队/待处理超 2 小时、执行中超 6 小时
+        // 卡单判定阈值：排队/待处理超 2 小时、执行中超 6 小时。
+        // 用 updated_at（最后一次状态变化）而非 created_at：老订单重新入队后
+        // created_at 仍是很多天前，会把刚排上的单误报成"长时间未推进"。
         let stuck_before = crate::queue::iso_from_secs(now - 2 * 3600);
         let running_before = crate::queue::iso_from_secs(now - 6 * 3600);
         // 已收款的统一定义，多处复用
@@ -685,8 +689,9 @@ async fn admin_dashboard(State(state): State<AppState>) -> Json<Value> {
                         COALESCE(SUM(CASE WHEN (paid=1 OR payment_time IS NOT NULL) AND status='cancelled'
                                           THEN price ELSE 0 END), 0),
                         COALESCE(SUM(CASE WHEN status IN ('pending','accepted','paid','queued','waiting')
-                                           AND created_at < ?4 THEN 1 ELSE 0 END), 0),
-                        COALESCE(SUM(CASE WHEN status='running' AND created_at < ?5 THEN 1 ELSE 0 END), 0),
+                                           AND COALESCE(updated_at, created_at) < ?4 THEN 1 ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN status='running'
+                                           AND COALESCE(updated_at, created_at) < ?5 THEN 1 ELSE 0 END), 0),
                         COALESCE(AVG(CASE WHEN status='completed' AND finished_at IS NOT NULL
                                           THEN (julianday(finished_at)-julianday(created_at))*24 END), 0)
                      FROM orders WHERE deleted_at IS NULL"

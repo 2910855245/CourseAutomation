@@ -270,6 +270,22 @@ CREATE TABLE IF NOT EXISTS system_logs (
     message TEXT DEFAULT '',
     detail TEXT
 );
+
+-- 教学平台域名（域名监控的落库真源）。同一平台可有多行（主域 + 镜像/备用），
+-- 由 (website_id, host) 唯一约束保证不重复，is_primary 保证同平台只有一个主域。
+-- website_id 语义同 scan::platform_base_url；只登记 3 个教学平台，其余首页链接不入库。
+CREATE TABLE IF NOT EXISTS platform_domains (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    website_id INTEGER NOT NULL,
+    platform_name TEXT NOT NULL,
+    host TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    is_primary INTEGER NOT NULL DEFAULT 0,
+    reachable INTEGER NOT NULL DEFAULT -1,
+    is_alias INTEGER NOT NULL DEFAULT 0,
+    last_checked_at TEXT,
+    updated_at TEXT NOT NULL
+);
 "#;
 
 /// 索引（统一在建表+补列之后执行，避免老库缺列导致建索引失败）
@@ -298,6 +314,8 @@ CREATE INDEX IF NOT EXISTS ix_brush_cards_owner ON brush_cards (owner_vid);
 CREATE INDEX IF NOT EXISTS ix_system_logs_ts ON system_logs (ts);
 CREATE INDEX IF NOT EXISTS ix_system_logs_category ON system_logs (category);
 CREATE INDEX IF NOT EXISTS ix_system_logs_order ON system_logs (order_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_pd_site_host ON platform_domains (website_id, host);
+CREATE INDEX IF NOT EXISTS ix_pd_host ON platform_domains (host);
 "#;
 
 /// ypay_account 老库可能缺失的列（对应 api/database.py 的 _add_columns_if_missing）
@@ -365,6 +383,28 @@ pub fn ensure_schema(pool: &Pool<SqliteConnectionManager>) -> Result<()> {
     add_missing_columns(&conn, "queue_jobs_chaoxing", LANE_COLUMN)?;
 
     conn.execute_batch(INDEX_DDL).context("建索引失败")?;
+
+    // 域名监控首次装配：写入 3 个学校平台的静态默认值
+    // （3 个平台由用户 2026-10-01 确认；首页的 suwankj 链接已废弃、不登记）
+    // 守卫按 website_id 逐条判断：整表判空会让第一条插入后把其余两条一起跳过
+    conn.execute_batch(
+        "INSERT INTO platform_domains
+            (website_id, platform_name, host, base_url, is_primary, reachable, is_alias, updated_at)
+         SELECT 1, '在线课程测评考试平台', 'cdcass.taiskeji.com', 'https://cdcass.taiskeji.com', 1, -1, 0,
+                strftime('%Y-%m-%dT%H:%M:%S', 'now', '+8 hours')
+         WHERE NOT EXISTS (SELECT 1 FROM platform_domains WHERE website_id = 1);
+         INSERT INTO platform_domains
+            (website_id, platform_name, host, base_url, is_primary, reachable, is_alias, updated_at)
+         SELECT 2, '劳动课程测评考试平台', 'cdcas.duxingkej.com', 'https://cdcas.duxingkej.com', 1, -1, 0,
+                strftime('%Y-%m-%dT%H:%M:%S', 'now', '+8 hours')
+         WHERE NOT EXISTS (SELECT 1 FROM platform_domains WHERE website_id = 2);
+         INSERT INTO platform_domains
+            (website_id, platform_name, host, base_url, is_primary, reachable, is_alias, updated_at)
+         SELECT 3, '公益课程平台', 'cdcas.chaoxiankeji.com', 'https://cdcas.chaoxiankeji.com', 1, -1, 0,
+                strftime('%Y-%m-%dT%H:%M:%S', 'now', '+8 hours')
+         WHERE NOT EXISTS (SELECT 1 FROM platform_domains WHERE website_id = 3);",
+    )
+    .context("初始化域名监控默认数据失败")?;
 
     // ypay_settings 为空时从 vmq_settings 迁移（对应 Python init_db 末尾逻辑，幂等）
     conn.execute_batch(

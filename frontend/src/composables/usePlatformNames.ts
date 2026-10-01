@@ -25,5 +25,10 @@ export function usePlatformNames() {
     return platformNames.value[id] || fallback[id] || '平台' + id
   }
 
-  return { platformNames, load, getName }
+  /** 清缓存：域名监控检测后平台名可能刚被首页文案纠正，需要重新拉一次 */
+  function reset() {
+    loaded.value = false
+  }
+
+  return { platformNames, load, getName, reset }
 }

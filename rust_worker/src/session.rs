@@ -38,6 +38,9 @@ fn key_of(username: &str, base_url: &str) -> String {
 }
 
 /// base_url → 平台中文名（cookie 落盘文件名，兼容历史 Python 布局）
+///
+/// **绝不要改成读域名监控的动态显示名**：这个名字决定 cookie 落盘文件名，
+/// 一旦跟着首页文案改名，历史 cookie 就全对不上、每次改名都逼用户重登。
 pub fn platform_name_for_url(base_url: &str) -> String {
     let u = base_url.to_lowercase();
     if u.contains("duxingkej") {

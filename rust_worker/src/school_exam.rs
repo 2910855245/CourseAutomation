@@ -5,7 +5,7 @@
 //!
 //! 与 Python 的已知取舍（刻意不迁移）：
 //! - 扫描结果不落盘缓存（Python 存 data/accounts/，Rust 内存会话每次重新登录）
-//! - 域名发现走静态表 scan::platform_base_url（Python 走 domain_monitor 动态域名）
+//! - 域名发现走 scan::platform_base_url（域名监控写入的动态缓存优先，静态表兜底）
 //! - _verify_exam_exists（考试存在性二次验证）未迁移：需多一次页面请求，主流程可后续补
 //!
 //! 鉴权说明：scan/relogin 对齐 Python get_optional_user（可选登录），本 router 不加 auth；
@@ -27,7 +27,8 @@ use crate::llm::{cached_config, configured_model, configured_thinking, effective
 use crate::scan;
 use crate::AppState;
 
-/// 学校平台静态表（对齐 platforms.py WEBSITES，学习通 4 由 cx 侧处理）
+/// 学校平台静态默认名（对齐 platforms.py WEBSITES，学习通 4 由 cx 侧处理）。
+/// 真实名称由域名监控按学校首页链接文字自动纠正，这里只是缓存未命中时的兜底。
 const PLATFORMS: &[(i64, &str)] = &[
     (1, "在线课程测评考试平台"),
     (2, "劳动课程测评考试平台"),
@@ -46,10 +47,13 @@ pub fn router() -> Router<AppState> {
 
 // ── /api/courses/platforms ──────────────────────────────────────────────
 
+/// 无鉴权公开接口，被首页调用：名称只从进程内缓存取（纯内存、不查库）
 async fn list_platforms() -> Json<Value> {
     let items: Vec<Value> = PLATFORMS.iter()
         .map(|(id, name)| json!({
-            "id": id, "name": name, "base_url": scan::platform_base_url(*id),
+            "id": id,
+            "name": crate::domain::cached_name(*id).unwrap_or_else(|| (*name).to_string()),
+            "base_url": scan::platform_base_url(*id),
         }))
         .collect();
     Json(json!({"success": true, "message": "ok", "data": items}))

@@ -28,6 +28,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenvy = "0.15"
 regex = "1.13.1"
+# 首页链接解析（相对链接 join）；版本已在 Cargo.lock 中（reqwest/scraper 的传递依赖）
+url = "2"
 bcrypt = "0.19"
 # 11.x 起必须显式选择 crypto provider（default 只带 use_pem）：
 # 选纯 Rust 的 rust_crypto，避免引入 aws-lc-rs 的 C 工具链依赖

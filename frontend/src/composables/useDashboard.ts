@@ -73,6 +73,7 @@ export function useDashboard() {
       icon: 'M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z',
       children: [
         // 网络代理 / 风险监控 两项已移除：对应后端接口不存在，整页无效
+        { key: 'domain_monitor', label: '域名监控', icon: 'M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9' },
         { key: 'announcement', label: '系统通告', icon: 'M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0' },
         { key: 'logs', label: '运行日志', icon: 'M4 6h16M4 12h16M4 18h10M2 6h.01M2 12h.01M2 18h.01' },
         { key: 'security', label: '安全中心', icon: 'M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z' },
