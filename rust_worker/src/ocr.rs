@@ -141,5 +141,5 @@ fn first_existing(candidates: &[String]) -> String {
         .iter()
         .find(|p| std::path::Path::new(p).exists())
         .cloned()
-        .unwrap_or_else(|| candidates[0].clone())
+        .unwrap_or_default()
 }

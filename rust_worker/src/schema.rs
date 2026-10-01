@@ -256,6 +256,20 @@ CREATE TABLE IF NOT EXISTS brush_cards (
     used_orders INTEGER DEFAULT 0,
     revoked INTEGER DEFAULT 0
 );
+
+-- 运行日志（实时日志面板的持久层）。
+-- 内存环形缓冲只保留最近若干条，落库是为了重启后仍能回看上报/失败记录；
+-- 行数上限由 logs.rs 的 GC 循环按 TTL + 条数双阈值裁剪（见 gc_loop）。
+CREATE TABLE IF NOT EXISTS system_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    level VARCHAR(16) NOT NULL,
+    category VARCHAR(32) NOT NULL,
+    order_id VARCHAR(64) DEFAULT '',
+    node_id VARCHAR(64) DEFAULT '',
+    message TEXT DEFAULT '',
+    detail TEXT
+);
 "#;
 
 /// 索引（统一在建表+补列之后执行，避免老库缺列导致建索引失败）
@@ -281,6 +295,9 @@ CREATE INDEX IF NOT EXISTS ix_ai_usage_created_at ON ai_usage (created_at);
 CREATE INDEX IF NOT EXISTS ix_invites_inviter ON invites (inviter_vid);
 CREATE INDEX IF NOT EXISTS ix_invites_ref ON invites (ref_code);
 CREATE INDEX IF NOT EXISTS ix_brush_cards_owner ON brush_cards (owner_vid);
+CREATE INDEX IF NOT EXISTS ix_system_logs_ts ON system_logs (ts);
+CREATE INDEX IF NOT EXISTS ix_system_logs_category ON system_logs (category);
+CREATE INDEX IF NOT EXISTS ix_system_logs_order ON system_logs (order_id);
 "#;
 
 /// ypay_account 老库可能缺失的列（对应 api/database.py 的 _add_columns_if_missing）
@@ -357,11 +374,11 @@ pub fn ensure_schema(pool: &Pool<SqliteConnectionManager>) -> Result<()> {
     )
     .context("迁移失败: vmq_settings -> ypay_settings")?;
 
-    // orders.password 明文 → 加密凭据表（幂等，仅首次有效）
-    match crate::crypto::migrate_plaintext_credentials(&conn) {
+    // 历史加密凭据 → 明文回迁（用户规则：密码只存明文；幂等，可重跑）
+    match crate::crypto::restore_plaintext_credentials(&conn) {
         Ok(0) => {}
-        Ok(n) => tracing::info!(migrated = n, "明文密码已迁移至加密凭据表"),
-        Err(e) => tracing::warn!(error = %e, "明文凭据迁移失败（保留原列，下次启动重试）"),
+        Ok(n) => tracing::info!(restored = n, "历史密文密码已回迁为明文"),
+        Err(e) => tracing::warn!(error = %e, "历史密文回迁失败（保留密文行，下次启动重试）"),
     }
 
     Ok(())

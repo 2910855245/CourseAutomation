@@ -17,6 +17,7 @@ mod exam;
 mod guard;
 mod llm;
 mod login;
+mod logs;
 mod ocr;
 mod ocr_ort;
 mod order;
@@ -173,6 +174,9 @@ async fn main() -> anyhow::Result<()> {
         progress_tx,
         ws_seq: Arc::new(std::sync::atomic::AtomicU64::new(1)),
     };
+
+    // 运行日志：接管广播端并起落库 + GC 后台任务。必须在 progress_tx 建好后调用。
+    logs::init(&state);
 
     // Rust 队列调度器（默认启用；显式 RUST_QUEUE_ENABLED=false 才停用）
     tokio::spawn(queue::dispatcher_loop(std::sync::Arc::new(state.clone())));

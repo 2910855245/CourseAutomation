@@ -399,8 +399,25 @@ async fn handle_job_failure(state: &AppState, job: &QueueJob, err: &str) {
 async fn execute_school_job(state: &AppState, job: &QueueJob) {
     let base_url = crate::scan::platform_base_url(job.website_id);
 
+    // 任务行里的 password 不可信：凭据迁移后 orders.password 明文列被清空，
+    // 历史任务随之带着空密码入库。真值在 credentials 表 —— 执行时统一解密，
+    // 解不到才回退任务行。否则 cookie 过期后重登必然「密码不可为空」。
+    let password = {
+        let db = state.db.clone_pool();
+        let oid = job.order_id.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = db.get().ok()?;
+            crate::crypto::load_password(&conn, &oid)
+        })
+        .await
+        .ok()
+        .flatten()
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| job.password.clone())
+    };
+
     // 会话复用：缓存/落盘 cookie 有效则跳过登录（避免频繁登录触发平台风控）
-    let session = match crate::session::get_session(&base_url, &job.username, &job.password).await {
+    let session = match crate::session::get_session(&base_url, &job.username, &password).await {
         Ok(s) => s,
         Err(e) => {
             let msg = format!("登录失败: {e}");
@@ -424,7 +441,7 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
     let task = ScanTaskInput {
         order_id: if job.order_id.is_empty() { job.job_id.clone() } else { job.order_id.clone() },
         username: job.username.clone(),
-        password: job.password.clone(),
+        password,
         base_url: base_url.clone(),
         cookie_str: session.cookie_str,
         course_ids,

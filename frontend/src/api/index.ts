@@ -213,6 +213,13 @@ export const api = {
     set: (key: string, value: string) => post<ApiResponse<any>>('/api/admin/config', { key, value }),
     testDeepseek: (model?: string) => post<ApiResponse<any>>('/api/admin/config/test-deepseek', { model: model || 'deepseek-flash' }),
   },
+  // 运行日志：默认读内存环形缓冲（实时、最快），source='db' 回看持久层
+  adminLogs: {
+    list: (params?: { category?: string; level?: string; order_id?: string; before?: number; limit?: number; source?: string }) =>
+      get<ApiResponse<{ items: any[]; source: string; stats?: any }>>('/api/admin/logs' + buildQuery(params)),
+    stats: () => get<ApiResponse<any>>('/api/admin/logs/stats'),
+    clear: () => post<ApiResponse<any>>('/api/admin/logs/clear'),
+  },
   // 说明：proxy（3 个）与 adminDomainMonitor（8 个）两段已删除 ——
   // 后端从未注册这些路由，对应的两个后台页面（网络代理 / 风险监控）
   // 已一并移除，避免留下「点了必然 404」的死接口定义。

@@ -8,8 +8,9 @@
 //! 三档定位：
 //!   - 暴力：同时推进 8 路视频会话、无启动等待 —— 最快，风控风险最高
 //!   - 适中：默认档。4 路会话 + 每路启动错峰，速度与安全的平衡点
-//!   - 保守：**完全串行**：一节课刷完再刷下一节，扫描并发也是 1，
-//!     每两节之间长间隔错峰、每次上报额外随机停顿 —— 最慢，最像真人
+//!   - 保守（纯串行）：一节课刷完立即刷下一节，并发全为 1 是它唯一的收敛点。
+//!     没有尾等待、没有长间隔、上报不加额外停顿 —— 串行本身已是最保守的形态，
+//!     再靠"白等"凑时长只会白白拖慢订单（用户 2026-09-30 拍板）
 //!
 //! 落库标识沿用 turbo/balanced/gentle（历史订单与新前端不用迁移数据）。
 
@@ -20,6 +21,9 @@ use serde::{Deserialize, Serialize};
 
 /// 并发上界：平台重叠检测阈值（约 10）之下的安全线
 pub const MAX_COURSE_CONCURRENCY: usize = 8;
+
+/// 并行档位的墙钟安全比率（保守档不用，见 [`SpeedProfile::wall_ratio`]）
+const DEFAULT_WALL_RATIO: f64 = 2.1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -82,6 +86,7 @@ impl SpeedMode {
                 scan_jitter_ms: 100,
                 report_extra_delay_ms: 0,
                 report_extra_jitter_ms: 0,
+                wall_ratio: DEFAULT_WALL_RATIO,
             },
             SpeedMode::Balanced => SpeedProfile {
                 mode: self,
@@ -91,16 +96,18 @@ impl SpeedMode {
                 scan_jitter_ms: 800,
                 report_extra_delay_ms: 0,
                 report_extra_jitter_ms: 0,
+                wall_ratio: DEFAULT_WALL_RATIO,
             },
-            // 保守档：并发全为 1（真串行）+ 长间隔 + 每次上报额外停顿
+            // 保守档：并发全为 1（真串行）+ 微小错峰；无尾等待、无长间隔、无上报停顿
             SpeedMode::Gentle => SpeedProfile {
                 mode: self,
                 video_concurrency: 1,
-                course_stagger_ms: 30_000,
+                course_stagger_ms: 3_000,
                 scan_concurrency: 1,
                 scan_jitter_ms: 3_000,
-                report_extra_delay_ms: 1_500,
-                report_extra_jitter_ms: 5_000,
+                report_extra_delay_ms: 0,
+                report_extra_jitter_ms: 0,
+                wall_ratio: 1.0,
             },
         }
     }
@@ -124,10 +131,14 @@ pub struct SpeedProfile {
     pub report_extra_delay_ms: u64,
     /// 额外间隔之上的随机抖动上限
     pub report_extra_jitter_ms: u64,
+    /// 墙钟/时长比率：studyTime 报满后仍需把墙撑到 `比率 × 时长` 才算完成
+    /// （防 beginTime/finalTime 跨度异常短于视频长度）。急速/均衡 2.1×；
+    /// 保守档 1.0 —— 报满即收工、立即衔接下一节，不做尾等待。
+    pub wall_ratio: f64,
 }
 
 impl SpeedProfile {
-    /// 课程启动错峰：温柔档在长间隔上再加 ±50% 抖动，避免形成固定节奏
+    /// 课程启动错峰：温和档在间隔上再加 ±50% 抖动，避免形成固定节奏
     pub async fn sleep_course_stagger(&self) {
         if self.course_stagger_ms == 0 {
             return;
@@ -199,6 +210,9 @@ mod tests {
         assert!(b.course_stagger_ms <= g.course_stagger_ms);
         assert!(t.scan_concurrency >= g.scan_concurrency);
         assert!(t.report_extra_delay_ms <= g.report_extra_delay_ms);
+        // 墙钟比率：保守档 1.0（无尾等待），并行档保留 2.1× 安全余量
+        assert!(g.wall_ratio <= b.wall_ratio);
+        assert!(b.wall_ratio <= t.wall_ratio);
     }
 
     #[test]
@@ -210,6 +224,20 @@ mod tests {
         assert!(SpeedMode::Gentle.is_serial());
         assert!(!SpeedMode::Balanced.is_serial());
         assert!(!SpeedMode::Turbo.is_serial());
+    }
+
+    #[test]
+    fn test_serial_mode_has_no_tail_wait() {
+        // 用户 2026-09-30 拍板：纯串行不为墙钟凑数 —— studyTime 报满立即收工，
+        // 直接衔接下一节；长间隔与上报停顿同样去掉，"串行"只体现在并发为 1
+        let g = SpeedMode::Gentle.profile();
+        assert_eq!(g.wall_ratio, 1.0, "保守档报满即完成，无 2.1× 尾等待");
+        assert_eq!(g.report_extra_delay_ms, 0);
+        assert_eq!(g.report_extra_jitter_ms, 0);
+        assert!(g.course_stagger_ms <= 5_000, "两节之间只留微小错峰，不做长等待");
+        // 并行档位的安全余量不受影响
+        assert!(SpeedMode::Turbo.profile().wall_ratio >= 2.0);
+        assert!(SpeedMode::Balanced.profile().wall_ratio >= 2.0);
     }
 
     #[test]

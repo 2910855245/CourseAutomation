@@ -591,6 +591,9 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
         concurrency: 0,
         push_ws: task.push_ws,
         speed_mode: task.speed_mode.clone(),
+        // 分母用量：把已刷满、被上面 retain 跳过的节数带进刷课任务，
+        // 让进度条按整单累计而不是按"本轮剩余"重算（否则每次重扫都归零）
+        already_done: skipped as u64,
     };
     run_study(&study_task, push_url, push_token).await?;
 

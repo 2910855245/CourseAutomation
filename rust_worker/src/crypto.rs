@@ -1,13 +1,12 @@
-//! 凭据加密存储（AES-256-GCM）— orders 表不再落明文学校平台密码
+//! 凭据存储：明文 —— 用户 2026-09-30 明确立规「密码不要加密，就明文」
 //!
-//! 背景：orders.password / queue_jobs_*.password 长期明文入库，一旦 db 泄露即
-//! 直接暴露学员账号密码。本模块把密码迁到独立 `credentials` 表并加密：
-//!   - 主密钥来源：环境变量 `CREDENTIAL_KEY`（64 位 hex），
-//!     缺省时由 `JWT_SECRET_KEY` 派生（sha256("credential-encryption-v1:" + secret)）
-//!   - 密文存 TEXT（base64），nonce 单独一列（每条记录随机，绝不复用）
-//!   - 老库迁移幂等：orders.password 仍是明文时加密搬入 credentials 并清空原列
+//! 规则：学校平台密码一律明文落 `orders.password`，读路径直接读明文列；
+//! 禁止再加密、禁止清空明文列。
 //!
-//! 兼容性：读取时 credentials 缺失则回退读 orders.password（迁移未跑完/历史行）。
+//! 本模块保留的 `decrypt` 只服务历史数据一次性回迁：老库留下的
+//! `credentials` 加密行在启动时解回明文写进 `orders.password` 并删除
+//! （见 [`restore_plaintext_credentials`]）。回迁完成后该表为空，加密链路
+//! 仅作为「明文意外为空」时的兜底读取残留。
 
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -80,17 +79,13 @@ fn sha256_key(seed: &str) -> [u8; 32] {
     key
 }
 
-/// 加密：返回 (密文 base64, nonce base64)
-pub fn encrypt(plain: &str) -> Result<(String, String)> {
-    encrypt_with(&candidate_keys()[0], plain)
-}
-
 /// 解密（按候选密钥顺序尝试，兼容历史密钥）
 pub fn decrypt(ct_b64: &str, nonce_b64: &str) -> Result<String> {
     decrypt_with(&candidate_keys(), ct_b64, nonce_b64)
 }
 
-/// 指定密钥加密（测试与密钥轮换用）
+/// 指定密钥加密 —— 仅测试用（生产禁止再加密，见模块头规则）
+#[cfg(test)]
 fn encrypt_with(key: &[u8; 32], plain: &str) -> Result<(String, String)> {
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
     let nonce_bytes: [u8; 12] = rand::random();
@@ -116,23 +111,18 @@ fn decrypt_with(keys: &[[u8; 32]], ct_b64: &str, nonce_b64: &str) -> Result<Stri
     anyhow::bail!("凭据解密失败（所有候选密钥均不匹配，可能密钥已变更）")
 }
 
-/// 写入（或覆盖）一条订单凭据
-pub fn store(conn: &Connection, order_id: &str, username: &str, password: &str) -> Result<()> {
-    let (ct, nonce) = encrypt(password)?;
-    conn.execute(
-        "INSERT INTO credentials (order_id, username, password_enc, nonce, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)
-         ON CONFLICT(order_id) DO UPDATE SET
-             username=excluded.username,
-             password_enc=excluded.password_enc,
-             nonce=excluded.nonce",
-        rusqlite::params![order_id, username, ct, nonce, crate::queue::now_str()],
-    )?;
-    Ok(())
-}
-
-/// 读取订单密码：优先 credentials（解密），回退 orders.password 明文（老数据）
+/// 读取订单密码：明文列优先（用户规则）；仅当明文为空时回退解密历史密文行
+/// （回迁尚未跑完的过渡窗口，正常情况下走不到）。
 pub fn load_password(conn: &Connection, order_id: &str) -> Option<String> {
+    if let Ok(p) = conn.query_row(
+        "SELECT password FROM orders WHERE order_id=?1",
+        rusqlite::params![order_id],
+        |r| r.get::<_, String>(0),
+    ) {
+        if !p.is_empty() && p != "***" {
+            return Some(p);
+        }
+    }
     let row: Option<(String, String)> = conn
         .query_row(
             "SELECT password_enc, nonce FROM credentials WHERE order_id=?1",
@@ -142,54 +132,68 @@ pub fn load_password(conn: &Connection, order_id: &str) -> Option<String> {
         .ok();
     if let Some((ct, nonce)) = row {
         match decrypt(&ct, &nonce) {
-            Ok(p) => return Some(p),
-            Err(e) => {
-                tracing::error!(order_id, error = %e, "凭据解密失败，回退明文列");
-            }
+            Ok(p) if !p.is_empty() => return Some(p),
+            Ok(_) => {}
+            Err(e) => tracing::error!(order_id, error = %e, "历史密文解密失败"),
         }
     }
-    conn.query_row(
-        "SELECT password FROM orders WHERE order_id=?1",
-        rusqlite::params![order_id],
-        |r| r.get::<_, String>(0),
-    )
-    .ok()
-    .filter(|p| !p.is_empty() && p != "***")
+    None
 }
 
-/// 老库一次性迁移：orders.password 明文的行搬进 credentials 并清空原列。
-/// 幂等：已迁移的行 credentials 已有记录，跳过。
-pub fn migrate_plaintext_credentials(conn: &Connection) -> Result<usize> {
-    let mut stmt = conn.prepare(
-        "SELECT o.order_id, o.username, o.password FROM orders o
-         WHERE o.password IS NOT NULL AND o.password <> '' AND o.password <> '***'
-           AND NOT EXISTS (SELECT 1 FROM credentials c WHERE c.order_id = o.order_id)",
-    )?;
+/// 历史加密凭据一次性回迁为明文（用户规则：密码只存明文）。
+///
+/// 幂等可重跑：明文已在的订单只清掉多余的密文行；明文为空的订单解密后
+/// 写回；解密失败的保留密文行（读路径仍能兜底），下次启动重试。
+pub fn restore_plaintext_credentials(conn: &Connection) -> Result<usize> {
+    let mut stmt = conn.prepare("SELECT order_id, password_enc, nonce FROM credentials")?;
     let rows: Vec<(String, String, String)> = stmt
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                r.get::<_, String>(2)?,
-            ))
-        })?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<std::result::Result<_, _>>()?;
     drop(stmt);
 
-    let mut migrated = 0usize;
-    for (order_id, username, password) in rows {
-        match store(conn, &order_id, &username, &password) {
-            Ok(()) => {
+    let mut restored = 0usize;
+    for (order_id, ct, nonce) in rows {
+        let plain: Option<String> = conn
+            .query_row(
+                "SELECT password FROM orders WHERE order_id=?1",
+                rusqlite::params![order_id],
+                |r| r.get(0),
+            )
+            .ok();
+        match plain {
+            // 订单不存在：密文已无意义
+            None => {
                 conn.execute(
-                    "UPDATE orders SET password='' WHERE order_id=?1",
+                    "DELETE FROM credentials WHERE order_id=?1",
                     rusqlite::params![order_id],
                 )?;
-                migrated += 1;
             }
-            Err(e) => tracing::warn!(order_id, error = %e, "凭据迁移失败，保留明文"),
+            // 明文已在：密文是历史残留，清掉即完成
+            Some(p) if !p.is_empty() && p != "***" => {
+                conn.execute(
+                    "DELETE FROM credentials WHERE order_id=?1",
+                    rusqlite::params![order_id],
+                )?;
+            }
+            // 明文为空 → 解密回填，成功才删密文
+            Some(_) => match decrypt(&ct, &nonce) {
+                Ok(p) if !p.is_empty() => {
+                    conn.execute(
+                        "UPDATE orders SET password=?2 WHERE order_id=?1",
+                        rusqlite::params![order_id, p],
+                    )?;
+                    conn.execute(
+                        "DELETE FROM credentials WHERE order_id=?1",
+                        rusqlite::params![order_id],
+                    )?;
+                    restored += 1;
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(order_id, error = %e, "历史密文解密失败，保留待下次重试"),
+            },
         }
     }
-    Ok(migrated)
+    Ok(restored)
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 //! 刷课核心循环 — 反检测参数与 study_worker.py LightStudyReporter 1:1 对齐
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -16,18 +17,27 @@ use crate::speed::{SpeedMode, SpeedProfile};
 /// 全局请求间隔：跨所有任务共享，任意两个 HTTP 请求间隔 ≥ 0.5s
 /// （实现集中在 platform_client::wait_rate_limit，与登录/扫描链路共用同一道闸）
 
-/// 墙钟/时长安全比率：studyTime 报满后仍须等 2.1×时长（防 beginTime/finalTime 重叠检测）。
-/// 三档均不改动该比率 —— 提速来自并发与错峰，而不是压缩单个视频的安全等待。
-const MIN_RATIO: f64 = 2.1;
+/// 墙钟/时长比率已下沉为档位参数（[`SpeedProfile::wall_ratio`]）：
+/// 急速/均衡档保留 2.1× 安全余量；保守档（纯串行）为 1.0 —— studyTime 报满
+/// 立即收工、直接衔接下一节，不再把每节硬撑到 2.1×（用户 2026-09-30 拍板）。
 
 /// studyTime 报满后的续报间隔（秒）。见 [`next_tick_secs`]。
 const TAIL_TICK_SECS: f64 = 30.0;
+
+/// 收尾时墙钟比"比率×时长"多留的秒数。
+///
+/// 平台按**首末上报的时间跨度**记已学时长，而它的计时起点是第一份上报到达的时刻——
+/// 比我们进入循环晚一次网络往返，收尾时也就少认这点时间。保守档 wall_ratio=1.0
+/// 没有余量，缺这几秒会让平台永远停在"总长 − 20"，每节都差一口气不判完成。
+/// 保守档只多等 3s（不影响"报满即收工"的体感），急速/均衡档本就 2.1× 富余。
+const SESSION_LEAD_MARGIN_SECS: f64 = 3.0;
 
 /// 一次循环该睡多久（秒）。
 ///
 /// 视频的时间轴分两段：
 /// - `0 → actual_target`：studyTime 需要逐秒逼近目标，维持 1s 粒度；
-/// - `actual_target → 2.1×时长`：studyTime 已报满，这段只是把墙钟撑满。
+/// - `actual_target → wall_ratio×时长`：studyTime 已报满，这段只是把墙钟撑满
+///   （保守档 wall_ratio=1.0，该段为零：报满即收工）。
 ///
 /// 原实现第二段仍按 1s 粒度空转并重复上报同一个 studyTime —— 一个 45 分钟的
 /// 视频要多发约 3000 次内容完全相同的请求，且"1 秒不差"的节奏本身就是机器特征。
@@ -39,6 +49,12 @@ fn next_tick_secs(past_target: bool, wall_left: f64) -> f64 {
     } else {
         wall_left.clamp(0.0, TAIL_TICK_SECS)
     }
+}
+
+/// 进度百分比，收敛到 1 位小数：原始浮点（如 1/61 → 1.639344262295082）
+/// 落库后会在订单页整串显示出来。
+fn pct_of(done: u64, total: u64) -> f64 {
+    if total > 0 { (done as f64 * 1000.0 / total as f64).round() / 10.0 } else { 0.0 }
 }
 
 /// 进程级同时在刷的视频会话上限（跨订单共享）。
@@ -130,6 +146,13 @@ pub struct TaskInput {
     /// 刷课节奏档位（turbo/balanced/gentle；缺省/未知 → 均衡）
     #[serde(default)]
     pub speed_mode: String,
+    /// 本轮开始前平台侧**已完成**的节数（扫描时判定已刷满、被跳过的那些）。
+    ///
+    /// 进度条的分母必须是"整单总节数"、分子起点必须是这个基数 —— 否则每次
+    /// 重启/重扫都会从 1/剩余数 重爬：平台侧的成果一节没丢，界面上却表现为
+    /// "进度被重置"（用户看到的百分比突然掉回 1%，其实只是把已完成的从分子里漏掉了）。
+    #[serde(default)]
+    pub already_done: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -137,6 +160,11 @@ pub struct CookieKV {
     pub name: String,
     pub value: String,
 }
+
+/// cookie 过期（平台回 `offline=1`「登录超时,请重新登录」）后，允许的连续重登
+/// 失败次数。超过即熔断、本单不再尝试登录：平台对错误尝试超 5 次即锁号，
+/// 而视频是逐个跑的 —— 不加熔断会把登录尝试按视频数成倍放大。
+const MAX_RELOGIN_FAILS: usize = 3;
 
 struct Shared {
     client: Client,
@@ -149,6 +177,8 @@ struct Shared {
     order_id: String,
     /// 本任务的节奏档位参数（并发/错峰/请求间隔）
     profile: SpeedProfile,
+    /// 本单连续重登失败次数（成功清零），见 [`MAX_RELOGIN_FAILS`]
+    relogin_fails: AtomicUsize,
 }
 
 #[derive(Debug, Serialize)]
@@ -193,6 +223,23 @@ where
     })
 }
 
+/// 字符串字段同样存在类型随意：实测平台会把 `msg`/`verifyToken` 写成 `null`。
+/// `#[serde(default)]` 只兜"字段缺失"，字段存在但为 null 时仍整体解析失败 ——
+/// 而带 null 的恰好是「需要验证码」这类响应，一失败整个 OCR 验证码流程
+/// 就走不到，视频被直接计入失败。
+fn lenient_string<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(match v {
+        Some(serde_json::Value::String(s)) => s,
+        Some(serde_json::Value::Number(n)) => n.to_string(),
+        Some(serde_json::Value::Bool(b)) => b.to_string(),
+        _ => String::new(),
+    })
+}
+
 #[derive(Debug, Deserialize)]
 struct ReportResp {
     #[serde(default, deserialize_with = "lenient_i64")]
@@ -203,11 +250,11 @@ struct ReportResp {
     studyId: i64,
     #[serde(default, deserialize_with = "lenient_i64")]
     need_code: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_string")]
     verifyToken: String,
     #[serde(default, deserialize_with = "lenient_bool")]
     offline: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_string")]
     msg: String,
 }
 
@@ -228,7 +275,7 @@ async fn report_once(
     }
     let url = format!("{}/user/node/study", shared.base_url);
     let cookie = shared.cookie_str.lock().await.clone();
-    let resp = shared
+    let sent = shared
         .client
         .post(&url)
         .header("Cookie", cookie)
@@ -236,43 +283,89 @@ async fn report_once(
         .header("Accept-Language", "zh-CN,zh;q=0.9")
         .form(&params)
         .send()
-        .await
-        .with_context(|| format!("上报请求失败 node={node_id}"))?;
+        .await;
+    let resp = match sent {
+        Ok(r) => r,
+        Err(e) => {
+            crate::logs::error(crate::logs::CAT_REPORT, &shared.order_id, node_id,
+                format!("上报失败 node={node_id} studyTime={study_time}: {e}"));
+            return Err(e).with_context(|| format!("上报请求失败 node={node_id}"));
+        }
+    };
     let status_code = resp.status().as_u16();
     if status_code == 302 {
         let loc = resp.headers().get("location").and_then(|v| v.to_str().ok()).unwrap_or("");
+        crate::logs::warn(crate::logs::CAT_REPORT, &shared.order_id, node_id,
+            format!("上报被重定向，会话失效: {loc}"));
         return Err(anyhow::anyhow!("会话失效重定向: {loc}"));
     }
-    let body: ReportResp = resp.json().await.with_context(|| "上报响应解析失败")?;
+    let body: ReportResp = match resp.json().await {
+        Ok(b) => b,
+        Err(e) => {
+            crate::logs::warn(crate::logs::CAT_REPORT, &shared.order_id, node_id,
+                format!("上报响应解析失败 node={node_id}: {e}"));
+            return Err(e).with_context(|| "上报响应解析失败");
+        }
+    };
+    // 上报记录（面板「上报」分类的数据源）：请求参数与平台应答各留一份，
+    // 复盘"这节为什么没刷动"时能直接看到平台当时的判断，不必再翻平台日志。
+    crate::logs::info_detail(
+        crate::logs::CAT_REPORT,
+        &shared.order_id,
+        node_id,
+        format!("上报 studyTime={study_time} → status={} state={} need_code={}",
+                body.status, body.state, body.need_code),
+        serde_json::json!({
+            "studyId": study_id,
+            "studyTime": study_time,
+            "force": force,
+            "http": status_code,
+            "status": body.status,
+            "state": body.state,
+            "need_code": body.need_code,
+            "offline": body.offline,
+            "msg": crate::logs::clip(&body.msg, 120),
+        }),
+    );
     Ok(body)
 }
 
 /// need_code 验证码处理：need_code=1 图形码走本地 OCR 引擎；
 /// need_code=2 点选码不支持（原由 Python 后端 sidecar 处理，已随 Python 移除）
-async fn handle_captcha(shared: &Shared, node_id: &str, need_code: i64, verify_token: &str) -> Result<(String, String)> {
-    let _ = (node_id, verify_token); // 点选码所需参数，本地 OCR 用不到
+async fn handle_captcha(shared: &Shared, need_code: i64) -> Result<String> {
     if need_code == 2 {
         return Err(anyhow::anyhow!(
             "点选验证码(need_code=2)不支持，已随 Python 后端移除"
         ));
     }
-    // 获取验证码图片
-    let r: u8 = rand::rng().random();
-    let cap_url = format!("{}/service/code?r={}", shared.base_url, r);
-    crate::speed::pace(&shared.profile).await;
-    let img = shared.client.get(&cap_url)
-        .header("Cookie", shared.cookie_str.lock().await.clone())
-        .send().await?.bytes().await?;
-    // 本地 OCR 识别（CPU 密集，放阻塞线程池）
     let engine = crate::ocr::engine().context("本地 OCR 引擎不可用")?;
-    let bytes = img.to_vec();
-    let code = tokio::task::spawn_blocking(move || engine.recognize(&bytes))
-        .await.context("OCR 任务执行失败")?
-        .context("验证码识别失败")?;
-    Ok((code, String::new()))
+    // 取图 → OCR → 本地预校验；结果不合格（长度不符/含噪声）就重新取图。
+    // 无效结果提交给平台只会白送一次风控计数，重取的代价低得多。
+    for attempt in 1..=3 {
+        let r: u8 = rand::rng().random();
+        let cap_url = format!("{}/service/code?r={}", shared.base_url, r);
+        crate::speed::pace(&shared.profile).await;
+        let img = shared.client.get(&cap_url)
+            .header("Cookie", shared.cookie_str.lock().await.clone())
+            .send().await.context("验证码图片获取失败")?
+            .bytes().await.context("验证码图片读取失败")?;
+        // 本地 OCR 识别（CPU 密集，放阻塞线程池）
+        let bytes = img.to_vec();
+        let code = tokio::task::spawn_blocking(move || engine.recognize(&bytes))
+            .await.context("OCR 任务执行失败")?
+            .context("验证码识别失败")?;
+        let code = code.trim().to_string();
+        if crate::ocr::plausible(&code) {
+            eprintln!("[rust_worker] 验证码 OCR 识别成功: {code}（第 {attempt} 次取图）");
+            return Ok(code);
+        }
+        eprintln!("[rust_worker] 验证码 OCR 结果不合格: {code:?}（第 {attempt} 次取图，重新取图）");
+        tokio::time::sleep(Duration::from_secs_f64(0.3 * attempt as f64)).await;
+    }
+    anyhow::bail!("验证码 OCR 连续 3 次未识别出合法结果")
 }
 
-/// 刷单个视频：墙钟推进 + 自适应上报 + 验证码重试 + 2.1 比率
+/// 刷单个视频：墙钟推进 + 自适应上报 + 验证码重试 + 档位墙钟比率
 async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
     // 时长拿不到时绝不能当成"已完成"：那是假成功 —— 客户付了钱、进度条爬到
     // 100%、平台上一节都没动，而且不会有任何报错。宁可让这一单失败被看见。
@@ -298,7 +391,8 @@ async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
     loop {
         // 报满 studyTime 后一次睡到下一续报点，不再每秒空转（见 next_tick_secs）
         let past_target = total_time >= actual_target;
-        let wall_left = duration as f64 * MIN_RATIO - start.elapsed().as_secs_f64();
+        let wall_left = duration as f64 * shared.profile.wall_ratio + SESSION_LEAD_MARGIN_SECS
+            - start.elapsed().as_secs_f64();
         let tick = next_tick_secs(past_target, wall_left);
         if tick > 0.0 {
             tokio::time::sleep(Duration::from_secs_f64(tick)).await;
@@ -320,7 +414,11 @@ async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
         };
         let study_time = total_time.min(actual_target);
         let force = total_time == 1;
-        if total_time >= actual_target || total_time - last_report >= interval {
+        // 首报必须立刻发：平台的"本次学习时长"从**第一份上报到达**时开始计时，
+        // 而自适应间隔会把首报压到 interval 之后（大视频 30s）——会话起点随之晚 30s，
+        // 收尾时平台只认到"墙钟 − 30"，于是每节都停在总长−20 秒、永远差一口气不判完成。
+        // （原先条件里的 `|| force` 是干这个的，迁移时漏掉了，见 SESSION_LEAD_MARGIN_SECS。）
+        if force || total_time >= actual_target || total_time - last_report >= interval {
             last_report = total_time;
             let mut retries = 0;
             loop {
@@ -333,39 +431,54 @@ async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
                             study_id = resp.studyId;
                         }
                         if resp.offline {
-                            return Err(anyhow::anyhow!("账号被强制下线"));
+                            // cookie 失效（平台 `offline=1`「登录超时,请重新登录」）——
+                            // 这是重登指令，不是"被踢"。此前直接 Err 判失败，
+                            // 后面按 msg 含"会话失效"才重登的分支永远走不到，
+                            // 过期账号因此循环空转不干活。
+                            recover_offline(shared).await?;
+                            // 旧会话的 studyId 作废，下一轮上报自动领新的
+                            study_id = 0;
+                            continue;
                         }
                         if resp.need_code == 1 || resp.need_code == 2 {
                             retries += 1;
                             if retries > 7 {
                                 return Err(anyhow::anyhow!("验证码重试次数过多"));
                             }
-                            match handle_captcha(shared, &video.node_id, resp.need_code, &resp.verifyToken).await {
-                                Ok((code, verify)) => {
-                                    // 带验证码重报
-                                    crate::speed::pace(&shared.profile).await;
-                                    let mut params: HashMap<String, String> = HashMap::new();
-                                    params.insert("nodeId".to_string(), video.node_id.clone());
-                                    params.insert("studyId".to_string(), study_id.to_string());
-                                    params.insert("studyTime".to_string(), study_time.to_string());
-                                    if resp.need_code == 1 && !code.is_empty() {
-                                        params.insert("code".to_string(), code);
-                                    }
-
-                                    let r2 = shared.client
-                                        .post(format!("{}/user/node/study", shared.base_url))
-                                        .header("X-Requested-With", "XMLHttpRequest")
-                                        .form(&params).send().await?;
-                                    let body: ReportResp = r2.json().await?;
-                                    if body.need_code == 0 {
-                                        if body.state == 1 { study_id = 0; }
-                                        else if body.studyId > 0 { study_id = body.studyId; }
-                                        break;
-                                    }
-                                }
-                                Err(e) => return Err(e),
+                            // 识别失败（内部已重取 3 次）直接报错，继续硬试只会堆风控计数
+                            let code = handle_captcha(shared, resp.need_code).await?;
+                            // 带验证码重报
+                            crate::speed::pace(&shared.profile).await;
+                            let mut params: HashMap<String, String> = HashMap::new();
+                            params.insert("nodeId".to_string(), video.node_id.clone());
+                            params.insert("studyId".to_string(), study_id.to_string());
+                            params.insert("studyTime".to_string(), study_time.to_string());
+                            if resp.need_code == 1 && !code.is_empty() {
+                                params.insert("code".to_string(), code);
                             }
-                            // 验证码退避
+                            let r2 = shared.client
+                                .post(format!("{}/user/node/study", shared.base_url))
+                                // 漏 Cookie = 匿名重报：平台只看登录态，不带会话
+                                // 的重报验证码再对也过不了
+                                .header("Cookie", shared.cookie_str.lock().await.clone())
+                                .header("X-Requested-With", "XMLHttpRequest")
+                                .form(&params)
+                                .send()
+                                .await
+                                .context("验证码重报请求失败")?;
+                            let body: ReportResp = r2.json().await.context("验证码重报响应解析失败")?;
+                            if body.offline {
+                                // 重报途中会话过期：走统一恢复路径（失败即熔断）
+                                recover_offline(shared).await?;
+                                study_id = 0;
+                                continue;
+                            }
+                            if body.need_code == 0 {
+                                if body.state == 1 { study_id = 0; }
+                                else if body.studyId > 0 { study_id = body.studyId; }
+                                break;
+                            }
+                            // 验证码未被平台接受 → 退避后重新取图识别
                             tokio::time::sleep(Duration::from_secs_f64(0.3 * retries as f64)).await;
                             continue;
                         }
@@ -385,14 +498,18 @@ async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
             }
         }
 
-        // 完成条件：studyTime 报满 + 墙钟 ≥ 2.1×时长
-        if total_time >= actual_target && start.elapsed().as_secs_f64() >= duration as f64 * MIN_RATIO {
+        // 完成条件：studyTime 报满 + 墙钟 ≥ 比率×时长 + 会话起点余量
+        if total_time >= actual_target
+            && start.elapsed().as_secs_f64()
+                >= duration as f64 * shared.profile.wall_ratio + SESSION_LEAD_MARGIN_SECS
+        {
             return Ok(true);
         }
     }
 }
 
-/// 掉线重登：本地登录（验证码由内置 OCR 识别），更新共享 cookie
+/// 掉线重登：本地登录（验证码由内置 OCR 识别），更新共享 cookie。
+/// 计数统一在这里维护：成功清零、失败递增（调用方据 [`MAX_RELOGIN_FAILS`] 熔断）。
 async fn relogin(shared: &Shared) -> Result<bool> {
     if shared.username.is_empty() {
         return Ok(false);
@@ -401,13 +518,29 @@ async fn relogin(shared: &Shared) -> Result<bool> {
         Ok(session) => {
             let mut guard = shared.cookie_str.lock().await;
             *guard = session.cookie_str;
+            shared.relogin_fails.store(0, Ordering::Relaxed);
+            eprintln!("[rust_worker] 重新登录成功（{}）", shared.username);
             Ok(true)
         }
         Err(e) => {
-            eprintln!("[rust_worker] 重新登录失败: {e:#}");
+            let n = shared.relogin_fails.fetch_add(1, Ordering::Relaxed) + 1;
+            eprintln!("[rust_worker] 重新登录失败（连续 {n}/{MAX_RELOGIN_FAILS}）: {e:#}");
             Ok(false)
         }
     }
+}
+
+/// 平台回 `offline=1`（cookie 过期）时的统一恢复路径：
+/// 熔断检查 → 重登 → 成功返回 Ok（调用方 `continue` 续刷），否则返回错误。
+async fn recover_offline(shared: &Shared) -> Result<()> {
+    if shared.relogin_fails.load(Ordering::Relaxed) >= MAX_RELOGIN_FAILS {
+        anyhow::bail!("账号被强制下线（重登连续失败 {MAX_RELOGIN_FAILS} 次，已熔断防锁号）");
+    }
+    eprintln!("[rust_worker] cookie 过期（{}），尝试重新登录", shared.username);
+    if matches!(relogin(shared).await, Ok(true)) {
+        return Ok(());
+    }
+    anyhow::bail!("账号被强制下线且重新登录失败");
 }
 
 /// 心跳：随机 90-150s 一次 POST /user/online
@@ -472,6 +605,21 @@ async fn push_ws(shared: &Shared, mut data: serde_json::Value, push_url: &str, p
         .send().await;
 }
 
+/// 后台协程守卫：把心跳/续期任务的 JoinHandle 绑定到 run_study 的函数帧上。
+///
+/// 管理端「取消」掐的是外层任务（AbortHandle::abort），外层 future 被 drop 后
+/// 函数末尾的显式 abort() 根本不会执行，两个 loop 会被分离并带 Arc<Shared>
+/// 一直活着 —— 用已取消账号的 cookie 持续打平台。Drop 里统一收尾，取消也干净。
+struct BackgroundTasks(Vec<tokio::task::JoinHandle<()>>);
+
+impl Drop for BackgroundTasks {
+    fn drop(&mut self) {
+        for h in &self.0 {
+            h.abort();
+        }
+    }
+}
+
 pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Result<()> {
     let base_url = task.base_url.trim_end_matches('/').to_string();
     let profile = SpeedMode::parse(&task.speed_mode).profile();
@@ -489,6 +637,7 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
         push_ws: task.push_ws,
         order_id: task.order_id.clone(),
         profile,
+        relogin_fails: AtomicUsize::new(0),
     });
 
     // 启动时 cookie 有效性检查。
@@ -509,9 +658,11 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
 
     push_ws(&shared, serde_json::json!({"type": "progress", "phase": "video"}), push_url, push_token).await;
 
-    // 心跳 + cookie 续期后台任务
-    let hb = tokio::spawn(heartbeat_loop(shared.clone()));
-    let cr = tokio::spawn(cookie_refresh_loop(shared.clone()));
+    // 心跳 + cookie 续期后台任务（生命周期由守卫绑定到本函数帧，见 BackgroundTasks）
+    let _bg = BackgroundTasks(vec![
+        tokio::spawn(heartbeat_loop(shared.clone())),
+        tokio::spawn(cookie_refresh_loop(shared.clone())),
+    ]);
 
     // 视频级调度：把整单的视频放进一个有 N 个槽位的池子里，而不是"每课程一个任务、
     // 课程内部串行"。
@@ -542,14 +693,20 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
     }
     eprintln!("[rust_worker] 视频队列: {} 个课程 / {} 节（按课程轮转排队）",
               groups.len(), queue.len());
+    crate::logs::info(crate::logs::CAT_REPORT, &task.order_id, "",
+        format!("开始刷课：{} 个课程 / {} 节，档位 {}（并发 {} 路会话）",
+                groups.len(), queue.len(), profile.mode.label(), profile.video_concurrency));
 
-    let done_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    // 分子起点 = 平台侧已完成的节数（见 TaskInput::already_done）：
+    // done_counter 从基数递增，进度条才是"整单视角"的累计值，重启后不会归零。
+    let done_counter = Arc::new(std::sync::atomic::AtomicU64::new(task.already_done));
     let failed_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
     // 进度回报参数：闭包要 move 进去，先转成 owned；总节数在这里定死
     let push_url = push_url.to_string();
     let push_token = push_token.to_string();
-    let total_videos = queue.len() as u64;
+    // 分母 = 已完成的 + 本轮待刷的 = 整单总节数
+    let total_videos = task.already_done + queue.len() as u64;
 
     // 视频并发闸：档位决定同时在跑几路会话（急速 8 / 均衡 4 / 温柔 1）。
     // 槽位满时后面的视频在此排队（不产生任何请求）。
@@ -564,7 +721,7 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
             Ok(p) => p,
             Err(_) => break,
         };
-        // 拿到槽位后再错峰：保守档因此是"上一节结束 → 停 30s → 下一节"，
+        // 拿到槽位后再错峰：保守档因此是"上一节结束 → 微停顿 → 下一节"，
         // 而不是把间隔藏在排队里（第一节不等待，保持原行为）
         if !first {
             profile.sleep_course_stagger().await;
@@ -587,18 +744,27 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
                     let f = failed_counter.load(order);
                     eprintln!("[rust_worker] 视频完成 {}/{} 《{}》时长 {}s 墙钟 {}s",
                               d + f, total_videos, v.name, v.duration.unwrap_or(0), wall);
+                    crate::logs::info(crate::logs::CAT_REPORT, &shared.order_id, &v.node_id,
+                        format!("视频完成 {}/{}（{}%）《{}》时长 {}s 墙钟 {}s",
+                                d + f, total_videos, pct_of(d, total_videos),
+                                v.name, v.duration.unwrap_or(0), wall));
                     (d, f)
                 }
                 Ok(false) => {
                     let f = failed_counter.fetch_add(1, order) + 1;
                     eprintln!("[rust_worker] 视频未完成 {}/{} 《{}》墙钟 {}s",
                               f, total_videos, v.name, wall);
+                    crate::logs::warn(crate::logs::CAT_REPORT, &shared.order_id, &v.node_id,
+                        format!("视频未完成 {}/{} 《{}》墙钟 {}s（studyTime 未报满）",
+                                f, total_videos, v.name, wall));
                     (done_counter.load(order), f)
                 }
                 Err(e) => {
                     let f = failed_counter.fetch_add(1, order) + 1;
                     eprintln!("[rust_worker] 视频失败 {}/{} 《{}》err={e:#}",
                               f, total_videos, v.name);
+                    crate::logs::error(crate::logs::CAT_REPORT, &shared.order_id, &v.node_id,
+                        format!("视频失败 {}/{} 《{}》err={e:#}", f, total_videos, v.name));
                     (done_counter.load(order), f)
                 }
             };
@@ -606,7 +772,7 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
             // 失败的单独写在步骤文案里 —— 不能拿"尝试过的节数"冒充"刷成功的节数"。
             // 收敛到 1 位小数：原始浮点（如 1/61 → 1.639344262295082）落库后
             // 会在订单页整串显示出来
-            let pct = if total_videos > 0 { (done as f64 * 1000.0 / total_videos as f64).round() / 10.0 } else { 0.0 };
+            let pct = pct_of(done, total_videos);
             let step = if failed > 0 {
                 format!("已完成 {done}/{total_videos} 节（失败 {failed}）")
             } else {
@@ -621,22 +787,26 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
     }
     while set.join_next().await.is_some() {}
 
-    hb.abort();
-    cr.abort();
+    drop(_bg);
 
     let done = done_counter.load(std::sync::atomic::Ordering::Relaxed);
     let failed = failed_counter.load(std::sync::atomic::Ordering::Relaxed);
-    let total = task.videos.len() as u64;
+    // 与进度条同一口径：done 是从 already_done 起的累计值，分母也用整单总节数
+    let total = total_videos;
 
     // 完成判据只看本地：每个视频的成败由 study_video 自己判定
-    // （studyTime 报满 + 墙钟 ≥ 2.1×时长），failed 计数就是硬信号。
+    // （studyTime 报满 + 墙钟 ≥ 档位比率×时长），failed 计数就是硬信号。
     // 不再额外拉一次账号维度的平台完成率做"复核" —— 该接口不带 courseId，
     // 只能给出账号全量完成率，与本单选中的课程子集不是一回事，既不能当判据，
     // 又要多打一次平台请求，纯属噪声。
     if failed > 0 {
+        crate::logs::warn(crate::logs::CAT_REPORT, &task.order_id, "",
+            format!("刷课结束（有失败）{done}/{total}，失败 {failed} 节"));
         anyhow::bail!("部分视频未完成 {done}/{total}");
     }
     eprintln!("[rust_worker] 任务完成 {done}/{total}");
+    crate::logs::info(crate::logs::CAT_REPORT, &task.order_id, "",
+        format!("刷课完成 {done}/{total} 节（100%）"));
     Ok(())
 }
 
@@ -738,7 +908,7 @@ mod tests {
     }
 
     /// 端到端：课程长度极不均（1 节 vs 7 节）时，
-    /// ① 每个视频自己的 begin→final 跨度仍满足 2.1× 安全比率
+    /// ① 每个视频自己的 begin→final 跨度仍满足均衡档 2.1× 安全比率
     /// ② 任意时刻的重叠会话数不超过档位并发（平台重叠检测口径）
     /// ③ 整单时长显著短于"每课程串行"（旧调度：7 节 × 2.1×2s ≈ 29s）
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -759,6 +929,7 @@ mod tests {
             concurrency: 0,
             push_ws: false,            // 不打推送端点
             speed_mode: "balanced".into(),   // 4 路会话 + 0.5s 启动错峰
+            already_done: 0,
         };
 
         let started = Instant::now();
@@ -777,7 +948,7 @@ mod tests {
             let begin = ts[0];
             let end = *ts.last().unwrap();
             // 跨度从"首次上报"算起（首个上报发生在第 1 秒），所以下界要减掉这 1s
-            let need = 2.0 * MIN_RATIO - 1.5;
+            let need = 2.0 * SpeedMode::Balanced.profile().wall_ratio - 1.5;
             assert!(end - begin >= need,
                     "{node} 跨度 {:.2}s 低于安全比率下界 {:.2}s", end - begin, need);
             spans.push((begin, end));

@@ -683,7 +683,6 @@ impl Db {
             "queue_jobs_school"
         };
         let username = order["username"].as_str().unwrap_or("").to_string();
-        let password = order["password"].as_str().unwrap_or("").to_string();
         let website_id = order["website_id"].as_i64().unwrap_or(1);
         let course_ids = serde_json::to_string(order.get("course_ids").unwrap_or(&json!([])))
             .unwrap_or_else(|_| "[]".into());
@@ -691,6 +690,12 @@ impl Db {
         let pool = self.clone_pool();
         let mut conn = pool.get().context("获取连接失败")?;
         let tx = conn.transaction()?;
+        // 凭据迁移后 orders.password 明文列恒为空，密码真值在 credentials（加密）。
+        // 读明文列会把空密码写进队列任务：cookie 一过期，重登必然「密码不可为空」，
+        // 视频逐个失败直到整单报废。解不到才回退传进来的 JSON（测试/老路径）。
+        let password = crate::crypto::load_password(&tx, &order_id)
+            .filter(|p| !p.is_empty())
+            .unwrap_or_else(|| order["password"].as_str().unwrap_or("").to_string());
         // 对齐 submit_job：order_id 已有活跃任务 → 跳过
         let existing: Option<String> = tx
             .query_row(

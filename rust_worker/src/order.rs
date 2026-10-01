@@ -220,21 +220,20 @@ async fn create_order(db: &Db, username: &str, password: &str, item: &Value,
 
     tokio::task::spawn_blocking(move || -> Result<()> {
         let conn = pool.get()?;
-        // 密码不落 orders 明文列，统一进加密凭据表（crypto::store）
+        // 用户规则（2026-09-30）：密码只存明文，直接落 orders.password
         conn.execute(
             "INSERT INTO orders (order_id, out_trade_no, ezfpy_trade_no, payment_channel,
                                  paid_processed, user_id, customer_name, customer_contact,
                                  username, password, website_id, task_type, course_ids,
                                  video_count, exam_count, price, notes, status, paid,
                                  admin_note, created_at, updated_at, speed_mode)
-             VALUES (?1,'','','','unprocessed',?2,'','',?3,'',?4,?5,?6,?7,?8,?9,'',
+             VALUES (?1,'','','','unprocessed',?2,'','',?3,?12,?4,?5,?6,?7,?8,?9,'',
                      'pending',0,'',?10,?10,?11)",
             rusqlite::params![
                 order_id2, user_id, username, website_id, task_type,
-                course_ids, video_count, exam_count, price, now, speed_mode,
+                course_ids, video_count, exam_count, price, now, speed_mode, password,
             ],
         )?;
-        crate::crypto::store(&conn, &order_id2, &username, &password)?;
         Ok(())
     })
     .await??;

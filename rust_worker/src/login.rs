@@ -119,10 +119,12 @@ pub async fn login_school(base_url: &str, username: &str, password: &str) -> Res
             }
             return Ok(SchoolSession { cookie_str, base_url: base });
         }
-        // 密码错误/账号锁定类：立即终止，避免重试循环触发平台 5 次锁号
-        // （实测平台文案为「账号密码不正确」「尝试密码错误超过5次，账号已被锁定」）
+        // 密码错误/缺失/账号锁定类：立即终止，避免重试循环触发平台 5 次锁号
+        // （实测平台文案：「账号密码不正确」「密码不可为空」「尝试密码错误超过5次，账号已被锁定」。
+        //  这些文案不 bail 会被 10 次循环当成未知错误空转，白白消耗平台错误次数）
         if text.contains("密码错误") || text.contains("账号或密码") || text.contains("用户名或密码")
-            || text.contains("账号密码不正确") || text.contains("已被锁定") || text.contains("账号锁定") {
+            || text.contains("账号密码不正确") || text.contains("密码不可为空")
+            || text.contains("已被锁定") || text.contains("账号锁定") {
             bail!("登录失败: {}", {
                 let msg = json_try_msg(&text);
                 if msg.is_empty() { "账号或密码错误".to_string() } else { msg }

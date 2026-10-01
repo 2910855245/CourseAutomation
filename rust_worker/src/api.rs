@@ -52,6 +52,8 @@ pub fn router(state: AppState) -> Router<AppState> {
         // 支付订单 / 测试支付 / 诊断 / 连接重置）——见 ypay_admin.rs。
         // 合并进 protected 分组，随附管理员 Bearer 鉴权。
         .merge(crate::ypay_admin::router())
+        // 运行日志面板：列表 / 统计 / 清空（内存环形缓冲 + DB 持久层）
+        .merge(crate::logs::router())
         // 营销推广统计：必须带管理员鉴权（访客量/转化率/邀请码列表属经营数据）
         .route("/api/admin/promo/stats", get(crate::promo_routes::admin_promo_stats))
         // 公告发布：前端「系统通告」页 + 首页弹窗依赖
@@ -1633,7 +1635,12 @@ async fn admin_order_execute(State(state): State<AppState>, Path(order_id): Path
         }
         tasks.remove(&oid_task);
     });
-    state.tasks.insert(oid_resp.clone(), handle.abort_handle());
+    // 只登记仍在跑的任务：任务若在 insert 前就结束（如登录秒失败），任务内
+    // tasks.remove 先跑成空操作，随后无条件 insert 会塞进一条僵尸句柄，
+    // 该订单从此每次手动执行都被判「已在执行中」。与队列路径同护栏。
+    if !handle.is_finished() {
+        state.tasks.insert(oid_resp.clone(), handle.abort_handle());
+    }
     Json(json!({"success": true, "message": "订单执行中", "data": {"order_id": oid_resp}}))
 }
 
