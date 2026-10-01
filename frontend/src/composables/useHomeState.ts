@@ -64,6 +64,8 @@ export function useHomeState() {
   // 扫描结果不落盘：恢复会话只带回学号，扫描结果一律重新拉取（见 SavedData 注释）
   const scanDone = ref(false)
   const allDone = ref(false)
+  // 课程都在有效学习时间外（学习通过期课）：与"全部完成"是两回事，文案必须区分
+  const allEnded = ref(false)
   const isLeaving = ref(false)
   const scanData = ref<PlatformResult[]>([])
   const countdown = ref(3)
@@ -158,17 +160,27 @@ export function useHomeState() {
     return c.video_pending === 0 && (c.exam_total === 0 || c.exam_done >= c.exam_total)
   }
 
+  /** 课程不在有效学习时间内（学习通）：平台已关闭学习入口，不可选、不可下单 */
+  function isCourseEnded(c: CourseItem): boolean {
+    return c.course_ended === true
+  }
+
+  /** 可处理 = 未完成、未提交、且还在有效学习时间内 */
+  function isCourseActionable(c: CourseItem): boolean {
+    return !isCourseDoneOrSubmitted(c) && !isCourseEnded(c)
+  }
+
   function isCourseDoneOrSubmitted(c: CourseItem): boolean {
     return isCourseDone(c) || submittedCourseIds.value.has(c.course_id)
   }
 
-  const visiblePlatforms = computed(() => scanData.value.filter(p => p.courses.length > 0 && p.courses.some(c => !isCourseDoneOrSubmitted(c))))
+  const visiblePlatforms = computed(() => scanData.value.filter(p => p.courses.length > 0 && p.courses.some(c => isCourseActionable(c))))
 
   function togglePlatform(wid: number, checked: boolean) {
     const platform = scanData.value.find(p => p.website_id === wid)
     if (!platform) return
     for (const c of platform.courses) {
-      if (checked && !isCourseDoneOrSubmitted(c)) checkedCourseIds.value.add(c.course_id)
+      if (checked && isCourseActionable(c)) checkedCourseIds.value.add(c.course_id)
       else checkedCourseIds.value.delete(c.course_id)
     }
     saveSession(); fetchBackendPrices()
@@ -181,7 +193,7 @@ export function useHomeState() {
   }
 
   function isPlatformAllChecked(platform: PlatformResult): boolean {
-    const pendings = platform.courses.filter(c => !isCourseDoneOrSubmitted(c))
+    const pendings = platform.courses.filter(c => isCourseActionable(c))
     return pendings.length > 0 && pendings.every(c => checkedCourseIds.value.has(c.course_id))
   }
 
@@ -261,8 +273,8 @@ export function useHomeState() {
       pointsTotal: p.points_total || 0,
       pointsTarget: p.points_target || 200,
       courseCount: p.courses?.length || 0,
-      pendingCount: p.courses?.filter(c => !isCourseDoneOrSubmitted(c)).length || 0,
-      workPending: p.courses?.reduce((s, c) => s + (c.work_pending || 0), 0) || 0,
+      pendingCount: p.courses?.filter(c => isCourseActionable(c)).length || 0,
+      workPending: p.courses?.reduce((s, c) => s + (isCourseEnded(c) ? 0 : (c.work_pending || 0)), 0) || 0,
     }
   })
 
@@ -271,7 +283,7 @@ export function useHomeState() {
     if (!username.value.trim() || !password.value.trim()) { store.toast('请输入学号和密码', 'warning'); return }
     if (countdownTimer) clearInterval(countdownTimer)
     if (loginErrorTimer) { clearInterval(loginErrorTimer); loginErrorTimer = null }
-    scanning.value = true; submitSuccess.value = false; allDone.value = false
+    scanning.value = true; submitSuccess.value = false; allDone.value = false; allEnded.value = false
     loginError.value = null; failedPlatforms.value = []; countdown.value = 3; loginErrorCountdown.value = 3
     try {
       const res = await api.courses.scan({ username: username.value.trim(), password: password.value.trim(), include_records: true })
@@ -291,9 +303,11 @@ export function useHomeState() {
         store.toast(`以下平台登录失败，已自动跳过：\n${failMsg}`, 'warning')
         // 不再 resetScan，继续显示成功平台的课程列表
       }
-      const pendingCount = scanData.value.reduce((sum, p) => sum + p.courses.filter(c => !isCourseDone(c)).length, 0)
+      const pendingCount = scanData.value.reduce((sum, p) => sum + p.courses.filter(c => isCourseActionable(c)).length, 0)
       if (pendingCount === 0) {
-        allDone.value = true
+        const endedFound = scanData.value.some(p => p.courses.some(c => isCourseEnded(c) && !isCourseDone(c)))
+        if (endedFound) { allEnded.value = true; countdown.value = 10 }  // 预期之外的结果，给足阅读时间
+        else allDone.value = true
         countdownTimer = setInterval(() => { countdown.value--; if (countdown.value <= 0) { clearInterval(countdownTimer); resetScan() } }, 1000)
         return
       }
@@ -310,7 +324,7 @@ export function useHomeState() {
     if (!chaoxingUsername.value.trim()) { store.toast('请输入学习通账号', 'warning'); return }
     if (!chaoxingPassword.value.trim()) { store.toast('请输入学习通密码', 'warning'); return }
     if (countdownTimer) clearInterval(countdownTimer)
-    scanning.value = true; submitSuccess.value = false; allDone.value = false
+    scanning.value = true; submitSuccess.value = false; allDone.value = false; allEnded.value = false
     loginError.value = null; failedPlatforms.value = []
     try {
       const res = await api.courses.scanChaoxing({ username: chaoxingUsername.value.trim(), password: chaoxingPassword.value.trim() })
@@ -323,9 +337,11 @@ export function useHomeState() {
         loginErrorTimer = setInterval(() => { loginErrorCountdown.value--; if (loginErrorCountdown.value <= 0) { clearInterval(loginErrorTimer); loginErrorTimer = null; resetScan() } }, 1000)
         return
       }
-      const pendingCount = platform.courses.filter(c => !isCourseDone(c)).length
+      const pendingCount = platform.courses.filter(c => isCourseActionable(c)).length
       if (pendingCount === 0) {
-        allDone.value = true
+        const endedFound = platform.courses.some(c => isCourseEnded(c) && !isCourseDone(c))
+        if (endedFound) { allEnded.value = true; countdown.value = 10 }  // 预期之外的结果，给足阅读时间
+        else allDone.value = true
         countdownTimer = setInterval(() => { countdown.value--; if (countdown.value <= 0) { clearInterval(countdownTimer); resetScan() } }, 1000)
         return
       }
@@ -340,7 +356,7 @@ export function useHomeState() {
     if (loginErrorTimer) { clearInterval(loginErrorTimer); loginErrorTimer = null }
     if (payPollTimer.value) { clearInterval(payPollTimer.value); payPollTimer.value = null }
     localStorage.removeItem(LS_KEY); savedData.value = null
-    scanDone.value = false; allDone.value = false; allInProgress.value = false; scanData.value = []
+    scanDone.value = false; allDone.value = false; allInProgress.value = false; allEnded.value = false; scanData.value = []
     checkedCourseIds.value = new Set(); submittedCourseIds.value = new Set(); pendingOrderedCourseIds.value = []
     loginError.value = null; failedPlatforms.value = []; submitSuccess.value = false
     rescanning.value = false; scanning.value = false; paying.value = false
@@ -420,9 +436,9 @@ export function useHomeState() {
   function handleOrderSuccess(orderedCourseIds: string[]) {
     for (const cid of orderedCourseIds) { submittedCourseIds.value.add(cid); checkedCourseIds.value.delete(cid) }
     let remaining = 0
-    for (const p of scanData.value) { for (const c of p.courses) { if (!isCourseDoneOrSubmitted(c)) remaining++ } }
+    for (const p of scanData.value) { for (const c of p.courses) { if (isCourseActionable(c)) remaining++ } }
     if (remaining === 0) { allInProgress.value = true; store.toast('所有课程已下单，任务正在进行中！', 'success') }
-    else { for (const p of scanData.value) { for (const c of p.courses) { if (!isCourseDoneOrSubmitted(c)) checkedCourseIds.value.add(c.course_id) } }; store.toast(`下单成功！还有 ${remaining} 门课程未处理，已自动选中`, 'info') }
+    else { for (const p of scanData.value) { for (const c of p.courses) { if (isCourseActionable(c)) checkedCourseIds.value.add(c.course_id) } }; store.toast(`下单成功！还有 ${remaining} 门课程未处理，已自动选中`, 'info') }
     saveSession()
   }
 
@@ -682,7 +698,7 @@ export function useHomeState() {
 
   return {
     // Scan
-    username, password, scanning, rescanning, scanDone, allDone, isLeaving, scanData, countdown,
+    username, password, scanning, rescanning, scanDone, allDone, allEnded, isLeaving, scanData, countdown,
     activeTab, chaoxingUsername, chaoxingPassword, startChaoxingScan,
     loginError, failedPlatforms, reloginDialog, reloginPassword, reloginLoading, loginErrorCountdown,
     submittedCourseIds, allInProgress, pendingOrderedCourseIds, checkedCourseIds,
@@ -691,7 +707,7 @@ export function useHomeState() {
     speedMode, setSpeedMode,
     // 营销：免费待遇 / 邀请 / 刷课卡
     benefit, inviteInfo, myCard, loadBenefit,
-    isCourseDone, isCourseDoneOrSubmitted, visiblePlatforms, togglePlatform, toggleCourse, isPlatformAllChecked,
+    isCourseDone, isCourseDoneOrSubmitted, isCourseEnded, isCourseActionable, visiblePlatforms, togglePlatform, toggleCourse, isPlatformAllChecked,
     summary, scenario, studentName, chaoxingInfo,
     startScan, resetScan, rescan, openReloginDialog, closeReloginDialog, submitRelogin,
     fetchBackendPrices, saveSession, clearSaved,

@@ -24,6 +24,7 @@ use tracing::{info, warn};
 
 use crate::exam;
 use crate::llm::{cached_config, configured_model, configured_thinking, effective_api_key};
+use crate::platform_client as pc;
 use crate::scan;
 use crate::AppState;
 
@@ -61,9 +62,9 @@ async fn list_platforms() -> Json<Value> {
 
 // ── /api/courses/scan/chaoxing ───────────────────────────────────────────
 //
-// 学习通站点启用 TLS 指纹校验（JA3），reqwest/native-tls 会被直接拒绝，
-// 需 wreq（TLS 指纹伪装）才能登录。当前依赖尚未落地，故本端点返回明确的
-// 业务失败（而非 404/SPA HTML），前端据此提示用户，不影响学校平台链路。
+// 学习通链路：登录（cx_login，AES 加密的 /fanyalogin）→ 课程列表（backclazzdata）。
+// 登录实测**不需要 TLS 指纹伪装**（2026-10-01 线上验证），旧注释里"必须 wreq"
+// 的结论已作废。任务点明细（每门课的视频/测验）与下单派发留待阶段二。
 
 #[derive(serde::Deserialize)]
 struct ScanChaoxingRequest {
@@ -73,17 +74,108 @@ struct ScanChaoxingRequest {
     password: String,
 }
 
-async fn scan_chaoxing(Json(req): Json<ScanChaoxingRequest>) -> Json<Value> {
-    let _ = (req.username, req.password);
+fn cx_fail(status: &str, error: String) -> Json<Value> {
     Json(json!({
         "success": false,
-        "message": "学习通扫描暂不可用：该站点需 TLS 指纹伪装客户端（wreq）支持",
+        "message": error,
         "data": {"platform": {
             "website_id": 4,
-            "name": "超星学习通",
-            "status": "unsupported",
-            "error": "后端尚未接入 wreq，学习通链路暂不可用",
+            "name": "学习通",
+            "status": status,
+            "error": error,
             "courses": [],
+            "tasks": [],
+        }},
+    }))
+}
+
+async fn scan_chaoxing(Json(req): Json<ScanChaoxingRequest>) -> Json<Value> {
+    if req.username.trim().is_empty() || req.password.is_empty() {
+        return cx_fail("fail", "请填写学习通账号与密码".to_string());
+    }
+    let session = match crate::cx_login::login(&req.username, &req.password).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "学习通登录失败");
+            return cx_fail("fail", e.to_string());
+        }
+    };
+    // 学习通会话带 cookie jar：各子站的 host cookie 不同，必须由 jar 按域名自动携带
+    let cx_client = pc::build_client(false, Some(session.jar.clone()));
+    let courses = match crate::cx_scan::fetch_my_courses(&cx_client).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "学习通课程列表拉取失败");
+            return cx_fail("fail", format!("登录成功但拉取课程失败：{e}"));
+        }
+    };
+    if courses.is_empty() {
+        return cx_fail("fail", "登录成功，但该账号下没有课程".to_string());
+    }
+
+    // 逐个课程拉任务概览（网课知识点 / 作业 / 考试）：三路请求都走全局限速，
+    // 课程之间并发只是把网络等待重叠起来，实际出站仍被串行化。
+    let tasks = futures_util::future::join_all(courses.iter().map(|c| {
+        crate::cx_scan::fetch_course_tasks(&cx_client, &session.uid, c)
+    }))
+    .await;
+
+    let items: Vec<Value> = courses.iter().zip(tasks.iter()).map(|(c, t)| {
+        let full_name = if c.class_name.is_empty() {
+            c.name.clone()
+        } else {
+            format!("{}（{}）", c.name, c.class_name)
+        };
+        let video_pending = t.video_total.saturating_sub(t.video_completed);
+        // 课程不在有效学习时间（plaza rule）：平台已关闭学习入口，一切任务不可操作。
+        // “未学完”只是历史遗留状态，不能按“还能刷”展示/下单（实测统一 403）。
+        let course_ended = t.rule.as_ref().map(|r| !r.effective).unwrap_or(false);
+        json!({
+            "course_id": c.course_id,
+            "course_name": full_name,
+            "detail_link": "",
+            "study_record_url": "",
+            "teacher": c.teacher,
+            "class_id": c.class_id,
+            // 有效期（仅学习广场课有；非广场课为空串）
+            "course_ended": course_ended,
+            "begin_date": t.rule.as_ref().map(|r| r.begin_date.clone()).unwrap_or_default(),
+            "end_date": t.rule.as_ref().map(|r| r.end_date.clone()).unwrap_or_default(),
+            // 有网课看网课（学习广场知识点）
+            "video_total": t.video_total,
+            "video_completed": t.video_completed,
+            "video_pending": video_pending,
+            "video_actionable": if course_ended { 0 } else { video_pending },
+            // 有作业做作业、有考试做考试
+            "work_total": t.work_total,
+            "work_completed": t.work_total.saturating_sub(t.work_pending),
+            "work_pending": t.work_pending,
+            "exam_total": t.exam_total,
+            "exam_done": t.exam_total.saturating_sub(t.exam_pending),
+            "exam_pending": t.exam_pending,
+            "exam_actionable": if course_ended { 0 } else { t.exam_pending },
+            "exam_deleted": 0,
+            "exam_missed": 0,
+            "homework_total": t.work_total,
+            "homework_done": t.work_total.saturating_sub(t.work_pending),
+            "records_loaded": true,
+            "has_points_system": false,
+            "points_total": 0, "points_remaining": 0,
+        })
+    }).collect();
+
+    let n = items.len();
+    Json(json!({
+        "success": true,
+        "message": format!("学习通扫描完成，共 {n} 门课程"),
+        "data": {"platform": {
+            "website_id": 4,
+            "name": "学习通",
+            "status": "ok",
+            "student_name": "",
+            "school_name": "",
+            "student_code": session.uid,
+            "courses": items,
             "tasks": [],
         }},
     }))

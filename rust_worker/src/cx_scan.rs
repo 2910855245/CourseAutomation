@@ -46,7 +46,7 @@ fn default_ua() -> &'static str {
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 }
 
-fn make_client(ua: &str) -> Client {
+pub(crate) fn make_client(ua: &str) -> Client {
     Client::builder()
         .danger_accept_invalid_certs(true)
         .connect_timeout(CONNECT_TIMEOUT)
@@ -76,6 +76,216 @@ async fn fetch_course_list(client: &Client, cookie: &str) -> Result<Vec<CxCourse
         .context("课程列表请求失败")?;
     let html = resp.text().await.context("课程列表读取失败")?;
     Ok(parse_course_list(&html))
+}
+
+/// 我的课程（`backclazzdata`：channelList 每条带 courseId / clazzId / personId）。
+///
+/// 这条接口比 courselistdata 更完整：带班级名与任课老师，且是后续任务点/上报要用的
+/// 三元组（courseId + clazzId + personId）的唯一来源。
+#[derive(Debug, Clone)]
+pub struct CxCourseInfo {
+    pub course_id: String,
+    pub class_id: String,
+    pub person_id: String,
+    pub name: String,
+    pub class_name: String,
+    pub teacher: String,
+}
+
+fn num_str(v: &Value) -> String {
+    if let Some(n) = v.as_i64() {
+        n.to_string()
+    } else {
+        v.as_str().unwrap_or("").trim().to_string()
+    }
+}
+
+/// 我的课程（`backclazzdata`）。`client` 必须挂登录得到的 cookie jar：
+/// 学习通各子站的 host 级 cookie 不同，手工拼一个 Cookie 头会在部分站点被判未登录。
+pub async fn fetch_my_courses(client: &Client) -> Result<Vec<CxCourseInfo>> {
+    let resp = client
+        .get("https://mooc1-api.chaoxing.com/mycourse/backclazzdata?view=json&rss=1")
+        .header("Referer", "https://mooc1.chaoxing.com/")
+        .send()
+        .await
+        .context("学习通课程列表请求失败")?;
+    let v: Value = resp.json().await.context("学习通课程列表解析失败（返回非 JSON）")?;
+    let mut out: Vec<CxCourseInfo> = Vec::new();
+    for ch in v["channelList"].as_array().cloned().unwrap_or_default() {
+        let content = &ch["content"];
+        let course = match content["course"]["data"].as_array().and_then(|a| a.first()) {
+            Some(c) => c.clone(),
+            None => continue,
+        };
+        let course_id = num_str(&course["id"]);
+        let class_id = num_str(&ch["key"]);
+        if course_id.is_empty() || class_id.is_empty() || course_id == "0" {
+            continue;
+        }
+        if out.iter().any(|c| c.course_id == course_id && c.class_id == class_id) {
+            continue;
+        }
+        out.push(CxCourseInfo {
+            course_id,
+            class_id,
+            person_id: num_str(&ch["cpi"]),
+            name: course["name"].as_str().unwrap_or("").trim().to_string(),
+            class_name: content["name"].as_str().unwrap_or("").trim().to_string(),
+            teacher: course["teacherfactor"].as_str().unwrap_or("").trim().to_string(),
+        });
+    }
+    Ok(out)
+}
+
+/// 课程规则（学习广场首页内联 JS 的 `rule` 变量）。
+///
+/// 网络课的有效期在这里：`isEffectiveDate=false` 表示不在有效学习时间内，
+/// 平台会关闭一切学习入口（2026-10-01 实测：modify-node 返回“没有权限”、
+/// 上报接口统一 403）——此时期望值是“不可学”，而不是“还有 N 个待学”。
+#[derive(Debug, Default, Clone)]
+pub struct CxCourseRule {
+    pub effective: bool,
+    pub begin_date: String,
+    pub end_date: String,
+}
+
+/// 单门课的任务概览 —— "有网课看网课、有作业做作业、有考试做考试"的量化依据。
+///
+/// 三个来源（2026-10-01 线上实测，参数与字段均已验证）：
+/// - 作业：`mooc-ans/work/api/task`（列表）+ `work/api/unfinished`（明确未完成数）
+/// - 考试：`exam-ans/mooc2/exam/task`（`stuStatus=3` 为已完成，其余按"还能做"计数）
+/// - 网课：学习广场知识点（`tsjy/plaza/knowledge-list`，文本标注「学习中 / 已学完」）
+#[derive(Debug, Default, Clone)]
+pub struct CxCourseTasks {
+    pub work_total: u32,
+    pub work_pending: u32,
+    pub exam_total: u32,
+    pub exam_pending: u32,
+    /// 视频/知识点：总数与已学完数（学习广场）
+    pub video_total: u32,
+    pub video_completed: u32,
+    /// 有效期（仅学习广场课有；非广场课拉不到 rule，保持 None）
+    pub rule: Option<CxCourseRule>,
+}
+
+/// 拉取课程规则（plaza 首页注入的 `var rule = '{...}'`）。
+/// 非广场课没有这个页面，返回 None —— 调用方按“无法判定”处理。
+pub async fn fetch_course_rule(client: &Client, uid: &str,
+                               course: &CxCourseInfo) -> Option<CxCourseRule> {
+    crate::platform_client::wait_rate_limit().await;
+    let url = format!(
+        "https://tsjy.chaoxing.com/plaza/?courseId={}&personId={}&classId={}&userId={}",
+        course.course_id, course.person_id, course.class_id, uid
+    );
+    let resp = client.get(&url)
+        .header("Referer", "https://tsjy.chaoxing.com/plaza/index")
+        .send().await.ok()?;
+    let html = resp.text().await.ok()?;
+    parse_course_rule(&html)
+}
+
+/// 从 plaza 首页抽 `var rule = '{...}'`（纯函数以便单测）
+fn parse_course_rule(html: &str) -> Option<CxCourseRule> {
+    let re = Regex::new(r"var rule = '([^']+)'").ok()?;
+    let caps = re.captures(html)?;
+    let v: Value = serde_json::from_str(&caps[1]).ok()?;
+    Some(CxCourseRule {
+        effective: v["isEffectiveDate"].as_bool().unwrap_or(false),
+        begin_date: v["beginDate"].as_str().unwrap_or("").to_string(),
+        end_date: v["endDate"].as_str().unwrap_or("").to_string(),
+    })
+}
+
+/// 作业与考试的完成判定：`stuStatus=3` 为已完成；其余只有在"时间窗还没关"时才算待办，
+/// 已过期的旧任务不能当成可做（否则会去做平台早就关闭的作业）。
+fn count_tasks(items: &[Value], now: i64) -> (u32, u32) {
+    let total = items.len() as u32;
+    let pending = items
+        .iter()
+        .filter(|t| {
+            let done = t["stuStatus"].as_i64().unwrap_or(0) == 3;
+            if done {
+                return false;
+            }
+            let start = t["startTime"].as_i64().unwrap_or(0);
+            let end = t["endTime"].as_i64().unwrap_or(0);
+            (start == 0 || start <= now) && (end == 0 || end > now)
+        })
+        .count() as u32;
+    (total, pending)
+}
+
+/// 学习广场知识点的「总数 / 已学完」——从渲染文本里数状态词（接口不返回结构化状态）
+fn count_points(html: &str) -> (u32, u32) {
+    let text = strip_tags(html);
+    let learned = text.matches("\u{5df2}\u{5b66}\u{5b8c}").count() as u32; // 已学完
+    let learning = text.matches("\u{5b66}\u{4e60}\u{4e2d}").count() as u32; // 学习中
+    (learned + learning, learned)
+}
+
+/// 拉取单门课的三类任务概览。任何一路失败都只降级为 0（不拖垮整次扫描）
+pub async fn fetch_course_tasks(client: &Client, uid: &str,
+                                course: &CxCourseInfo) -> CxCourseTasks {
+    let mut t = CxCourseTasks::default();
+    let now = now_ms() as i64;
+
+    crate::platform_client::wait_rate_limit().await;
+    if let Ok(resp) = client
+        .get(format!(
+            "https://mooc1.chaoxing.com/mooc-ans/work/api/task?courseId={}&classId={}&pageNum=1&pageSize=100",
+            course.course_id, course.class_id))
+        .header("Referer", format!("https://mooc1.chaoxing.com/mooc-ans/mycourse/stu?courseid={}&clazzid={}",
+                                   course.course_id, course.class_id))
+        .send().await
+    {
+        if let Ok(v) = resp.json::<Value>().await {
+            let items = v["data"].as_array().cloned().unwrap_or_default();
+            let (total, pending) = count_tasks(&items, now);
+            t.work_total = total;
+            t.work_pending = pending;
+        }
+    }
+
+    crate::platform_client::wait_rate_limit().await;
+    if let Ok(resp) = client
+        .get(format!(
+            "https://mooc1.chaoxing.com/exam-ans/mooc2/exam/task?courseId={}&classId={}",
+            course.course_id, course.class_id))
+        .header("Referer", format!("https://mooc1.chaoxing.com/exam-ans/mooc2/exam/exam-list?courseid={}&clazzid={}",
+                                   course.course_id, course.class_id))
+        .send().await
+    {
+        if let Ok(v) = resp.json::<Value>().await {
+            let items = v["data"].as_array().cloned().unwrap_or_default();
+            let (total, pending) = count_tasks(&items, now);
+            t.exam_total = total;
+            t.exam_pending = pending;
+        }
+    }
+
+    // 学习广场（知识点视频）：课程没开广场/没资源时接口返回空块，计数自然为 0
+    if !course.person_id.is_empty() {
+        crate::platform_client::wait_rate_limit().await;
+        let url = format!("https://tsjy.chaoxing.com/plaza/knowledge-list?courseId={}", course.course_id);
+        if let Ok(resp) = client
+            .post(&url)
+            .header("Referer", format!("https://tsjy.chaoxing.com/plaza/knowledge-all?courseId={}", course.course_id))
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(format!(
+                "personId={}&classId={}&userId={}&classifyId=&element=0&point=0&name=&page=1&pageSize=100",
+                course.person_id, course.class_id, uid))
+            .send().await
+        {
+            if let Ok(html) = resp.text().await {
+                let (total, done) = count_points(&html);
+                t.video_total = total;
+                t.video_completed = done;
+            }
+        }
+        // 有效期：过期课程的“未学完”只是历史遗留状态，平台已不许学
+        t.rule = fetch_course_rule(client, uid, course).await;
+    }
+    t
 }
 
 /// 解析课程列表 HTML（对齐 Python：li[@class="course clearfix"] 的 xpath 提取）
@@ -434,6 +644,53 @@ pub async fn run_cx_scan_and_study(task: &ScanCxTaskInput, push_url: &str,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 作业/考试计数：已完成(3)不计；过期的旧任务不算"可做"（否则会去做平台已关闭的作业）
+    #[test]
+    fn test_count_tasks_respects_status_and_window() {
+        let now = 1_700_000_000_000i64;
+        let items = vec![
+            json!({"stuStatus": 3, "startTime": 0, "endTime": 0}),
+            json!({"stuStatus": 1, "startTime": 0, "endTime": 0}),
+            json!({"stuStatus": 1, "startTime": 0, "endTime": now + 1000}),
+            json!({"stuStatus": 1, "startTime": 0, "endTime": now - 1000}),
+            json!({"stuStatus": 0, "startTime": now + 10_000, "endTime": 0}),
+        ];
+        let (total, pending) = count_tasks(&items, now);
+        assert_eq!(total, 5);
+        assert_eq!(pending, 2, "只有未交且窗口开着的两条才算待办");
+    }
+
+    /// 学习广场知识点：接口不给结构化状态，从渲染文本里数「学习中 / 已学完」
+    #[test]
+    fn test_count_points_from_rendered_text() {
+        let html = r#"<div class="book-name">学习中 必学 甲</div>
+                      <div class="book-name">已学完 乙</div>
+                      <div class="book-name">学习中 必学 丙</div>"#;
+        assert_eq!(count_points(html), (3, 1));
+    }
+
+    /// 课程规则（plaza 首页 `var rule = '{...}'`）：过期课程必须识别为不可学，
+    /// 否则“29 个待学”会误导下单（平台对过期课程统一 403）
+    #[test]
+    fn test_parse_course_rule() {
+        let html = r#"<script>
+            var rule = '{"fid":"336900","isEffectiveDate":false,"courseMinScore":0,"endDate":"2026-06-14","beginDate":"2026-04-01","courseId":"260982075"}';
+            var joinClassId = '140481754';
+        </script>"#;
+        let r = parse_course_rule(html).expect("应解析出 rule");
+        assert!(!r.effective);
+        assert_eq!(r.begin_date, "2026-04-01");
+        assert_eq!(r.end_date, "2026-06-14");
+
+        // 有效期内
+        let html2 = r#"var rule = '{"isEffectiveDate":true,"beginDate":"2026-09-01","endDate":"2027-01-10"}';"#;
+        let r2 = parse_course_rule(html2).unwrap();
+        assert!(r2.effective);
+
+        // 非广场课：没有 rule → None（不能误判为过期）
+        assert!(parse_course_rule("<html>no rule here</html>").is_none());
+    }
 
     #[test]
     fn test_parse_course_list() {

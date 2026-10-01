@@ -267,6 +267,12 @@ pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
     let password = body["password"].as_str().unwrap_or("").to_string();
     let mut orders: Vec<Value> = body["orders"].as_array().cloned().unwrap_or_default();
 
+    // 学习通（website_id=4）执行链路尚未接入：订单会被塞进学校队列，用学校协议去打
+    // mooc1（登录协议完全不同），必然失败还会白刷平台的错误次数。入口先拦下。
+    if orders.iter().any(|o| o["website_id"].as_i64() == Some(4)) {
+        anyhow::bail!("学习通暂未开放下单（课程扫描已可用，刷课链路接入中）");
+    }
+
     // 价格唯一真相源是后端：逐单用后端算出的价覆盖客户端传值。
     // 旧实现只在"客户端总价与后端不一致且客户端总价>0"时才重算，
     // 于是把 price 全传 0 就能让 0 元订单落库（支付金额读库里的价格）→ 白嫖。

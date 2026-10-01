@@ -226,6 +226,14 @@ async fn report_progress(client: &Client, cookie: &str, ua: &str,
                 if code == 200 {
                     return resp.json().await.context("上报响应解析失败");
                 } else if code == 403 {
+                    // 403 是平台应用层拒绝（实测：课程不在有效学习时间时返回
+                    // 【9011】没有权限），重试不会成功 —— 直接带出平台原文案，
+                    // 让上层能区分“课程已结束”与网络问题
+                    let body = resp.text().await.unwrap_or_default();
+                    let reason = extract_perm_error(&body);
+                    if !reason.is_empty() {
+                        anyhow::bail!("进度上报被平台拒绝：{reason}");
+                    }
                     last_err = "403".to_string();
                     if attempt < 2 {
                         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -244,6 +252,21 @@ async fn report_progress(client: &Client, cookie: &str, ua: &str,
         }
     }
     anyhow::bail!("进度上报重试失败: {last_err}")
+}
+
+/// 从 403 页面提取平台文案（如“【9011】很抱歉，您没有权限访问这个页面！”）。
+/// 页面是完整 HTML：只截错误码开头的一小段，避免把整页塞进错误消息
+fn extract_perm_error(body: &str) -> String {
+    let start = match body.find('【') {
+        Some(i) => i,
+        None => return String::new(),
+    };
+    let rest = &body[start..];
+    let end = rest.char_indices()
+        .find(|(_, c)| *c == '<' || *c == '\r' || *c == '\n')
+        .map(|(i, _)| i)
+        .unwrap_or(rest.len().min(120));
+    rest[..end].trim().to_string()
 }
 
 fn percent_encode(s: &str) -> String {
@@ -510,4 +533,21 @@ pub async fn run_cx_study(task: &CxTaskInput, push_url: &str,
 fn truncate(s: &str, n: usize) -> String {
     let chars: Vec<char> = s.chars().take(n).collect();
     chars.into_iter().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 403 页面里的平台文案要能提取出来（区分“课程已结束”与网络问题）
+    #[test]
+    fn test_extract_perm_error() {
+        let body = r#"<!DOCTYPE html><html><body><p>【9011】很抱歉，您没有权限访问这个页面！code=14 430580003</p></body></html>"#;
+        let s = extract_perm_error(body);
+        assert!(s.starts_with("【9011】"), "{s}");
+        assert!(s.contains("没有权限"), "{s}");
+        assert!(s.len() <= 120, "不应把整页塞进错误消息");
+        // 没有错误码的正常页面 → 空串（调用方保留重试语义）
+        assert_eq!(extract_perm_error("<html>ok</html>"), "");
+    }
 }

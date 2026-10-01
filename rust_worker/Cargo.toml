@@ -28,6 +28,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenvy = "0.15"
 regex = "1.13.1"
+# 学习通登录要用 AES-128-CBC 加密手机号/密码（版本与 aes-gcm 的传递依赖一致，不新增下载）
+aes = "0.9"
 # 首页链接解析（相对链接 join）；版本已在 Cargo.lock 中（reqwest/scraper 的传递依赖）
 url = "2"
 bcrypt = "0.19"

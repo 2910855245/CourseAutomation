@@ -9,6 +9,7 @@
 mod api;
 mod auth;
 mod crypto;
+mod cx_login;
 mod cx_quiz;
 mod cx_scan;
 mod cx_study;

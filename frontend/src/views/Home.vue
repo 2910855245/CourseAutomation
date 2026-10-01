@@ -11,12 +11,12 @@ const store = useAppStore()
 const { load: loadPlatformNames, getName: getPlatformName } = usePlatformNames()
 
 const {
-  username, password, scanning, rescanning, scanDone, allDone, isLeaving, scanData, countdown,
+  username, password, scanning, rescanning, scanDone, allDone, allEnded, isLeaving, scanData, countdown,
   activeTab, chaoxingUsername, chaoxingPassword, startChaoxingScan,
   loginError, failedPlatforms, reloginDialog, reloginPassword, reloginLoading, loginErrorCountdown,
   submittedCourseIds, allInProgress, pendingOrderedCourseIds, checkedCourseIds,
   loadingPrices, backendPrices, speedMode, setSpeedMode,
-  isCourseDone, isCourseDoneOrSubmitted, visiblePlatforms, togglePlatform, toggleCourse, isPlatformAllChecked,
+  isCourseDone, isCourseEnded, isCourseActionable, visiblePlatforms, togglePlatform, toggleCourse, isPlatformAllChecked,
   summary, scenario, studentName, chaoxingInfo,
   startScan, resetScan, rescan, openReloginDialog, closeReloginDialog, submitRelogin,
   fetchBackendPrices, saveSession,
@@ -83,10 +83,12 @@ const SCENARIO_NOTES: Record<string, { tag: string; text: string }> = {
 }
 const scenarioNote = computed(() => SCENARIO_NOTES[scenario.value] ?? null)
 
-// 全屏状态屏（完成 / 进行中 / 失败）的色调
+// 全屏状态屏（完成 / 进行中 / 已结束 / 失败）的色调
 const stateTone = computed(() => {
   if (allDone.value) return 'tone-ok'
   if (allInProgress.value) return 'tone-live'
+  // 课程已结束不是失败：用中性色，避免用户以为账号或系统出错
+  if (allEnded.value) return 'tone-live'
   return 'tone-bad'
 })
 
@@ -136,7 +138,7 @@ onMounted(async () => {
     <main class="content-wrapper">
       <!-- ==================== 全屏状态屏 ==================== -->
       <section
-        v-if="allDone || allInProgress || loginError === 'all'"
+        v-if="allDone || allInProgress || allEnded || loginError === 'all'"
         class="state-screen"
       >
         <div :class="['state-card', stateTone, isLeaving ? 'is-leaving' : 'anim-rise']">
@@ -147,26 +149,30 @@ onMounted(async () => {
             <svg v-else-if="allInProgress" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.5 2" />
             </svg>
+            <svg v-else-if="allEnded" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" />
+            </svg>
             <svg v-else width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M18 6L6 18M6 6l12 12" />
             </svg>
           </div>
 
           <span class="eyebrow">
-            {{ allDone ? '全部完成' : allInProgress ? '处理中' : '登录未通过' }}
+            {{ allDone ? '全部完成' : allInProgress ? '处理中' : allEnded ? '无待办' : '登录未通过' }}
           </span>
           <h1 class="state-title">
-            {{ allDone ? '所有课程已完成' : allInProgress ? '任务正在进行中' : '平台登录失败' }}
+            {{ allDone ? '所有课程已完成' : allInProgress ? '任务正在进行中' : allEnded ? '暂无可处理的课程' : '平台登录失败' }}
           </h1>
           <p class="state-desc">
             <template v-if="allDone">扫描到的所有课程均已 100% 完成，无需下单。</template>
             <template v-else-if="allInProgress">所有课程已提交，系统正在自动处理，进度可在订单页实时查看。</template>
+            <template v-else-if="allEnded">扫描到的课程不在有效学习时间内，或没有未完成的线上任务。</template>
             <template v-else-if="activeTab === 'chaoxing'">学习通登录失败，请检查账号与密码是否正确。</template>
             <template v-else>所有平台均登录失败，请检查学号与密码是否正确。</template>
           </p>
 
           <div class="state-countdown">
-            <span class="mono">{{ allDone ? countdown : allInProgress ? autoRedirectCountdown : loginErrorCountdown }}</span>
+            <span class="mono">{{ allDone || allEnded ? countdown : allInProgress ? autoRedirectCountdown : loginErrorCountdown }}</span>
             秒后{{ allInProgress ? '自动跳转到订单页' : '返回登录页' }}
           </div>
 
@@ -274,7 +280,7 @@ onMounted(async () => {
                 <template v-else>
                   <span class="rh-meta-item">{{ visiblePlatforms.filter(p => p.status === 'ok').length }} 个平台已登录</span>
                   <span class="rh-meta-item">{{ visiblePlatforms.reduce((s, p) => s + p.courses.length, 0) }} 门课程</span>
-                  <span class="rh-meta-item">{{ visiblePlatforms.reduce((s, p) => s + p.courses.filter(c => !isCourseDoneOrSubmitted(c)).length, 0) }} 门待处理</span>
+                  <span class="rh-meta-item">{{ visiblePlatforms.reduce((s, p) => s + p.courses.filter(c => isCourseActionable(c)).length, 0) }} 门待处理</span>
                 </template>
               </div>
             </div>
@@ -307,7 +313,7 @@ onMounted(async () => {
                 <input
                   type="checkbox"
                   :checked="isPlatformAllChecked(p)"
-                  :indeterminate="!isPlatformAllChecked(p) && p.courses.some(c => !isCourseDoneOrSubmitted(c) && checkedCourseIds.has(c.course_id))"
+                  :indeterminate="!isPlatformAllChecked(p) && p.courses.some(c => isCourseActionable(c) && checkedCourseIds.has(c.course_id))"
                   @change="togglePlatform(p.website_id, ($event.target as HTMLInputElement).checked)"
                 />
               </label>
@@ -315,7 +321,7 @@ onMounted(async () => {
               <span class="pb-badge" :class="p.status === 'ok' ? 'ok' : 'fail'">
                 {{ p.status === 'ok' ? '已登录' : '未登录' }}
               </span>
-              <span class="pb-count mono">{{ p.courses.filter(c => !isCourseDoneOrSubmitted(c)).length }} 门待处理</span>
+              <span class="pb-count mono">{{ p.courses.filter(c => isCourseActionable(c)).length }} 门待处理</span>
             </div>
 
             <div class="course-list">
@@ -323,13 +329,13 @@ onMounted(async () => {
                 v-for="c in p.courses.filter(x => !submittedCourseIds.has(x.course_id))"
                 :key="c.course_id"
                 class="course-row"
-                :class="{ 'is-done': isCourseDone(c), 'is-checked': checkedCourseIds.has(c.course_id) }"
+                :class="{ 'is-done': isCourseDone(c), 'is-ended': isCourseEnded(c) && !isCourseDone(c), 'is-checked': checkedCourseIds.has(c.course_id) }"
               >
                 <label class="cr-check">
                   <input
                     type="checkbox"
                     :checked="checkedCourseIds.has(c.course_id)"
-                    :disabled="isCourseDone(c)"
+                    :disabled="isCourseDone(c) || isCourseEnded(c)"
                     @change="toggleCourse(c.course_id)"
                   />
                 </label>
@@ -338,11 +344,22 @@ onMounted(async () => {
                   <div class="cr-top">
                     <span class="cr-name">{{ c.course_name }}</span>
                     <template v-if="p.website_id === 4">
-                      <span v-if="c.has_points_system" class="cr-pill">{{ c.points_total ?? 0 }}/{{ chaoxingInfo?.pointsTarget ?? 200 }} 积分</span>
-                      <span v-if="(c.points_remaining ?? 0) > 0" class="cr-pill warn">还需 {{ c.days_needed ?? 4 }} 天</span>
-                      <span v-else-if="c.has_points_system" class="cr-pill ok">积分达标</span>
-                      <span v-if="(c.work_pending ?? 0) > 0" class="cr-pill warn">{{ c.work_pending }} 个待完成作业</span>
-                      <span v-else-if="(c.work_total ?? 0) > 0" class="cr-pill ok">作业已完成</span>
+                      <!-- 课程不在有效学习时间：平台已关闭学习入口，只显示状态，不再报“待学/待考” -->
+                      <span v-if="isCourseEnded(c) && !isCourseDone(c)" class="cr-pill muted">
+                        已结束{{ c.end_date ? ' · ' + c.end_date : '' }}
+                      </span>
+                      <template v-else>
+                        <span v-if="c.has_points_system" class="cr-pill">{{ c.points_total ?? 0 }}/{{ chaoxingInfo?.pointsTarget ?? 200 }} 积分</span>
+                        <span v-if="(c.points_remaining ?? 0) > 0" class="cr-pill warn">还需 {{ c.days_needed ?? 4 }} 天</span>
+                        <span v-else-if="c.has_points_system" class="cr-pill ok">积分达标</span>
+                        <span v-if="(c.work_pending ?? 0) > 0" class="cr-pill warn">{{ c.work_pending }} 个待完成作业</span>
+                        <span v-else-if="(c.work_total ?? 0) > 0" class="cr-pill ok">作业已完成</span>
+                        <!-- 网课（学习广场知识点）与考试：有网课看网课、有考试做考试 -->
+                        <span v-if="(c.video_pending ?? 0) > 0" class="cr-pill warn">{{ c.video_pending }} 个待学</span>
+                        <span v-else-if="(c.video_total ?? 0) > 0" class="cr-pill ok">网课已学完</span>
+                        <span v-if="(c.exam_pending ?? 0) > 0" class="cr-pill warn">{{ c.exam_pending }} 场待考</span>
+                        <span v-else-if="(c.exam_total ?? 0) > 0" class="cr-pill ok">考试已完成</span>
+                      </template>
                     </template>
                     <template v-else>
                       <span class="cr-pill" :class="c.video_pending > 0 ? 'warn' : 'ok'">{{ c.video_pending }} 剩余</span>
@@ -364,6 +381,7 @@ onMounted(async () => {
                   <span v-if="coursePrice(c) > 0" class="cr-price mono">¥{{ coursePrice(c).toFixed(2) }}</span>
                   <span v-else-if="loadingPrices" class="cr-done-tag">计价中…</span>
                   <span v-else-if="isCourseDone(c)" class="cr-done-tag">已完成</span>
+                  <span v-else-if="isCourseEnded(c)" class="cr-done-tag">已结束</span>
                 </div>
               </div>
             </div>
@@ -1098,6 +1116,9 @@ onMounted(async () => {
 .cr-pill.warn { background: var(--c-warning-bg); color: var(--c-warning); }
 .cr-pill.ok { background: var(--c-success-bg); color: var(--c-success); }
 .cr-pill.deleted { text-decoration: line-through; opacity: .7; }
+/* 课程不在有效学习时间：静态状态，不用警示色抢注意力 */
+.cr-pill.muted { background: var(--c-surface-3); color: var(--c-text-muted); }
+.course-row.is-ended { opacity: .55; }
 
 .cr-meter { display: flex; align-items: center; gap: 10px; }
 .cr-meter-track {
