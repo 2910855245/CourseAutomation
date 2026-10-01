@@ -22,6 +22,12 @@ use crate::platform_client::{CONNECT_TIMEOUT, REQUEST_TIMEOUT};
 const VIDEO_REFERER: &str =
     "https://mooc1.chaoxing.com/ananas/modules/video/index.html?v=2025-0725-1842";
 
+/// "没有可自动处理的任务"类失败的统一前缀。
+///
+/// 这类结果**重试不会改变**（课程已结束 / 没有积分视频），队列侧据此跳过重试策略
+/// 直接终态 —— 此前每单要白跑 3 次登录 + 3 次扫描，既慢又平白打平台接口。
+pub const NO_WORK_PREFIX: &str = "无可处理任务：";
+
 #[derive(Debug, Deserialize)]
 pub struct ScanCxTaskInput {
     pub order_id: String,
@@ -544,7 +550,7 @@ pub async fn run_cx_scan_and_study(task: &ScanCxTaskInput, push_url: &str,
     if selected.is_empty() {
         write_cx_status(task.status_file.as_deref(), "error", "未找到进行中的课程",
                         Some(true), Some(false), &[]).await;
-        anyhow::bail!("未找到进行中的课程");
+        anyhow::bail!("{NO_WORK_PREFIX}所选课程都不在有效学习时间内（平台已关闭学习入口）");
     }
     write_cx_status(task.status_file.as_deref(), "crawl",
                     &format!("获取到 {} 门课程", selected.len()), None, None, &[]).await;
@@ -626,7 +632,7 @@ pub async fn run_cx_scan_and_study(task: &ScanCxTaskInput, push_url: &str,
     if all_points.is_empty() {
         write_cx_status(task.status_file.as_deref(), "error", "无视频任务",
                         Some(true), Some(false), &[]).await;
-        anyhow::bail!("无视频任务");
+        anyhow::bail!("{NO_WORK_PREFIX}所选课程没有待处理的积分/必学视频（学习通作业与考试暂未支持）");
     }
 
     write_cx_status(task.status_file.as_deref(), "study_must_learn",

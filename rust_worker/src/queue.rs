@@ -636,7 +636,21 @@ async fn execute_chaoxing_job(state: &AppState, job: &QueueJob) {
             sync_order_state(state, job, "completed", "").await;
             tracing::info!(job_id = %job.job_id, "学习通任务完成");
         }
-        Err(e) => handle_job_failure(state, job, QueueKind::Chaoxing, &e.to_string()).await,
+        Err(e) => {
+            let msg = e.to_string();
+            // "无可处理任务"（课程已结束 / 没有积分视频）重试不会改变结果：
+            // 直接终态，省掉 3 次无谓的登录+扫描，也让顾客尽快看到明确原因
+            if msg.contains(crate::cx_scan::NO_WORK_PREFIX) {
+                let _ = update_job(state, job, QueueKind::Chaoxing,
+                                   &[("status", "failed".into()),
+                                     ("error_message", msg.clone()),
+                                     ("finished_at", now_str())]).await;
+                sync_order_state(state, job, "failed", &msg).await;
+                tracing::warn!(job_id = %job.job_id, error = %msg, "学习通无可处理任务（不重试）");
+            } else {
+                handle_job_failure(state, job, QueueKind::Chaoxing, &msg).await;
+            }
+        }
     }
 }
 
