@@ -24,14 +24,6 @@ use crate::speed::{SpeedMode, SpeedProfile};
 /// studyTime 报满后的续报间隔（秒）。见 [`next_tick_secs`]。
 const TAIL_TICK_SECS: f64 = 30.0;
 
-/// 收尾时墙钟比"比率×时长"多留的秒数。
-///
-/// 平台按**首末上报的时间跨度**记已学时长，而它的计时起点是第一份上报到达的时刻——
-/// 比我们进入循环晚一次网络往返，收尾时也就少认这点时间。保守档 wall_ratio=1.0
-/// 没有余量，缺这几秒会让平台永远停在"总长 − 20"，每节都差一口气不判完成。
-/// 保守档只多等 3s（不影响"报满即收工"的体感），急速/均衡档本就 2.1× 富余。
-const SESSION_LEAD_MARGIN_SECS: f64 = 3.0;
-
 /// 一次循环该睡多久（秒）。
 ///
 /// 视频的时间轴分两段：
@@ -391,7 +383,7 @@ async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
     loop {
         // 报满 studyTime 后一次睡到下一续报点，不再每秒空转（见 next_tick_secs）
         let past_target = total_time >= actual_target;
-        let wall_left = duration as f64 * shared.profile.wall_ratio + SESSION_LEAD_MARGIN_SECS
+        let wall_left = duration as f64 * shared.profile.wall_ratio
             - start.elapsed().as_secs_f64();
         let tick = next_tick_secs(past_target, wall_left);
         if tick > 0.0 {
@@ -417,7 +409,6 @@ async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
         // 首报必须立刻发：平台的"本次学习时长"从**第一份上报到达**时开始计时，
         // 而自适应间隔会把首报压到 interval 之后（大视频 30s）——会话起点随之晚 30s，
         // 收尾时平台只认到"墙钟 − 30"，于是每节都停在总长−20 秒、永远差一口气不判完成。
-        // （原先条件里的 `|| force` 是干这个的，迁移时漏掉了，见 SESSION_LEAD_MARGIN_SECS。）
         if force || total_time >= actual_target || total_time - last_report >= interval {
             last_report = total_time;
             let mut retries = 0;
@@ -498,10 +489,9 @@ async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
             }
         }
 
-        // 完成条件：studyTime 报满 + 墙钟 ≥ 比率×时长 + 会话起点余量
+        // 完成条件：studyTime 报满 + 墙钟 ≥ 比率×时长（保守档比率=1.0，报满即收工）
         if total_time >= actual_target
-            && start.elapsed().as_secs_f64()
-                >= duration as f64 * shared.profile.wall_ratio + SESSION_LEAD_MARGIN_SECS
+            && start.elapsed().as_secs_f64() >= duration as f64 * shared.profile.wall_ratio
         {
             return Ok(true);
         }
