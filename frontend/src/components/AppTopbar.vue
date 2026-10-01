@@ -31,21 +31,13 @@ const roleBadge = computed(() => (isAdmin.value ? '管理员' : ''))
 <template>
   <header class="topbar">
     <div class="topbar-inner">
-      <!-- 标识：描边徽标 + 字标。原来是"渐变方块里一个 F"（纯色块），
-           换成线框 + 播放三角的组合：既表达"网课视频"，也不再是一块色块 -->
+      <!-- 标识：单色描边几何 F —— 无外框、无底色、无渐变，只靠两笔横一竖立住，
+           颜色随主题自动深浅（用户点名要"简单"） -->
       <router-link to="/" class="logo">
         <span class="logo-mark" aria-hidden="true">
-          <svg width="26" height="26" viewBox="0 0 32 32" fill="none">
-            <defs>
-              <linearGradient id="topbar-logo-grad" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
-                <stop offset="0" style="stop-color: var(--c-primary)" />
-                <stop offset="1" style="stop-color: var(--c-primary-hover)" />
-              </linearGradient>
-            </defs>
-            <rect x="2.4" y="2.4" width="27.2" height="27.2" rx="9"
-                  stroke="url(#topbar-logo-grad)" stroke-width="2.3" />
-            <path d="M13.6 11.9v8.2c0 .95 1.05 1.53 1.85 1.02l6.3-4.1a1.2 1.2 0 0 0 0-2.04l-6.3-4.1c-.8-.51-1.85.07-1.85 1.02z"
-                  fill="url(#topbar-logo-grad)" />
+          <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M7.5 4.8h9M7.5 12h6.8M7.5 4.8v14.4" />
           </svg>
         </span>
         <span class="logo-text">{{ title }}</span>
@@ -113,14 +105,13 @@ const roleBadge = computed(() => (isAdmin.value ? '管理员' : ''))
 /* ---------- 标识 ---------- */
 .logo { display: inline-flex; align-items: center; gap: 9px; text-decoration: none; }
 .logo:hover { opacity: 1; text-decoration: none; }
-/* 描边徽标：不再用"渐变方块 + 字母"，随主题自动换品牌蓝的深浅 */
+/* 极简线标：单色、无外框、无阴影，只有品牌蓝描边 */
 .logo-mark {
   width: 26px;
   height: 26px;
   display: grid;
   place-content: center;
   color: var(--c-primary);
-  filter: drop-shadow(0 1px 5px color-mix(in srgb, var(--c-primary) 32%, transparent));
   transition: transform var(--t) var(--ease);
 }
 .logo:hover .logo-mark { transform: translateY(-1px) scale(1.03); }
