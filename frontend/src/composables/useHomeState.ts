@@ -293,12 +293,26 @@ export function useHomeState() {
   })
 
   // ── Scan logic ──
+  // 扫描秒表：首轮要逐节读视频文件补真实时长，十几到几十秒都有可能。
+  // 只转一个 spinner 会被当成"卡死"，把等待秒数显示出来才让人敢等。
+  const scanElapsed = ref(0)
+  let scanTimer: ReturnType<typeof setInterval> | null = null
+  function startScanTimer() {
+    stopScanTimer()
+    scanElapsed.value = 0
+    scanTimer = setInterval(() => { scanElapsed.value++ }, 1000)
+  }
+  function stopScanTimer() {
+    if (scanTimer) { clearInterval(scanTimer); scanTimer = null }
+  }
+
   async function startScan() {
     if (!username.value.trim() || !password.value.trim()) { store.toast('请输入学号和密码', 'warning'); return }
     if (countdownTimer) clearInterval(countdownTimer)
     if (loginErrorTimer) { clearInterval(loginErrorTimer); loginErrorTimer = null }
     scanning.value = true; submitSuccess.value = false; allDone.value = false; allEnded.value = false
     loginError.value = null; failedPlatforms.value = []; countdown.value = 3; loginErrorCountdown.value = 3
+    startScanTimer()
     try {
       const res = await api.courses.scan({ username: username.value.trim(), password: password.value.trim(), include_records: true })
       scanData.value = res.data.platforms
@@ -331,7 +345,7 @@ export function useHomeState() {
       store.toast(`扫描完成：${okPlatforms.length} 个平台成功，共 ${total} 门课程`, 'success')
       await fetchBackendPrices()
     } catch (e: any) { store.toast('扫描失败：' + (e?.message || '网络错误'), 'error') }
-    finally { scanning.value = false; rescanning.value = false }
+    finally { scanning.value = false; rescanning.value = false; stopScanTimer() }
   }
 
   async function startChaoxingScan() {
@@ -340,6 +354,7 @@ export function useHomeState() {
     if (countdownTimer) clearInterval(countdownTimer)
     scanning.value = true; submitSuccess.value = false; allDone.value = false; allEnded.value = false
     loginError.value = null; failedPlatforms.value = []
+    startScanTimer()
     try {
       const res = await api.courses.scanChaoxing({ username: chaoxingUsername.value.trim(), password: chaoxingPassword.value.trim() })
       const platform = res.data.platform
@@ -362,7 +377,7 @@ export function useHomeState() {
       scanDone.value = true
       store.toast(`学习通扫描完成，共 ${platform.courses.length} 门课程`, 'success')
     } catch (e: any) { store.toast('扫描失败：' + (e?.message || '网络错误'), 'error') }
-    finally { scanning.value = false; rescanning.value = false }
+    finally { scanning.value = false; rescanning.value = false; stopScanTimer() }
   }
 
   function resetScan() {
@@ -374,6 +389,7 @@ export function useHomeState() {
     checkedCourseIds.value = new Set(); submittedCourseIds.value = new Set(); pendingOrderedCourseIds.value = []
     loginError.value = null; failedPlatforms.value = []; submitSuccess.value = false
     rescanning.value = false; scanning.value = false; paying.value = false
+    stopScanTimer()
     password.value = ''
     countdown.value = 3; loginErrorCountdown.value = 3
     showPayModal.value = false; payTimedOut.value = false; payQrCode.value = ''
@@ -714,6 +730,7 @@ export function useHomeState() {
     // Scan
     username, password, scanning, rescanning, scanDone, allDone, allEnded, isLeaving, scanData, countdown,
     activeTab, chaoxingUsername, chaoxingPassword, startChaoxingScan,
+    scanElapsed,
     loginError, failedPlatforms, reloginDialog, reloginPassword, reloginLoading, loginErrorCountdown,
     submittedCourseIds, allInProgress, pendingOrderedCourseIds, checkedCourseIds,
     savedData, loadingPrices, backendPrices,

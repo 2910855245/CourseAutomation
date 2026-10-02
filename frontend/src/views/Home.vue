@@ -12,7 +12,7 @@ const { load: loadPlatformNames, getName: getPlatformName } = usePlatformNames()
 
 const {
   username, password, scanning, rescanning, scanDone, allDone, allEnded, isLeaving, scanData, countdown,
-  activeTab, chaoxingUsername, chaoxingPassword, startChaoxingScan,
+  activeTab, chaoxingUsername, chaoxingPassword, startChaoxingScan, scanElapsed,
   loginError, failedPlatforms, reloginDialog, reloginPassword, reloginLoading, loginErrorCountdown,
   submittedCourseIds, allInProgress, pendingOrderedCourseIds, checkedCourseIds,
   loadingPrices, backendPrices, speedMode, setSpeedMode,
@@ -251,9 +251,14 @@ onMounted(async () => {
                   @click="activeTab === 'chaoxing' ? startChaoxingScan() : startScan()"
                 >
                   <span v-if="!scanning">登录并扫描</span>
-                  <span v-else class="login-cta-loading"><span class="spinner"></span>扫描中…</span>
+                  <span v-else class="login-cta-loading"><span class="spinner"></span>扫描中… {{ scanElapsed }}s</span>
                 </button>
               </form>
+
+              <p v-if="scanning" class="scan-note">
+                正在登录平台并逐节读取视频真实时长。首次扫描最慢（每节要拉一次视频文件头），
+                之后同一批课会走缓存，几秒就好 —— 请勿关闭页面。
+              </p>
 
               <p class="login-foot">支持在线课程、劳动课程、公益课程、学习通等平台</p>
             </div>
@@ -950,6 +955,15 @@ onMounted(async () => {
   padding-top: var(--space-5);
   border-top: 1px solid var(--c-border-light);
   font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+  text-align: center;
+}
+
+/* 扫描等待说明：把"为什么慢"讲清楚，避免被当成卡死 */
+.scan-note {
+  margin-top: var(--space-4);
+  font-size: var(--fs-xs);
+  line-height: 1.75;
   color: var(--c-text-muted);
   text-align: center;
 }

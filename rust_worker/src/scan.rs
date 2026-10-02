@@ -12,7 +12,7 @@ use rand::RngExt;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::study::{run_study, TaskInput, Video};
@@ -294,6 +294,45 @@ async fn media_probe_sem() -> &'static Arc<tokio::sync::Semaphore> {
         .await
 }
 
+/// 进程级视频时长缓存（key → 秒）。
+///
+/// 为什么必须有：探测一次要 GET 512KB×1~2 段才能读到 mvhd，41 节就是一二十兆
+/// 流量 + 二十来秒墙钟，而**时长是恒定值** —— 每次扫描/刷课重探是纯浪费，
+/// 老板反馈的"扫描卡半天"大头就在这里（列表接口只花 3 秒）。
+///
+/// key 用 `base_url#course_id#node_id`：三个学校平台是同款软件，course_id / node_id
+/// 各自独立分配，不带站点前缀会串台；串台会把别的学校的时长当成自己的，
+/// 短了这节课永远刷不完、长了平台不认账，都是订单失败。
+///
+/// 只存进程内存不落库：这是纯加速用的派生数据，重启后重探一次即可，
+/// 而落库要为它把 Db 句柄一路穿到扫描/刷课/考试三条调用链上，不值当。
+static DURATION_CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, u64>>> =
+    std::sync::OnceLock::new();
+
+/// 缓存条数上限。到顶就整表清空 —— 这类数据任何时候都可以重建，
+/// 与其做 LRU 不如用一个粗暴但有界的上限，避免长跑进程无限吃内存。
+const DURATION_CACHE_MAX: usize = 20_000;
+
+fn duration_cache() -> &'static std::sync::Mutex<HashMap<String, u64>> {
+    DURATION_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+fn duration_cache_key(base_url: &str, course_id: &str, node_id: &str) -> String {
+    format!("{}#{}#{}", base_url.trim_end_matches('/'), course_id, node_id)
+}
+
+pub(crate) fn duration_cache_get(key: &str) -> Option<u64> {
+    duration_cache().lock().ok()?.get(key).copied()
+}
+
+pub(crate) fn duration_cache_put(key: String, secs: u64) {
+    let Ok(mut m) = duration_cache().lock() else { return };
+    if m.len() >= DURATION_CACHE_MAX {
+        m.clear();
+    }
+    m.insert(key, secs);
+}
+
 fn be32(b: &[u8], i: usize) -> Option<u32> {
     b.get(i..i + 4).map(|s| u32::from_be_bytes(s.try_into().unwrap()))
 }
@@ -363,17 +402,35 @@ async fn probe_media_duration(client: &Client, url: &str) -> Option<u64> {
 /// 探测成功取两者较大值（mvhd 一般比元数据大 1~2s，多报无妨；元数据偏小时以真值为准）；
 /// 探测失败（签名地址过期等）保留元数据值；两者都拿不到才留 `None`，
 /// 由刷课侧显式失败 —— 绝不猜一个数字糊过去。
-async fn fill_durations_from_media(client: &Client, videos: &mut [Video]) {
-    let pending: Vec<(usize, String)> = videos.iter().enumerate()
-        .filter_map(|(i, v)| v.local_file.clone().map(|u| (i, u)))
-        .collect();
+async fn fill_durations_from_media(client: &Client, base_url: &str, videos: &mut [Video]) {
+    // 第一遍吃缓存：命中的直接抬到文件真值，不再为它发一次探测请求。
+    // （这一遍是"扫描提速"的全部收益来源 —— 同一节课只在进程内被探一次）
+    let mut pending: Vec<(usize, String, String)> = Vec::new();
+    let mut hits = 0usize;
+    let mut with_file = 0usize;
+    for (i, v) in videos.iter_mut().enumerate() {
+        let Some(url) = v.local_file.clone() else { continue };
+        with_file += 1;
+        let key = duration_cache_key(base_url, &v.course_id, &v.node_id);
+        match duration_cache_get(&key) {
+            Some(secs) => {
+                // 与平台元数据取较大值，口径与探测成功后完全一致
+                v.duration = Some(v.duration.map_or(secs, |d| d.max(secs)));
+                hits += 1;
+            }
+            None => pending.push((i, url, key)),
+        }
+    }
     if pending.is_empty() {
+        if hits > 0 {
+            tracing::info!(hits, with_file, "视频时长全部命中缓存，跳过媒体探测");
+        }
         return;
     }
     let total = pending.len();
     let sem = media_probe_sem().await.clone();
     let mut set = tokio::task::JoinSet::new();
-    for (idx, url) in pending {
+    for (idx, url, key) in pending {
         let permit = match sem.clone().acquire_owned().await {
             Ok(p) => p,
             Err(_) => break,
@@ -381,25 +438,28 @@ async fn fill_durations_from_media(client: &Client, videos: &mut [Video]) {
         let c = client.clone();
         set.spawn(async move {
             let _permit = permit;
-            (idx, probe_media_duration(&c, &url).await)
+            (idx, key, probe_media_duration(&c, &url).await)
         });
     }
     let mut filled = 0usize;
     while let Some(r) = set.join_next().await {
-        if let Ok((idx, Some(secs))) = r {
+        if let Ok((idx, key, Some(secs))) = r {
             // 与平台元数据取较大值：真实文件长度才是人肉播放能到达的上限
             videos[idx].duration = Some(match videos[idx].duration {
                 Some(d) => d.max(secs),
                 None => secs,
             });
+            // 只缓存探测成功的：失败值（None）不写，下次仍会重试
+            duration_cache_put(key, secs);
             filled += 1;
         }
     }
     let without = videos.iter().filter(|v| v.duration.is_none()).count();
     if filled < total {
-        tracing::warn!(filled, total, without, "部分视频文件读不出时长（有元数据的已退回兜底值，无元数据的会显式失败）");
+        tracing::warn!(filled, total, cached = hits, without,
+                       "部分视频文件读不出时长（有元数据的已退回兜底值，无元数据的会显式失败）");
     } else {
-        tracing::info!(filled, total, "已用视频文件校准全部时长");
+        tracing::info!(filled, total, cached = hits, "已用视频文件校准全部时长");
     }
 }
 
@@ -472,7 +532,7 @@ pub async fn fetch_course_videos(client: &Client, cookie: &str, base_url: &str,
     let page_count = first["pageInfo"]["pageCount"].as_u64().unwrap_or(1) as u32;
     if page_count <= 1 {
         // 分页收尾统一在这里补时长，避免多页时漏掉
-        fill_durations_from_media(client, &mut videos).await;
+        fill_durations_from_media(client, base_url, &mut videos).await;
         return Ok(videos);
     }
     // 推测预取：剩余页并发全发
@@ -487,7 +547,7 @@ pub async fn fetch_course_videos(client: &Client, cookie: &str, base_url: &str,
             }
         }
     }
-    fill_durations_from_media(client, &mut videos).await;
+    fill_durations_from_media(client, base_url, &mut videos).await;
     Ok(videos)
 }
 
@@ -706,6 +766,25 @@ mod tests {
         assert!(!needs_exam("video"));
         assert!(!needs_exam("chaoxing_points"));
         assert!(!needs_exam(""));
+    }
+
+    /// 时长缓存：同一节课第二次扫描必须命中，且站点前缀不同不许串台。
+    ///
+    /// 串台是这里唯一有破坏性的错误：三个平台同款软件、course_id/node_id
+    /// 各自独立编号，key 里少了 base_url 就会把别校的时长当成自己的 ——
+    /// 短了这节课永远刷不完，长了平台不认账，两种都是订单失败。
+    #[test]
+    fn test_duration_cache_key_isolates_platforms() {
+        let a = duration_cache_key("https://p1.example.com/", "c1", "n1");
+        let b = duration_cache_key("https://p2.example.com", "c1", "n1");
+        assert_ne!(a, b, "不同站点的同名课程不能共用一条缓存");
+        // 末尾斜杠不参与区分（同一站点的两种写法必须同 key）
+        assert_eq!(a, duration_cache_key("https://p1.example.com", "c1", "n1"));
+
+        let key = "https://cache-test.example.com#c#n";
+        assert_eq!(duration_cache_get(key), None);
+        duration_cache_put(key.to_string(), 273);
+        assert_eq!(duration_cache_get(key), Some(273));
     }
 
     #[test]
