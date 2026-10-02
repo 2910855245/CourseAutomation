@@ -199,7 +199,10 @@ onMounted(async () => {
           <div class="login-stack">
             <header class="hero">
               <h1 class="hero-title">登录平台账号</h1>
-              <!-- 只留这一行：它是"要花多少钱"焦虑的唯一解药，其余解释都是废话 -->
+              <!-- 一行说清"它能替我做什么"：用户是带着"我还有哪些课没刷完"来的，
+                   不是来读产品介绍的，所以只讲动作与结果，不讲卖点 -->
+              <p class="hero-lead">输入学号密码，自动扫出全部未完成课程，一键提交。</p>
+              <!-- 这一行解"要花多少钱"的焦虑，与上面分工明确，不重复 -->
               <p class="hero-note">刷视频免费 · 答题/考试按门收费 · 提交前先看价</p>
             </header>
 
@@ -812,11 +815,17 @@ onMounted(async () => {
   font-weight: 700;
   letter-spacing: -.032em;
   line-height: 1.1;
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+/* 一句话价值：说清"扫出未完成课程、一键提交"这个动作，比形容词有用 */
+.hero-lead {
+  font-size: var(--fs-md);
+  color: var(--c-text-secondary);
+  letter-spacing: .01em;
 }
 /* 首屏价格口径：把"花多少钱"提前说清楚，降低下单心理门槛 */
 .hero-note {
-  margin-top: var(--space-4);
+  margin-top: var(--space-3);
   font-size: var(--fs-xs);
   color: var(--c-text-muted);
   letter-spacing: .01em;

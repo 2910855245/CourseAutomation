@@ -188,7 +188,8 @@ pub fn emit(
         order_id: order_id.to_string(),
         node_id: node_id.to_string(),
         message: message.into(),
-        detail,
+        // 唯一写入口做脱敏：面板与 DB 都从这里取数，堵这一处即可
+        detail: detail.map(redact),
     };
     st.total.fetch_add(1, Ordering::Relaxed);
 
@@ -561,20 +562,29 @@ async fn clear_logs(State(_state): State<AppState>) -> Json<Value> {
 }
 
 /// 脱敏：写入 detail 前统一过一道，避免密码/cookie/token 进面板与数据库。
-pub fn redact(mut v: Value) -> Value {
+///
+/// 递归处理嵌套对象与数组：上报/域名明细都是嵌套结构，只洗顶层等于没洗
+/// （`{"req":{"password":"..."}}` 会原样落库）。
+pub fn redact(v: Value) -> Value {
     const SENSITIVE: &[&str] = &[
         "password", "pwd", "cookie", "token", "authorization", "secret", "sign",
     ];
-    if let Some(obj) = v.as_object_mut() {
-        let keys: Vec<String> = obj.keys().cloned().collect();
-        for k in keys {
-            let lower = k.to_ascii_lowercase();
-            if SENSITIVE.iter().any(|s| lower.contains(s)) {
-                obj.insert(k, json!("***"));
+    match v {
+        Value::Object(mut obj) => {
+            let keys: Vec<String> = obj.keys().cloned().collect();
+            for k in keys {
+                let lower = k.to_ascii_lowercase();
+                if SENSITIVE.iter().any(|s| lower.contains(s)) {
+                    obj.insert(k, json!("***"));
+                } else if let Some(child) = obj.get(&k).cloned() {
+                    obj.insert(k, redact(child));
+                }
             }
+            Value::Object(obj)
         }
+        Value::Array(items) => Value::Array(items.into_iter().map(redact).collect()),
+        other => other,
     }
-    v
 }
 
 /// 截断过长的文本（平台响应可能很长，日志里没必要全量存）
@@ -639,6 +649,19 @@ mod tests {
         assert_eq!(r["password"], "***");
         assert_eq!(r["Cookie"], "***");
         assert_eq!(r["nodeId"], "1");
+    }
+
+    /// 嵌套结构必须一起洗：只洗顶层的话 `{"req":{"password":...}}` 照样落库
+    #[test]
+    fn redact_walks_nested_objects_and_arrays() {
+        let r = redact(json!({
+            "req": {"password": "p@ss", "studyId": "s1"},
+            "list": [{"token": "t"}, {"ok": 1}],
+        }));
+        assert_eq!(r["req"]["password"], "***");
+        assert_eq!(r["req"]["studyId"], "s1");
+        assert_eq!(r["list"][0]["token"], "***");
+        assert_eq!(r["list"][1]["ok"], 1);
     }
 
     #[test]

@@ -42,6 +42,8 @@ pub struct RateLimiter {
     limit: u32,
     /// 敏感接口：更严的阈值
     sensitive_limit: u32,
+    /// 严格接口：枚举类接口（猜错即被惩罚），阈值最低
+    strict_limit: u32,
     window: Duration,
     enabled: bool,
     trust_proxy: bool,
@@ -53,11 +55,18 @@ const SENSITIVE_PREFIXES: &[&str] = &[
     "/api/courses/scan",
     "/api/courses/relogin",
     "/api/orders/batch",
+    // 传 学号 就能读到"该账号正在处理的课程"，是可枚举的信息泄露面，
+    // 拉低到敏感阈值把枚举速率压下来（正常用户一次下单流程只会打一两次）
+    "/api/orders/active-courses",
     "/api/payment/",
     "/api/ypay/create",
     "/api/ypay/batch-create",
-    "/api/exam/solve",
 ];
+
+/// 严格接口：拿"手机号 + 卡号/订单号"当双因子做自助找回，任何自动化尝试
+/// 本质都是**枚举**（猜手机号命中率不低，后 4 位空间只有 1/10^4）。这类接口
+/// 必须按最低阈值卡死，正常用户一辈子也用不到几次。
+const STRICT_PREFIXES: &[&str] = &["/api/promo/restore"];
 
 /// 豁免路径：内部推送（已用 worker token 鉴权，且是进度主干道）、健康检查、
 /// 静态资源（不经过本中间件的也会走这里，统一豁免更省心）
@@ -84,21 +93,28 @@ impl RateLimiter {
         let limit = env_u32("RATE_LIMIT_REQUESTS", 600).max(1);
         // 默认取全局阈值的 1/10，且不超过 60：登录/下单这类操作人工不可能高频
         let sensitive = env_u32("RATE_LIMIT_SENSITIVE", (limit / 10).clamp(10, 60));
+        // 枚举类接口：默认每 IP 每分钟 6 次（5 次猜错后就基本歇了）
+        let strict = env_u32("RATE_LIMIT_STRICT", 6).clamp(1, sensitive.max(1));
         Arc::new(Self {
             buckets: Mutex::new(HashMap::new()),
             limit,
             sensitive_limit: sensitive,
+            strict_limit: strict,
             window,
             enabled: env_bool("RATE_LIMIT_ENABLED", true),
             trust_proxy: env_bool("RATE_LIMIT_TRUST_PROXY", true),
         })
     }
 
-    fn limit_for(&self, path: &str) -> u32 {
-        if SENSITIVE_PREFIXES.iter().any(|p| path.starts_with(p)) {
-            self.sensitive_limit
+    /// 返回 (该路径的阈值, 计数桶名后缀)。桶按档位分开，避免一次枚举风暴
+    /// 把同一 IP 的正常浏览/下单也一起拖下水。
+    fn limit_for(&self, path: &str) -> (u32, &'static str) {
+        if STRICT_PREFIXES.iter().any(|p| path.starts_with(p)) {
+            (self.strict_limit, "strict")
+        } else if SENSITIVE_PREFIXES.iter().any(|p| path.starts_with(p)) {
+            (self.sensitive_limit, "sensitive")
         } else {
-            self.limit
+            (self.limit, "normal")
         }
     }
 
@@ -174,13 +190,9 @@ pub async fn rate_limit(
     }
 
     let ip = client_key(&req, limiter.trust_proxy);
-    // 敏感与非敏感分开计数：一次登录风暴不应该把同一 IP 的正常浏览也拖下水
-    let limit = limiter.limit_for(&path);
-    let bucket = if limit == limiter.limit {
-        format!("{ip}|normal")
-    } else {
-        format!("{ip}|sensitive")
-    };
+    // 三档分开计数：一次登录/枚举风暴不应该把同一 IP 的正常浏览也拖下水
+    let (limit, tier) = limiter.limit_for(&path);
+    let bucket = format!("{ip}|{tier}");
     let (allowed, retry_after) = limiter.check(&bucket, limit);
     if !allowed {
         tracing::warn!(ip = %ip, path = %path, retry_after, "触发限流");
@@ -259,6 +271,7 @@ mod tests {
             buckets: Mutex::new(HashMap::new()),
             limit: 3,
             sensitive_limit: 2,
+            strict_limit: 1,
             window: Duration::from_secs(60),
             enabled,
             trust_proxy: true,
@@ -290,9 +303,22 @@ mod tests {
     #[test]
     fn test_sensitive_threshold_is_stricter() {
         let l = RateLimiter { limit: 10, ..limiter(true) };
-        assert_eq!(l.limit_for("/api/orders/batch"), 2);
-        assert_eq!(l.limit_for("/api/admin/login"), 2);
-        assert_eq!(l.limit_for("/api/orders/ORD-1"), 10);
-        assert_eq!(l.limit_for("/api/announcement"), 10);
+        assert_eq!(l.limit_for("/api/orders/batch"), (2, "sensitive"));
+        assert_eq!(l.limit_for("/api/admin/login"), (2, "sensitive"));
+        assert_eq!(l.limit_for("/api/orders/ORD-1"), (10, "normal"));
+        assert_eq!(l.limit_for("/api/announcement"), (10, "normal"));
+    }
+
+    /// 枚举类接口（自助找回）阈值必须最低，且与敏感/普通桶分开计数 ——
+    /// 否则猜卡号的人可以先刷爆普通桶把同 IP 的正常用户一起关在门外。
+    #[test]
+    fn test_strict_threshold_isolated() {
+        let l = RateLimiter { limit: 10, ..limiter(true) };
+        assert_eq!(l.limit_for("/api/promo/restore"), (1, "strict"));
+        // 严格桶被刷爆不影响同 IP 的普通请求
+        let (first_allowed, _) = l.check("ip|strict", 1);
+        assert!(first_allowed);
+        assert!(!l.check("ip|strict", 1).0);
+        assert!(l.check("ip|normal", 10).0);
     }
 }

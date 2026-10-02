@@ -8,8 +8,9 @@
 //! - 域名发现走 scan::platform_base_url（域名监控写入的动态缓存优先，静态表兜底）
 //! - _verify_exam_exists（考试存在性二次验证）未迁移：需多一次页面请求，主流程可后续补
 //!
-//! 鉴权说明：scan/relogin 对齐 Python get_optional_user（可选登录），本 router 不加 auth；
-//! test-deepseek 对齐 get_current_admin，需由主 agent 注册时加 auth layer（见模块总结）。
+//! 鉴权说明：平台列表 / 扫描 / 重登对齐 Python get_optional_user（匿名可用，这是主链路），
+//! 本 router 因此**不加 auth layer**；test-deepseek 需要管理员，注册在 api.rs 的
+//! protected 分组里（不要挪回本模块的 router，否则会随顶层 merge 绕过鉴权）。
 
 use anyhow::Result;
 use axum::extract::State;
@@ -22,8 +23,7 @@ use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
-use crate::exam;
-use crate::llm::{cached_config, configured_model, configured_thinking, effective_api_key};
+use crate::llm::{cached_config, configured_thinking};
 use crate::platform_client as pc;
 use crate::scan;
 use crate::AppState;
@@ -42,8 +42,12 @@ pub fn router() -> Router<AppState> {
         .route("/api/courses/scan", post(scan_courses))
         .route("/api/courses/scan/chaoxing", post(scan_chaoxing))
         .route("/api/courses/relogin", post(relogin_platform))
-        .route("/api/exam/solve", post(solve_exam_api))
-        .route("/api/admin/config/test-deepseek", post(test_deepseek))
+    // 这里只放"匿名访客必须能打"的接口（平台列表 / 扫描 / 重登）。
+    // 注意本 router 在 main.rs 顶层 merge，**不带 api.rs 的管理员鉴权中间件**：
+    //   - /api/admin/config/test-deepseek 曾挂在这里 → 匿名可读 Key 前缀并真实计费调用，
+    //     已挪回 api.rs 的 protected 分组（见该处注释）。
+    //   - /api/exam/solve 曾挂在这里 → 匿名可用服务端 Key 答题、且 base_url 可控（SSRF）。
+    //     全仓无任何调用方（路由/前端/后端都不调），已整段删除。
 }
 
 // ── /api/courses/platforms ──────────────────────────────────────────────
@@ -664,62 +668,18 @@ async fn relogin_platform(Json(req): Json<ReloginRequest>) -> Json<Value> {
     }))
 }
 
-// ── /api/exam/solve ──────────────────────────────────────────────────────
-
-#[derive(serde::Deserialize)]
-struct SolveRequest {
-    base_url: String,
-    cookie_str: String,
-    work_id: String,
-    #[serde(default)]
-    course_id: String,
-    #[serde(default)]
-    node_id: String,
-    api_key: String,
-    #[serde(default)]
-    model: String,
-    #[serde(default)]
-    item_type: String,
-}
-
-async fn solve_exam_api(State(state): State<AppState>, Json(req): Json<SolveRequest>) -> Json<Value> {
-    if req.base_url.is_empty() || req.cookie_str.is_empty() || req.work_id.is_empty() {
-        return Json(json!({"success": false, "message": "base_url/cookie_str/work_id 不能为空"}));
-    }
-    // API Key / 模型未显式传入时回退管理端配置（此前"考试模型"配置项后端从不读取）
-    let api_key = if req.api_key.is_empty() {
-        effective_api_key(&state.db).await
-    } else {
-        req.api_key.clone()
-    };
-    if api_key.is_empty() {
-        return Json(json!({"success": false, "message": "DEEPSEEK_API_KEY 未配置"}));
-    }
-    let model = if req.model.is_empty() {
-        configured_model(&state.db, "deepseek_model", crate::llm::MODEL_FLASH).await
-    } else {
-        req.model.clone()
-    };
-    let thinking = configured_thinking(&state.db).await;
-    let item_type = if req.item_type.is_empty() { "work" } else { &req.item_type };
-    match exam::solve_exam(&req.base_url, &req.cookie_str, &req.work_id,
-                           &req.course_id, &req.node_id, &api_key,
-                           &model, item_type, thinking).await {
-        Ok(r) => Json(r),
-        Err(e) => Json(json!({"success": false, "error": format!("{e:#}")})),
-    }
-}
-
 // ── /api/admin/config/test-deepseek（对齐 config_admin.py）────────────────
+//
+// 已挪到 api.rs 的 protected 分组注册（本 router 顶层 merge、无鉴权层）。
 
 #[derive(serde::Deserialize)]
-struct TestModelInput {
+pub(crate) struct TestModelInput {
     #[serde(default)]
     model: Option<String>,
 }
 
-async fn test_deepseek(State(state): State<AppState>,
-                       body: Option<Json<TestModelInput>>) -> Json<Value> {
+pub(crate) async fn test_deepseek(State(state): State<AppState>,
+                                  body: Option<Json<TestModelInput>>) -> Json<Value> {
     // 默认用当前在售的 flash（deepseek-chat 已于 2026-07-24 弃用，
     // 拿它做默认值会让"测试"永远返回 401）
     let test_model = body.and_then(|b| b.0.model)

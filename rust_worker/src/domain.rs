@@ -177,6 +177,10 @@ async fn fetch_homepage(url: &str) -> Result<(String, String)> {
     let mut target = url.to_string();
     let mut note = String::new();
     for _ in 0..4 {
+        // 跳转目标每一跳都要重新过安全阀：301 指向内网同样是 SSRF
+        if !pc::outbound_allowed(&target).await {
+            anyhow::bail!("目标地址被安全策略拒绝（非公网 http/https）: {target}");
+        }
         pc::wait_rate_limit().await;
         let resp = client
             .get(&target)
@@ -255,9 +259,12 @@ fn default_name(website_id: i64) -> String {
 /// 探测平台是否活着：GET {base}/user/index。无 cookie 时必然是登录页
 /// （302/303 跳转，或 200 登录页），DNS 失败 / 5xx / 404 才算死。
 async fn probe_alive(base_url: &str) -> (bool, String) {
-    pc::wait_rate_limit().await;
     let client = pc::build_client(true, None);
     let url = format!("{}/user/index", base_url.trim_end_matches('/'));
+    if !pc::outbound_allowed(&url).await {
+        return (false, "目标地址被安全策略拒绝".to_string());
+    }
+    pc::wait_rate_limit().await;
     match client.get(&url).send().await {
         Ok(resp) => {
             let status = resp.status().as_u16();

@@ -386,6 +386,11 @@ pub fn mp4_duration_secs(buf: &[u8]) -> Option<u64> {
 /// 整体重试一轮并加抖动：CDN 偶发瞬时拒绝（实测同一批探测时会整轮失败，
 /// 下一轮又全好），一次失败就放弃会让一批视频退回元数据兜底值。
 async fn probe_media_duration(client: &Client, url: &str) -> Option<u64> {
+    // 视频地址来自平台响应（外部可控）：先过 SSRF 安全阀，别让我们替别人去打内网
+    if !crate::platform_client::outbound_allowed(url).await {
+        tracing::warn!(url = %crate::platform_client::preview(url, 120), "视频地址被安全策略拒绝");
+        return None;
+    }
     for attempt in 0..2 {
         if attempt > 0 {
             tokio::time::sleep(std::time::Duration::from_millis(

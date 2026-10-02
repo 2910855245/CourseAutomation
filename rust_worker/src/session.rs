@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use dashmap::DashMap;
+use sha2::{Digest, Sha256};
 
 use crate::login::{login_school, SchoolSession};
 use crate::platform_client as pc;
@@ -52,10 +53,40 @@ pub fn platform_name_for_url(base_url: &str) -> String {
     }
 }
 
+/// 用户名 → 安全的目录名。
+///
+/// 为什么必须清洗：`username` 直接来自下单请求体，被当路径段拼进
+/// `data/accounts/<username>/...`。传 `../../x` 就能越出 accounts 目录，
+/// 用 `cookie_str` 的内容去任意位置创建目录 + 写文件（任意文件写）。
+///
+/// 正常学号/手机号全是 ASCII 字母数字，原样返回 —— 目录名与历史 Python 布局
+/// 一致，老 cookie 仍能命中（改名会逼全部老用户重新登录，反推高平台锁号风险）。
+/// 含特殊字符时才退化成「清洗后的可读前缀 + 用户名短哈希」，避免不同用户名
+/// 清洗后撞进同一个目录而互相覆盖 cookie。
+fn safe_user_dir(username: &str) -> String {
+    let clean = !username.is_empty()
+        && username.len() <= 64
+        && username.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if clean {
+        return username.to_string();
+    }
+    let mut prefix: String = username
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .take(16)
+        .collect();
+    if prefix.is_empty() {
+        prefix.push_str("user");
+    }
+    let digest = Sha256::digest(username.as_bytes());
+    let hex: String = digest.iter().take(4).map(|b| format!("{b:02x}")).collect();
+    format!("{prefix}-{hex}")
+}
+
 fn cookie_path(username: &str, base_url: &str) -> PathBuf {
     PathBuf::from("data")
         .join("accounts")
-        .join(username)
+        .join(safe_user_dir(username))
         .join("cookies")
         .join(format!("{}.json", platform_name_for_url(base_url)))
 }
@@ -184,5 +215,20 @@ mod tests {
     #[test]
     fn test_key_of_normalizes_trailing_slash() {
         assert_eq!(key_of("u", "https://a.com/"), key_of("u", "https://a.com"));
+    }
+
+    /// 用户名会被拼进落盘路径：穿桩字符必须被挡掉，正常学号保持原样（兼容老 cookie）。
+    #[test]
+    fn test_safe_user_dir_blocks_traversal() {
+        assert_eq!(safe_user_dir("2024010101"), "2024010101");
+        assert_eq!(safe_user_dir("19136434661"), "19136434661");
+        for bad in ["../../etc/passwd", "..", ".", "a/b", "a\\b", ""] {
+            let d = safe_user_dir(bad);
+            assert!(!d.contains('/') && !d.contains('\\'), "{bad} → {d} 仍含路径分隔符");
+            assert_ne!(d, "." );
+            assert_ne!(d, "..");
+        }
+        // 两个不同的怪用户名不能撞进同一个目录（否则会互相覆盖 cookie）
+        assert_ne!(safe_user_dir("a/../b"), safe_user_dir("a/../c"));
     }
 }

@@ -30,6 +30,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/api/admin/orders/{order_id}/complete", post(admin_order_complete))
         .route("/api/admin/change-password", post(admin_change_password))
         .route("/api/admin/config", get(admin_config_get).post(admin_config_set))
+        // DeepSeek 连通性自检：会回吐 Key 前后各几位、且真实计费调用。
+        // 它原先挂在 school_exam::router() 并随顶层 merge 出去，越过了本层的
+        // 鉴权中间件 —— 匿名可打，等于把 API Key 与额度白送。必须留在鉴权组。
+        .route("/api/admin/config/test-deepseek", post(crate::school_exam::test_deepseek))
         .route("/api/queue/jobs", get(queue_jobs))
         .route("/api/queue/jobs/{job_id}/cancel", post(queue_job_cancel))
         .route("/api/queue/jobs/{job_id}/retry", post(queue_job_retry))

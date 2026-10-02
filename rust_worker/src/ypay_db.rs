@@ -93,7 +93,12 @@ const YPAY_ACCOUNT_COLS: &str =
      qr_type, memo, remark, channel_mode, app_public_cert, alipay_public_cert,
      alipay_root_cert, create_time";
 
-// ── orders 行 → JSON（对齐 order_db._order_to_dict，密码不脱敏——内部调用用）
+// ── orders 行 → JSON（对齐 order_db._order_to_dict）
+//
+// 说明：这里也把 password 脱敏。此函数的调用方（按批次号找关联订单、按金额匹配
+// 未付订单）只读 order_id/price/status，从不读密码；但它是 pub、返回的是完整
+// 订单对象，哪天被接进某个响应就等于整库明文密码外泄。api.rs 的同类函数早已
+// 置 "***"，这里对齐口径，避免留一个"看调用方自觉"的暗雷。
 
 fn order_row_to_json(r: &rusqlite::Row) -> rusqlite::Result<Value> {
     Ok(json!({
@@ -107,7 +112,8 @@ fn order_row_to_json(r: &rusqlite::Row) -> rusqlite::Result<Value> {
         "customer_name": r.get::<_, Option<String>>(7)?.unwrap_or_default(),
         "customer_contact": r.get::<_, Option<String>>(8)?.unwrap_or_default(),
         "username": r.get::<_, Option<String>>(9)?.unwrap_or_default(),
-        "password": r.get::<_, Option<String>>(10)?.unwrap_or_default(),
+        // 明文密码不随订单对象外流（产品决策是库里存明文，不代表可以回吐）
+        "password": "***",
         "website_id": r.get::<_, i64>(11)?,
         "task_type": r.get::<_, Option<String>>(12)?.unwrap_or_default(),
         "course_ids": serde_json::from_str::<Value>(

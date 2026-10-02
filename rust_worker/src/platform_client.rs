@@ -78,6 +78,82 @@ pub fn build_client_with_ua(ua: &str, redirect_none: bool, jar: Option<Arc<Jar>>
     b.build().expect("构建平台 HTTP client 失败")
 }
 
+/// IP 是否属于"不该被服务端主动请求"的网段：
+/// 回环（127/::1）、私有（10/172.16/192.168）、链路本地（169.254 —— 云元数据
+/// 169.254.169.254 就在这里）、CGNAT（100.64/10）、组播/保留（>=224）、
+/// 未指定（0.0.0.0/::）、IPv6 ULA（fc00::/7）与 IPv6 链路本地（fe80::/10）。
+pub fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_unspecified()
+                || o[0] == 0
+                || (o[0] == 100 && (64..128).contains(&o[1]))
+                || o[0] >= 224
+        }
+        IpAddr::V6(v6) => {
+            let s = v6.segments();
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (s[0] & 0xfe00) == 0xfc00
+                || (s[0] & 0xffc0) == 0xfe80
+                || v6.to_ipv4_mapped().map(|v| is_blocked_ip(IpAddr::V4(v))).unwrap_or(false)
+        }
+    }
+}
+
+/// 出站目标安全阀：阻断 SSRF 打本机/内网/云元数据。
+///
+/// 为什么需要：域名监控抓的是**平台首页里出现的链接**、媒体探测抓的是
+/// **平台响应里的视频地址** —— 都是外部可控输入。没有这层，被抓方（或攻陷了
+/// 学校站的一方）就能让我们去请求 `http://127.0.0.1:17017/...`（本服务，
+/// 绕过 nginx 的鉴权边界）或 `http://169.254.169.254/`（云厂元数据，可换到
+/// 实例凭证）。域名监控的目标还直接由管理员填写，同样属于可控输入。
+///
+/// 做法两步：字面 IP 直接判；域名先解析，任一结果落在禁网段就拒。
+/// 局限：挡不住 DNS rebinding（解析与真正建连是两次查询）—— 但那是要自建
+/// 域名+精确时序的高级手法，这里先把"直接写内网地址"这条廉价通道关掉。
+pub async fn outbound_allowed(url: &str) -> bool {
+    let Ok(u) = url.parse::<reqwest::Url>() else { return false };
+    if !matches!(u.scheme(), "http" | "https") {
+        return false;
+    }
+    let Some(host) = u.host_str() else { return false };
+    // url crate 的 host_str 对 IPv6 会带方括号（[::1]），解析前先剥掉
+    if let Ok(ip) = host.trim_start_matches('[').trim_end_matches(']').parse::<std::net::IpAddr>() {
+        return !is_blocked_ip(ip);
+    }
+    let h = host.to_lowercase();
+    // 无点主机名（localhost、容器短名、内网搜索域）一律拒 —— 正常学校域名都带点
+    if !h.contains('.') {
+        return false;
+    }
+    let port = u.port_or_known_default().unwrap_or(80);
+    // 传 own 的 String：借用 h 会让 lookup_host 的 future 跨 await 持有局部借用，
+    // borrow checker 直接拒（临时值活不过 await）
+    match tokio::net::lookup_host((h.clone(), port)).await {
+        Ok(addrs) => {
+            let mut any = false;
+            for a in addrs {
+                any = true;
+                if is_blocked_ip(a.ip()) {
+                    tracing::warn!(host = %h, ip = %a.ip(), "出站目标解析到内网网段，已拒绝");
+                    return false;
+                }
+            }
+            any
+        }
+        // 解析不了就交给请求本身去失败：不把"DNS 抽风"当攻击，
+        // 否则一次解析超时会把正常的域名监控整轮掐掉。
+        Err(_) => true,
+    }
+}
+
 /// 按**字符**截断，用于日志/错误信息预览。
 /// 直接 `&s[..n]` 是字节切片，遇到多字节字符（外部响应里常含中文）
 /// 且切点落在字符中段时会 panic。
@@ -133,5 +209,35 @@ mod tests {
     fn test_cookie_headers() {
         let h = cookie_headers("token=sid.abc");
         assert_eq!(h.get(COOKIE).unwrap().to_str().unwrap(), "token=sid.abc");
+    }
+
+    /// SSRF 安全阀：内网/元数据网段必须全挡，公网地址必须放行。
+    #[test]
+    fn test_is_blocked_ip() {
+        for s in ["127.0.0.1", "10.0.0.1", "172.16.5.4", "192.168.1.1",
+                  "169.254.169.254", "100.64.0.1", "0.0.0.0", "224.0.0.1"] {
+            assert!(is_blocked_ip(s.parse().unwrap()), "{s} 应被拒");
+        }
+        for s in ["::1", "fd00::1", "fe80::1", "::ffff:127.0.0.1"] {
+            assert!(is_blocked_ip(s.parse().unwrap()), "{s} 应被拒");
+        }
+        for s in ["8.8.8.8", "1.1.1.1", "223.5.5.5", "2400:3200::1"] {
+            assert!(!is_blocked_ip(s.parse().unwrap()), "{s} 应放行");
+        }
+    }
+
+    /// 协议与字面 IP 的判断不依赖网络（不测域名解析，避免测试机 DNS 影响结果）。
+    #[tokio::test]
+    async fn test_outbound_allowed_scheme_and_ip() {
+        assert!(!outbound_allowed("file:///etc/passwd").await);
+        assert!(!outbound_allowed("gopher://x/").await);
+        assert!(!outbound_allowed("不是 URL").await);
+        // 本机后端端口与云元数据是最危险的两个目标
+        assert!(!outbound_allowed("http://127.0.0.1:17017/api/admin/config").await);
+        assert!(!outbound_allowed("http://169.254.169.254/latest/meta-data/").await);
+        assert!(!outbound_allowed("http://[::1]:17017/").await);
+        // 无点主机名（内网短名）一律拒
+        assert!(!outbound_allowed("http://localhost/x").await);
+        assert!(outbound_allowed("http://8.8.8.8/").await);
     }
 }
