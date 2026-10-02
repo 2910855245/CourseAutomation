@@ -853,7 +853,10 @@ onMounted(async () => {
   background: var(--c-surface-2);
   border: 1px solid var(--c-border-light);
 }
-/* 指示器随选中项平移；发丝边 + primary 微着色保证暗色下也看得见浮起 */
+/* 指示器随选中项平移。
+   视觉刻意做减法：纯色面 + 中性描边 + 一层极浅中性阴影表达"浮起"。
+   不用渐变面、不用顶部高光、不用 primary 彩色光晕 —— 老板反馈这里过度设计
+   （"取消光效，保留动效"）：动效指下面那行 transform 滑动，光效全部去掉。 */
 .seg-thumb {
   position: absolute;
   top: 4px;
@@ -861,12 +864,9 @@ onMounted(async () => {
   left: 4px;
   width: calc(50% - 4px);
   border-radius: var(--radius-md);
-  background: linear-gradient(180deg,
-      color-mix(in srgb, var(--c-primary) 10%, var(--c-surface)) 0%,
-      var(--c-surface) 100%);
-  border: 1px solid color-mix(in srgb, var(--c-primary) 30%, var(--c-border));
-  box-shadow: var(--shadow-sm), var(--hairline-top),
-              0 6px 16px -8px color-mix(in srgb, var(--c-primary) 55%, transparent);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  box-shadow: var(--shadow-xs);
   transition: transform var(--t-slow) var(--ease-spring);
   will-change: transform;
 }
