@@ -684,11 +684,39 @@ async fn execute_chaoxing_job(state: &AppState, job: &QueueJob) {
 ///
 /// 两个队列都要回收：调度器只挑 pending/retrying，崩溃/重启遗留的 running
 /// 行会永久卡住（订单永远停在"执行中"），本进程启动瞬间不可能有在跑任务。
+///
+/// 回收分两步：**所属订单已终态的直接收尾（不复活）**，其余才退回 pending。
+/// 无条件退回会让已判失败的订单在每次重启时被复活重跑。
 async fn reclaim_stale_running(state: &AppState, kind: QueueKind) {
     let pool = state.db.clone_pool();
     let table = kind.table();
     let result = tokio::task::spawn_blocking(move || -> Result<usize> {
         let conn = pool.get()?;
+        let now = now_str();
+        // 第一步：所属订单已经是终态（已完成/已失败/已取消/已删除）的 running 任务
+        // **不复活**，直接收尾。
+        //
+        // 为什么：只按 running 无条件退回 pending 的话，一条订单已判失败、只因进程
+        // 被杀时留在 running 的任务，会在**每次重启时被复活重跑**（线上实测
+        // ORD-B2270270：订单 05:24 已 failed，15:45 重启又把它拉起来跑）。表现是
+        // 顾客看到"失败"、队列里却还在 running，而且对已失败的课反复登录上报，
+        // 白白推高平台风控/锁号风险。
+        let closed = conn.execute(
+            &format!(
+                "UPDATE {table} SET status='failed', finished_at=?1,
+                        error_message='所属订单已终态（完成/失败/取消），不再自动重跑；如需重刷请在后台手动入队'
+                 WHERE status='running' AND deleted_at IS NULL
+                   AND order_id IN (SELECT order_id FROM orders
+                                     WHERE deleted_at IS NOT NULL
+                                        OR status IN ('completed','failed','cancelled'))"
+            ),
+            rusqlite::params![now],
+        )?;
+        if closed > 0 {
+            tracing::warn!(count = closed, queue = kind.name(),
+                           "已把「订单已终态」的遗留任务收尾（不再复活重跑）");
+        }
+        // 第二步：其余（订单仍在进行中）退回 pending 重新调度
         let n = conn.execute(
             &format!(
                 "UPDATE {table} SET status='pending', started_at=NULL

@@ -1572,6 +1572,26 @@ async fn enqueue_order_impl(state: &AppState, order_id: &str) -> anyhow::Result<
         // 路由与支付入队同一条规则：学习通（website_id=4）进学习通队列
         let website_id = order["website_id"].as_i64().unwrap_or(1);
         let table = if website_id == 4 { "queue_jobs_chaoxing" } else { "queue_jobs_school" };
+        // 去重：已有活跃任务（pending/running/retrying）就不再投一份。
+        // 此前这里是无条件 INSERT，后台「入队」连点两下就造出两条同订单任务
+        // （线上实测 ORD-874EAB18 / ORD-4CA1A735 各有一份多余任务，均来自
+        // 2026-10-01 12:59 的手动入队），同账号两个任务并行会让平台重叠检测
+        // 越线（安全线 ≤8）并互踢会话。已终态（完成/失败）的单不受影响 ——
+        // 故意补刷仍然可以入队。
+        let active: Option<String> = conn
+            .query_row(
+                &format!(
+                    "SELECT job_id FROM {table}
+                     WHERE order_id=?1 AND deleted_at IS NULL
+                       AND status IN ('pending','running','retrying') LIMIT 1"
+                ),
+                rusqlite::params![oid],
+                |r| r.get(0),
+            )
+            .ok();
+        if active.is_some() {
+            anyhow::bail!("该订单已有进行中的任务，无需重复入队");
+        }
         conn.execute(
             &format!(
             "INSERT INTO {table}
