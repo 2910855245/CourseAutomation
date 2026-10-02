@@ -198,11 +198,9 @@ onMounted(async () => {
         <section v-if="!scanDone" class="login-stage">
           <div class="login-stack">
             <header class="hero">
-              <span class="hero-eyebrow">课程进度自动化</span>
               <h1 class="hero-title">登录平台账号</h1>
-              <p class="hero-sub">系统自动扫描各平台未完成课程，并生成可直接提交的任务。</p>
-              <!-- 价格口径前置：先入为主的"要花多少钱"焦虑是首屏最大的劝退点 -->
-              <p class="hero-note">刷视频免费 · 答题/考试按门计费 · 提交前逐门显示价格</p>
+              <!-- 只留这一行：它是"要花多少钱"焦虑的唯一解药，其余解释都是废话 -->
+              <p class="hero-note">刷视频免费 · 答题/考试按门收费 · 提交前先看价</p>
             </header>
 
             <div class="login-card">
@@ -230,21 +228,21 @@ onMounted(async () => {
                 <template v-if="activeTab === 'school'">
                   <div class="field">
                     <label class="field-label">学号</label>
-                    <input v-model="username" placeholder="请输入学号" :disabled="scanning" autocomplete="username" />
+                    <input v-model="username" :disabled="scanning" autocomplete="username" />
                   </div>
                   <div class="field">
                     <label class="field-label">密码</label>
-                    <input v-model="password" type="password" placeholder="请输入平台密码" :disabled="scanning" autocomplete="current-password" @keyup.enter="startScan" />
+                    <input v-model="password" type="password" :disabled="scanning" autocomplete="current-password" @keyup.enter="startScan" />
                   </div>
                 </template>
                 <template v-else>
                   <div class="field">
                     <label class="field-label">手机号</label>
-                    <input v-model="chaoxingUsername" placeholder="请输入手机号" :disabled="scanning" autocomplete="username" />
+                    <input v-model="chaoxingUsername" :disabled="scanning" autocomplete="username" />
                   </div>
                   <div class="field">
                     <label class="field-label">密码</label>
-                    <input v-model="chaoxingPassword" type="password" placeholder="请输入密码" :disabled="scanning" autocomplete="current-password" @keyup.enter="startChaoxingScan" />
+                    <input v-model="chaoxingPassword" type="password" :disabled="scanning" autocomplete="current-password" @keyup.enter="startChaoxingScan" />
                   </div>
                 </template>
 
@@ -809,30 +807,12 @@ onMounted(async () => {
 
 /* ---------- 标题区 ---------- */
 .hero { text-align: center; margin-bottom: var(--space-8); }
-.hero-eyebrow {
-  display: inline-block;
-  margin-bottom: var(--space-5);
-  padding: 5px 14px;
-  border-radius: var(--radius-pill);
-  background: var(--c-primary-bg);
-  color: var(--c-primary);
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  letter-spacing: .07em;
-}
 .hero-title {
   font-size: clamp(30px, 4.4vw, 44px);
   font-weight: 700;
   letter-spacing: -.032em;
   line-height: 1.1;
   margin-bottom: var(--space-4);
-}
-.hero-sub {
-  font-size: var(--fs-md);
-  line-height: 1.72;
-  color: var(--c-text-secondary);
-  max-width: 30ch;
-  margin: 0 auto;
 }
 /* 首屏价格口径：把"花多少钱"提前说清楚，降低下单心理门槛 */
 .hero-note {
