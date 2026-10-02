@@ -250,6 +250,7 @@ CREATE TABLE IF NOT EXISTS brush_cards (
     code VARCHAR(32) UNIQUE NOT NULL,
     owner_vid VARCHAR(64) NOT NULL,
     contact VARCHAR(255) DEFAULT '',
+    phone VARCHAR(32) DEFAULT '',
     source VARCHAR(32) DEFAULT 'invite',
     card_kind VARCHAR(16) DEFAULT 'invite',
     granted_at VARCHAR(255) NOT NULL,
@@ -347,6 +348,10 @@ const ORDER_VISITOR_COLUMN: &[(&str, &str)] = &[("vid", "VARCHAR(64) DEFAULT ''"
 /// 付费买的学期卡写 'pass'（不限次 + 暴力档 + 插队）。
 const CARD_KIND_COLUMN: &[(&str, &str)] = &[("card_kind", "VARCHAR(16) DEFAULT 'invite'")];
 
+/// 卡主手机号（规范化后的 11 位数字）。换设备/清缓存后靠"手机号 + 卡号"认领回去，
+/// 老库默认空串 = 没留过手机号，只能人工找客服。
+const CARD_PHONE_COLUMN: &[(&str, &str)] = &[("phone", "VARCHAR(32) DEFAULT ''")];
+
 /// 队列任务所属通道：付费（答题/考试）与免费（刷视频）。
 ///
 /// 与 `priority` 正交：`lane` 决定占哪条并发额度，`priority` 只决定池内先后。
@@ -385,6 +390,7 @@ pub fn ensure_schema(pool: &Pool<SqliteConnectionManager>) -> Result<()> {
     add_missing_columns(&conn, "queue_jobs_chaoxing", SPEED_MODE_COLUMN)?;
     add_missing_columns(&conn, "orders", ORDER_VISITOR_COLUMN)?;
     add_missing_columns(&conn, "brush_cards", CARD_KIND_COLUMN)?;
+    add_missing_columns(&conn, "brush_cards", CARD_PHONE_COLUMN)?;
     add_missing_columns(&conn, "queue_jobs_school", LANE_COLUMN)?;
     add_missing_columns(&conn, "queue_jobs_chaoxing", LANE_COLUMN)?;
 

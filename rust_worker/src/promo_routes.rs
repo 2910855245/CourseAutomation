@@ -35,6 +35,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/invite/claim", post(invite_claim))
         .route("/api/me/benefit", get(my_benefit))
         .route("/api/promo/pass/create", post(pass_create))
+        // 换设备/清缓存后自助找回（手机号 + 卡号/订单号 双因子）
+        .route("/api/promo/restore", post(promo_restore))
 }
 
 /// 从 Cookie 头里取 vid
@@ -131,8 +133,9 @@ async fn invite_claim(
     let Some(ext) = ext else {
         return Json(json!({"success": false, "message": "访客身份缺失"}));
     };
-    let contact = body["contact"].as_str().unwrap_or("");
-    match promo::claim_card(&state.db, &visitor_ext(&ext), contact).await {
+    // 手机号选填：填了才能在换设备后自助找回
+    let phone = body["phone"].as_str().unwrap_or("");
+    match promo::claim_card(&state.db, &visitor_ext(&ext), phone).await {
         Ok(card) => {
             let overview = promo::invite_overview(&state.db, &visitor_ext(&ext)).await
                 .unwrap_or_else(|_| json!({}));
@@ -175,10 +178,35 @@ async fn my_benefit(
 async fn pass_create(
     State(state): State<AppState>,
     ext: Option<Extension<VisitorId>>,
+    Json(body): Json<Value>,
 ) -> Json<Value> {
     let vid = ext.map(|e| visitor_ext(&e)).unwrap_or_default();
-    match promo::create_pass_order(&state.db, &vid).await {
+    let phone = body["phone"].as_str().unwrap_or("");
+    match promo::create_pass_order(&state.db, &vid, phone).await {
         Ok(data) => Json(json!({"success": true, "message": "订单已创建", "data": data})),
+        Err(e) => Json(json!({"success": false, "message": format!("{e}")})),
+    }
+}
+
+/// 自助找回：手机号 + 卡号（或订单号）→ 把卡/邀请进度改绑到当前设备。
+async fn promo_restore(
+    State(state): State<AppState>,
+    ext: Option<Extension<VisitorId>>,
+    Json(body): Json<Value>,
+) -> Json<Value> {
+    let Some(ext) = ext else {
+        return Json(json!({"success": false, "message": "访客身份缺失"}));
+    };
+    let vid = visitor_ext(&ext);
+    let phone = body["phone"].as_str().unwrap_or("");
+    let secret = body["secret"].as_str().unwrap_or("");
+    match promo::restore_cards(&state.db, &vid, phone, secret).await {
+        Ok(data) => {
+            // 改绑后把新的概况一起回给前端，省一次请求
+            let overview = promo::invite_overview(&state.db, &vid).await
+                .unwrap_or_else(|_| json!({}));
+            Json(json!({"success": true, "message": "已找回", "data": {"result": data, "overview": overview}}))
+        }
         Err(e) => Json(json!({"success": false, "message": format!("{e}")})),
     }
 }

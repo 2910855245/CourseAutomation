@@ -155,11 +155,16 @@ export const api = {
   },
   invite: {
     me: () => get<ApiResponse<any>>('/api/invite/me'),
-    claim: (contact: string) => post<ApiResponse<any>>('/api/invite/claim', { contact }),
+    // phone 选填：填了才能在换设备后自助找回
+    claim: (phone: string) => post<ApiResponse<any>>('/api/invite/claim', { phone }),
+  },
+  // 换设备/清缓存后自助找回：手机号 + 卡号（或订单号）双因子
+  promo: {
+    restore: (phone: string, secret: string) => post<ApiResponse<any>>('/api/promo/restore', { phone, secret }),
   },
   // 学期卡：建单只拿到 order_id，收款复用 /api/payment/batch-create（同一单号）
   pass: {
-    create: () => post<ApiResponse<{ order_id: string; price: number; days: number }>>('/api/promo/pass/create'),
+    create: (phone?: string) => post<ApiResponse<{ order_id: string; price: number; days: number }>>('/api/promo/pass/create', { phone: phone || '' }),
   },
   adminPromo: {
     stats: () => get<ApiResponse<any>>('/api/admin/promo/stats'),

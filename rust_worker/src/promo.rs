@@ -137,6 +137,49 @@ pub fn new_vid() -> String {
     format!("VID-{}", short_code(16))
 }
 
+/// 手机号规范化：只留数字，要求 11 位且以 1 开头（中国大陆手机号）。
+/// 不合法一律返回空串 —— 宁可不存，也不要存一个查不出来的脏号码。
+pub fn normalize_phone(s: &str) -> String {
+    let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.len() == 11 && digits.starts_with('1') {
+        digits
+    } else {
+        String::new()
+    }
+}
+
+/// 卡号/订单号这类"只有本人拿得到"的凭证做规范化（去空格、转大写）
+fn normalize_secret(s: &str) -> String {
+    s.trim().to_uppercase().replace([' ', '-'], "")
+}
+
+/// 用户输入的凭证是否命中这张卡。
+///
+/// 接受三种形态，都是为了"用户手上真的可能有它"：
+///   - 完整卡号（8 位）
+///   - 卡号后 4 位及以上（用户可能只截了图/记了尾号）
+///   - 订单号（含 ORD- 前缀或裸 8 位十六进制）—— 学期卡是付费买的，订单页上有
+fn secret_matches_card(code: &str, card_id: &str, secret: &str) -> bool {
+    // 自己再做一次规范化：调用方忘了转大写时不该静默放行不了（这种"忘了"很难查）
+    let sec = normalize_secret(secret);
+    if sec.is_empty() {
+        return false;
+    }
+    let code_u = code.to_uppercase();
+    let card_u = card_id.to_uppercase().replace('-', "");
+    if code_u == sec {
+        return true;
+    }
+    if sec.len() >= 4 && code_u.ends_with(&sec) {
+        return true;
+    }
+    // 订单号：CARD-ORD-XXXXXXXX → 规范化成 CARDORDXXXXXXXX
+    if sec.len() >= 6 && card_u.ends_with(&sec) {
+        return true;
+    }
+    false
+}
+
 /// 短码只允许字母数字（防止把奇怪的东西当邀请码塞进 cookie/URL 再回显）
 pub fn is_valid_code(s: &str) -> bool {
     !s.is_empty()
@@ -371,17 +414,15 @@ pub async fn invite_overview(db: &Db, vid: &str) -> Result<Value> {
     .await?
 }
 
-/// 领卡（可重复领；联系方式选填，留空也能领，只是少了人工找回凭据）
-pub async fn claim_card(db: &Db, vid: &str, contact: &str) -> Result<Value> {
+/// 领卡（可重复领；手机号选填，留空也能领，只是换设备后没法自助找回）
+pub async fn claim_card(db: &Db, vid: &str, phone: &str) -> Result<Value> {
     let cfg = PromoConfig::load(db).await;
     if !cfg.invite_enabled {
         anyhow::bail!("邀请活动未开启");
     }
-    // 联系方式是选填：留空也能领卡（降低领卡摩擦），只是换设备后少了找回凭据
-    let contact = contact.trim().to_string();
-    if contact.chars().count() > 120 {
-        anyhow::bail!("联系方式过长");
-    }
+    // 手机号是选填：留空也能领卡（降低领卡摩擦），只是丢了 cookie 就只能人工找回
+    let phone = normalize_phone(phone);
+    let contact = if phone.is_empty() { String::new() } else { format!("手机：{phone}") };
     let has_contact = !contact.is_empty();
     let pool = db.clone_pool();
     let vid_s = vid.to_string();
@@ -405,9 +446,9 @@ pub async fn claim_card(db: &Db, vid: &str, contact: &str) -> Result<Value> {
             let code = short_code(CODE_LEN);
             let card_id = format!("CARD-{}", short_code(10));
             let r = tx.execute(
-                "INSERT INTO brush_cards (card_id, code, owner_vid, contact, source, granted_at, expires_at)
-                 VALUES (?1, ?2, ?3, ?4, 'invite', ?5, ?6)",
-                rusqlite::params![card_id, code, vid_s, contact, now, expires],
+                "INSERT INTO brush_cards (card_id, code, owner_vid, contact, phone, source, granted_at, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'invite', ?6, ?7)",
+                rusqlite::params![card_id, code, vid_s, contact, phone, now, expires],
             );
             match r {
                 Ok(_) => {
@@ -506,11 +547,17 @@ pub(crate) fn issue_pass_card(db: &Db, vid: &str, order_id: &str) -> Option<Stri
     let digest: String = order_id.trim_start_matches("ORD-").chars().take(7).collect();
     let code = format!("P{}", digest.to_uppercase());
     let card_id = format!("CARD-{order_id}");
+    // 买卡时留的手机号随订单存着，发卡时抄到卡上 —— 换设备后全靠它自助找回
+    let contact: String = conn.query_row(
+        "SELECT COALESCE(customer_contact,'') FROM orders WHERE order_id=?1",
+        rusqlite::params![order_id], |r| r.get(0)).unwrap_or_default();
+    let phone = normalize_phone(&contact);
+    let contact = if phone.is_empty() { String::new() } else { format!("手机：{phone}") };
     conn.execute(
         "INSERT OR IGNORE INTO brush_cards
-            (card_id, code, owner_vid, contact, source, card_kind, granted_at, expires_at)
-         VALUES (?1, ?2, ?3, '', 'paid', ?4, ?5, ?6)",
-        rusqlite::params![card_id, code, vid, KIND_PASS, now, expires],
+            (card_id, code, owner_vid, contact, phone, source, card_kind, granted_at, expires_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'paid', ?6, ?7, ?8)",
+        rusqlite::params![card_id, code, vid, contact, phone, KIND_PASS, now, expires],
     ).ok()?;
     Some(expires)
 }
@@ -521,7 +568,7 @@ pub(crate) fn issue_pass_card(db: &Db, vid: &str, order_id: &str) -> Option<Stri
 /// orders 单号转的，另起一张表就得把这三条链路各写一遍。代价只是要在
 /// 入队与补投两处把它挡掉（见 ypay_db 的 submit_paid_order_job_sync /
 /// find_orders_paid_without_job_sync）。
-pub async fn create_pass_order(db: &Db, vid: &str) -> Result<Value> {
+pub async fn create_pass_order(db: &Db, vid: &str, phone: &str) -> Result<Value> {
     let cfg = PromoConfig::load(db).await;
     if !cfg.pass_enabled {
         anyhow::bail!("学期卡暂未开售");
@@ -533,6 +580,10 @@ pub async fn create_pass_order(db: &Db, vid: &str) -> Result<Value> {
     if check_benefit(db, vid).await.turbo {
         anyhow::bail!("你已在学期卡有效期内，无需重复购买");
     }
+    // 手机号（选填）落在 orders.customer_contact 上：发卡是付款后才发生的，
+    // 那一刻只剩订单可查，所以必须随订单一起存下来，发卡时再抄到卡上。
+    let phone = normalize_phone(phone);
+    let contact = if phone.is_empty() { String::new() } else { format!("手机：{phone}") };
     let order_id = crate::order::gen_order_id();
     let price = cfg.pass_price;
     let now = crate::queue::now_str();
@@ -547,9 +598,9 @@ pub async fn create_pass_order(db: &Db, vid: &str) -> Result<Value> {
                                  username, password, website_id, task_type, course_ids,
                                  video_count, exam_count, price, notes, status, paid,
                                  admin_note, created_at, updated_at, speed_mode, vid)
-             VALUES (?1,'','','','unprocessed','','','','','',0,?2,'[]',0,0,?3,'',
-                     'pending',0,'',?4,?4,'gentle',?5)",
-            rusqlite::params![oid, KIND_PASS, price, now, vid_s],
+             VALUES (?1,'','','','unprocessed','','',?2,'','',0,?3,'[]',0,0,?4,'',
+                     'pending',0,'',?5,?5,'gentle',?6)",
+            rusqlite::params![oid, contact, KIND_PASS, price, now, vid_s],
         )?;
         Ok(())
     })
@@ -592,6 +643,78 @@ pub async fn consume_card(db: &Db, card_id: &str, orders: i64) {
         Ok(())
     })
     .await;
+}
+
+/// 换设备 / 清缓存后自助找回：手机号 + 卡号（或订单号）双因子 → 把权益改绑到当前设备。
+///
+/// 为什么必须双因子：单凭手机号可枚举（猜号就能偷卡），单凭卡号则用户丢了 cookie
+/// 时多半也丢了卡号 —— 两个一起要求，猜中概率是「手机号命中 × 卡号空间」。
+///
+/// 改绑的不只是卡。这三样必须一起搬，否则用户"找回了卡"但进度和分享链接全废：
+///   - `brush_cards.owner_vid` → 新 vid（卡跟人走）
+///   - `invites.inviter_vid`   → 新 vid（攒到一半的邀请进度跟人走）
+///   - `visitors.invite_code`  → 搬到新 vid（否则分享链接还指向已经死掉的老设备）
+pub async fn restore_cards(db: &Db, new_vid: &str, phone: &str, secret: &str) -> Result<Value> {
+    if new_vid.is_empty() {
+        anyhow::bail!("访客身份缺失");
+    }
+    let phone = normalize_phone(phone);
+    if phone.is_empty() {
+        anyhow::bail!("请填写正确的 11 位手机号");
+    }
+    let secret = normalize_secret(secret);
+    if secret.chars().count() < 4 {
+        anyhow::bail!("请输入卡号（或卡号后 4 位）或订单号");
+    }
+    let pool = db.clone_pool();
+    let new_vid = new_vid.to_string();
+    tokio::task::spawn_blocking(move || -> Result<Value> {
+        let mut conn = pool.get()?;
+        let tx = conn.transaction()?;
+        // 该手机号名下的全部卡（含已过期的：让它回到自己名下，用户才查得到）
+        let rows: Vec<(String, String, String)> = {
+            let mut stmt = tx.prepare(
+                "SELECT card_id, code, owner_vid FROM brush_cards WHERE phone=?1")?;
+            let it = stmt.query_map(rusqlite::params![phone],
+                                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            it.collect::<Result<Vec<_>, _>>()?
+        };
+        if rows.is_empty() {
+            anyhow::bail!("这个手机号名下没有卡，请确认买卡 / 领卡时填的号码");
+        }
+        let Some(old_vid) = rows.iter()
+            .find(|(cid, code, _)| secret_matches_card(code, cid, &secret))
+            .map(|(_, _, v)| v.clone())
+        else {
+            anyhow::bail!("手机号正确，但卡号 / 订单号对不上");
+        };
+        let cards = rows.len() as i64;
+        if old_vid == new_vid {
+            // 同一台设备重复点：不报错，直接告诉它卡已经在手上了
+            return Ok(json!({"already": true, "cards": cards}));
+        }
+        let contact = format!("手机：{phone}");
+        tx.execute("UPDATE brush_cards SET owner_vid=?1 WHERE phone=?2 AND owner_vid=?3",
+                   rusqlite::params![new_vid, phone, old_vid])?;
+        tx.execute("UPDATE invites SET inviter_vid=?1 WHERE inviter_vid=?2",
+                   rusqlite::params![new_vid, old_vid])?;
+        let code: String = tx.query_row("SELECT invite_code FROM visitors WHERE vid=?1",
+                                        rusqlite::params![old_vid], |r| r.get(0))
+            .unwrap_or_default();
+        if !code.is_empty() {
+            // UNIQUE 约束：先把老设备那条的码清掉，空码不会被 vid_by_code 认出来
+            tx.execute("UPDATE visitors SET invite_code='' WHERE vid=?1",
+                       rusqlite::params![old_vid])?;
+            tx.execute("UPDATE visitors SET invite_code=?1 WHERE vid=?2",
+                       rusqlite::params![code, new_vid])?;
+        }
+        tx.execute("UPDATE visitors SET contact=?1 WHERE vid=?2",
+                   rusqlite::params![contact, new_vid])?;
+        tx.commit()?;
+        tracing::info!(new_vid = %new_vid, old_vid = %old_vid, cards, "免单卡已改绑到新设备");
+        Ok(json!({"already": false, "cards": cards}))
+    })
+    .await?
 }
 
 /// 后台推广总览
@@ -757,6 +880,33 @@ mod tests {
                              speed_mode: "turbo".into(), turbo: true };
         assert_eq!(pass.to_json()["turbo"], serde_json::json!(true));
         assert_eq!(pass.to_json()["speed_mode"], "turbo");
+    }
+
+    #[test]
+    fn test_gate_normalize_phone() {
+        assert_eq!(normalize_phone("13800138000"), "13800138000");
+        assert_eq!(normalize_phone(" 138 0013 8000 "), "13800138000");
+        // 带国码是 13 位数字，按中国大陆手机号口径不合法（宁可拒，也不要存查不出来的号）
+        assert_eq!(normalize_phone("+86 13800138000"), "");
+        assert_eq!(normalize_phone("1380013800"), "");   // 10 位
+        assert_eq!(normalize_phone("23800138000"), "");  // 不以 1 开头
+        assert_eq!(normalize_phone(""), "");
+        assert_eq!(normalize_phone("微信：abc"), "");
+    }
+
+    /// 找回凭证的匹配规则：宽松到"用户手上真有的东西"，但绝不放行空串 / 过短串。
+    #[test]
+    fn test_gate_secret_matches_card() {
+        let code = "PC6C32F2";
+        let card_id = "CARD-ORD-85789717";
+        assert!(secret_matches_card(code, card_id, "PC6C32F2"));    // 完整卡号
+        assert!(secret_matches_card(code, card_id, "pc6c32f2"));    // 大小写不敏感
+        assert!(secret_matches_card(code, card_id, "32F2"));        // 卡号后 4 位
+        assert!(secret_matches_card(code, card_id, "ORD85789717")); // 订单号（学期卡）
+        assert!(secret_matches_card(code, card_id, "85789717"));    // 裸订单号
+        assert!(!secret_matches_card(code, card_id, "AAAA"));
+        assert!(!secret_matches_card(code, card_id, "32F"));        // 太短，不放行
+        assert!(!secret_matches_card(code, card_id, ""));           // 空串绝不放行
     }
 
     #[test]

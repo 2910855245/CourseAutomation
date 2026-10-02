@@ -8,14 +8,36 @@ const store = useAppStore()
 const loading = ref(true)
 const loadError = ref('')
 const data = ref<any>(null)
-// 领取时留联系方式：类型 + 号码，拼成"微信：abc"存库（便于人工找回）
-const saved = (localStorage.getItem('invite_contact') || '').split('：')
-const contactType = ref(saved.length > 1 ? saved[0] : '')
-const contactValue = ref(saved.length > 1 ? saved[1] : (localStorage.getItem('invite_contact') || ''))
-const contact = computed(() =>
-  contactValue.value.trim() ? `${contactType.value || '其他'}：${contactValue.value.trim()}` : '')
+// 手机号（选填）：领卡与买学期卡都带上它。它 = 换设备后唯一的自助找回凭据，
+// 所以这里只收手机号，不收自由文本联系方式（自由文本查不出、也认不了人）。
+const phone = ref(localStorage.getItem('promo_phone') || '')
+function savePhone() {
+  try { localStorage.setItem('promo_phone', phone.value.trim()) } catch { }
+}
 const claiming = ref(false)
 const copied = ref(false)
+
+// 自助找回：手机号 + 卡号（或后 4 位 / 订单号）
+const restoreOpen = ref(false)
+const restorePhone = ref(phone.value)
+const restoreSecret = ref('')
+const restoring = ref(false)
+
+async function doRestore() {
+  if (restoring.value) return
+  restoring.value = true
+  try {
+    const r = await api.promo.restore(restorePhone.value.trim(), restoreSecret.value.trim())
+    data.value = r.data?.overview || data.value
+    phone.value = restorePhone.value.trim(); savePhone()
+    const n = r.data?.result?.cards ?? 0
+    store.toast(n > 0 ? `已找回 ${n} 张卡，邀请进度也一并恢复` : '已找回', 'success')
+    restoreOpen.value = false
+    restoreSecret.value = ''
+  } catch (e: any) {
+    store.toast(e?.message || '找回失败，请核对手机号与卡号', 'error')
+  } finally { restoring.value = false }
+}
 
 const link = computed(() => {
   const code = data.value?.code || ''
@@ -37,8 +59,6 @@ const progress = computed(() => {
 
 /** 当前持有的有效卡（有效期最长的第一张） */
 const activeCard = computed(() => (data.value?.cards || []).find((c: any) => c.valid) || null)
-
-const contactTypes = ['微信', 'QQ', '手机', '其他']
 
 async function load() {
   loading.value = true
@@ -70,9 +90,9 @@ async function claim() {
   if (!data.value?.can_claim) return
   claiming.value = true
   try {
-    const r = await api.invite.claim(contact.value)
+    const r = await api.invite.claim(phone.value)
     data.value = r.data?.overview || data.value
-    if (contact.value) localStorage.setItem('invite_contact', contact.value)
+    savePhone()
     store.toast(`领取成功：${r.data?.card?.code || '免单卡'}`, 'success')
   } catch (e: any) {
     store.toast(e?.message || '领取失败', 'error')
@@ -142,7 +162,8 @@ async function buyPass() {
   passPaying.value = true
   passPaid.value = false
   try {
-    const r = await api.pass.create()
+    const r = await api.pass.create(phone.value)
+    savePhone()
     const orderId = r.data?.order_id
     if (!orderId) throw new Error('建单失败，请稍后重试')
     passAmount.value = r.data?.price ?? passInfo.value.price
@@ -309,14 +330,11 @@ onBeforeUnmount(stopPassPoll)
               <div class="claim-sub">每张卡自领取起 {{ data.valid_days }} 天有效，可叠加领取</div>
             </div>
             <div class="claim-actions">
-              <select v-model="contactType" class="contact-input" :disabled="!data.can_claim">
-                <option value="">联系方式</option>
-                <option v-for="t in contactTypes" :key="t" :value="t">{{ t }}</option>
-              </select>
               <input
-                v-model="contactValue"
+                v-model="phone"
                 class="contact-input contact-value"
-                placeholder="选填：微信 / 手机号"
+                inputmode="numeric"
+                placeholder="手机号（选填，换设备找回用）"
                 :disabled="!data.can_claim"
               >
               <button
@@ -351,6 +369,28 @@ onBeforeUnmount(stopPassPoll)
                 <span v-if="c.used_orders">已用 {{ c.used_orders }} 单</span>
               </div>
             </div>
+          </div>
+        </section>
+
+        <!-- 换设备找回：卡与邀请进度都绑在当前浏览器上，清了就没了 -->
+        <section class="card anim-rise">
+          <div class="card-head">
+            <h3>换设备了？找回我的卡</h3>
+            <button class="btn btn-xs pay-ghost" @click="restoreOpen = !restoreOpen">
+              {{ restoreOpen ? '收起' : '去认领' }}
+            </button>
+          </div>
+          <p class="tip">
+            卡和邀请进度都绑在<strong>当前浏览器</strong>上。清了缓存 / 换了手机后，用
+            买卡或领卡时留的<strong>手机号</strong>，加上<strong>卡号（后 4 位即可）或订单号</strong>，
+            就能把卡和邀请进度认领回来。
+          </p>
+          <div v-if="restoreOpen" class="restore-form">
+            <input v-model="restorePhone" class="contact-input" inputmode="numeric" placeholder="手机号">
+            <input v-model="restoreSecret" class="contact-input" placeholder="卡号 / 后 4 位 / 订单号">
+            <button class="btn btn-primary" :disabled="restoring" @click="doRestore">
+              {{ restoring ? '找回中…' : '找回' }}
+            </button>
           </div>
         </section>
 
@@ -526,6 +566,15 @@ onBeforeUnmount(stopPassPoll)
 }
 .contact-input:focus { border-color: var(--c-primary); }
 .contact-value { width: 200px; }
+
+/* 找回表单：手机号 + 卡号/订单号 + 按钮 */
+.restore-form {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.restore-form .contact-input { flex: 1; min-width: 180px; }
 
 /* ==================== 票券 ==================== */
 .card-grid {
