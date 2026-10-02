@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::db::Db;
 
 /// 订单ID生成（对齐 api.utils.gen_id("ORD")）
-fn gen_order_id() -> String {
+pub(crate) fn gen_order_id() -> String {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
     format!("ORD-{:08X}", nanos & 0xffff_ffff)
 }
@@ -301,6 +301,11 @@ pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
             continue;
         }
         let mut item = item.clone();
+        // 'pass' 是学期卡虚拟商品的保留类型，只能由 /api/promo/pass/create 建单。
+        // 普通下单接口被传这个值就直接降级成视频单，否则能白嫖一张学期卡。
+        if item["task_type"].as_str() == Some(crate::promo::KIND_PASS) {
+            item["task_type"] = json!("video");
+        }
         let original_price = item["price"].as_f64().unwrap_or(0.0);
         if card_free {
             // 持卡：考试费清零，该单变 0 元
@@ -315,7 +320,11 @@ pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
         // 所以没有卡的普通用户下的纯视频单同样是免费单，同样只能串行。
         let is_free_item = item["price"].as_f64().unwrap_or(0.0) <= 0.0;
         if is_free_item {
-            item["speed_mode"] = json!(crate::speed::SpeedMode::Gentle.as_str());
+            // 学期卡把暴力档当权益卖出去（benefit.turbo）；其余免费单（纯视频、
+            // 全局免费活动、刷课卡）一律锁保守档 —— 加速只能花钱买。
+            if !benefit.turbo {
+                item["speed_mode"] = json!(crate::speed::SpeedMode::Gentle.as_str());
+            }
             // 免费单不得执行考试/作业：只有"持卡/全局免费"覆盖考试费，"视频免费"
             // 不覆盖。算价已经改用服务端快照（伪造不了），这里再兜一道 ——
             // 即使未来算价再出漏洞，免费单也只会刷视频，不会把付费考试白做掉。

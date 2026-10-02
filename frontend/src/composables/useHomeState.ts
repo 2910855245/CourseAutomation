@@ -117,15 +117,16 @@ export function useHomeState() {
     hasSavedSpeed ? (localStorage.getItem(SPEED_LS_KEY) as SpeedMode) : 'gentle'
   )
   function setSpeedMode(mode: SpeedMode) {
-    // 免费待遇下只能串行：付费档位在此被拦下（服务端同样会强制，双保险）
-    if (benefit.value.free && mode !== 'gentle') return
+    // 免费待遇下只能串行：付费档位在此被拦下（服务端同样会强制，双保险）。
+    // 例外是学期卡（benefit.turbo）—— 暴力档就是它买来的权益。
+    if (benefit.value.free && !benefit.value.turbo && mode !== 'gentle') return
     speedMode.value = mode
     try { localStorage.setItem(SPEED_LS_KEY, mode) } catch { }
   }
 
   // ── 免费待遇（全局免费开关 / 刷课卡）──
   // 由后端按访客身份判定，前端只负责展示与跳过支付；判定结果以后端返回为准
-  const benefit = ref<{ free: boolean; reason: string; speed_mode?: string }>({ free: false, reason: '' })
+  const benefit = ref<{ free: boolean; reason: string; speed_mode?: string; turbo?: boolean }>({ free: false, reason: '' })
   const inviteInfo = ref<{ code: string; threshold: number; invited_valid: number; can_claim: number; enabled: boolean }>(
     { code: '', threshold: 3, invited_valid: 0, can_claim: 0, enabled: true }
   )
@@ -138,8 +139,9 @@ export function useHomeState() {
       benefit.value = d.benefit || { free: false, reason: '' }
       if (d.invite) inviteInfo.value = { ...inviteInfo.value, ...d.invite }
       myCard.value = d.card || null
-      // 免费＝只能串行：把档位锁到保守档（服务端也会强制改写，这里只是让界面一致）
-      if (benefit.value.free) speedMode.value = 'gentle'
+      // 免费＝只能串行：把档位锁到保守档（服务端也会强制改写，这里只是让界面一致）。
+      // 学期卡（turbo）不锁，它的权益就是能用暴力档。
+      if (benefit.value.free && !benefit.value.turbo) speedMode.value = 'gentle'
     } catch { /* 营销是附加功能，失败不打扰用户 */ }
   }
 

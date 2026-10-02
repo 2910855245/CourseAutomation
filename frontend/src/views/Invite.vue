@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { api } from '@/api'
 import AppTopbar from '@/components/AppTopbar.vue'
@@ -79,7 +79,92 @@ async function claim() {
   } finally { claiming.value = false }
 }
 
+// ── 学期卡（付费）────────────────────────────────────────────────────────
+// 收款复用订单页那套 /api/payment/batch-create（传单个 order_id），
+// 好处是入账/发卡全走后端已有的三条收款路径，前端不用自己实现对账。
+const passPaying = ref(false)
+const passOpen = ref(false)
+const passPaid = ref(false)
+const passMethod = ref<'wx' | 'ali'>('wx')
+const passAmount = ref(0)
+const passQrs = ref<Record<string, string>>({})
+const passBatchIds = ref<Record<string, string>>({})
+const passOutTradeNos = ref<Record<string, string>>({})
+let passTimer: ReturnType<typeof setInterval> | null = null
+
+const passInfo = computed(() => data.value?.pass || { enabled: false, price: 19.9, days: 180 })
+const hasPass = computed(() => data.value?.has_pass === true)
+const passCard = computed(() =>
+  (data.value?.cards || []).find((c: any) => c.kind === 'pass' && c.valid) || null)
+const passExpire = computed(() => (passCard.value?.expires_at || '').slice(0, 10))
+const passQr = computed(() => passQrs.value[passMethod.value] || '')
+const passBatchId = computed(() => passBatchIds.value[passMethod.value] || '')
+const passOutTradeNo = computed(() => passOutTradeNos.value[passMethod.value] || '')
+
+function stopPassPoll() {
+  if (passTimer) { clearInterval(passTimer); passTimer = null }
+}
+
+function closePass() {
+  stopPassPoll()
+  passOpen.value = false
+  passPaid.value = false
+  passQrs.value = {}
+  passBatchIds.value = {}
+  passOutTradeNos.value = {}
+}
+
+function startPassPoll() {
+  stopPassPoll()
+  passTimer = setInterval(async () => {
+    if (!passBatchId.value) return
+    try {
+      const r = await api.payment.batchCheck(passBatchId.value, passOutTradeNo.value)
+      if (r?.data?.paid) {
+        stopPassPoll()
+        passPaid.value = true
+        store.toast('学期卡已开通', 'success')
+        await load()
+      }
+    } catch { /* 网络抖动：下一拍继续，不打断用户 */ }
+  }, 3000)
+}
+
+async function buyPass() {
+  if (passPaying.value || hasPass.value) return
+  passPaying.value = true
+  passPaid.value = false
+  try {
+    const r = await api.pass.create()
+    const orderId = r.data?.order_id
+    if (!orderId) throw new Error('建单失败，请稍后重试')
+    passAmount.value = r.data?.price ?? passInfo.value.price
+    // 一次性把微信/支付宝两个通道都建好，用户在本页就能换支付方式
+    const qrs: Record<string, string> = {}
+    const batchIds: Record<string, string> = {}
+    const outTradeNos: Record<string, string> = {}
+    for (const m of [{ key: 'wx', pay_type: 1 }, { key: 'ali', pay_type: 2 }]) {
+      try {
+        const p = await api.payment.batchCreate({ order_ids: [orderId], pay_type: m.pay_type })
+        const pd: any = p?.data || {}
+        if (pd.qr_image) qrs[m.key] = pd.qr_image
+        if (pd.batch_id) batchIds[m.key] = pd.batch_id
+        if (pd.out_trade_no) outTradeNos[m.key] = pd.out_trade_no
+        if (pd.really_price) passAmount.value = pd.really_price
+      } catch { /* 单个通道失败不影响另一个 */ }
+    }
+    if (!qrs.wx && !qrs.ali) throw new Error('收款通道暂不可用，请稍后重试')
+    passQrs.value = qrs; passBatchIds.value = batchIds; passOutTradeNos.value = outTradeNos
+    if (!qrs[passMethod.value]) passMethod.value = qrs.wx ? 'wx' : 'ali'
+    passOpen.value = true
+    startPassPoll()
+  } catch (e: any) {
+    store.toast(e?.message || '下单失败，请稍后重试', 'error')
+  } finally { passPaying.value = false }
+}
+
 onMounted(load)
+onBeforeUnmount(stopPassPoll)
 </script>
 
 <template>
@@ -111,6 +196,60 @@ onMounted(load)
       </div>
 
       <template v-else-if="data">
+        <!-- 学期卡（付费） -->
+        <section class="card pass-card anim-rise">
+          <div class="card-head">
+            <h3>学期卡</h3>
+            <span v-if="hasPass" class="status-tag ok">生效中</span>
+          </div>
+
+          <template v-if="hasPass">
+            <p class="pass-own">
+              答题 / 考试<b>全免单</b>、<b>暴力档</b>提速、下单<b>优先排队</b>均已生效
+              <template v-if="passExpire">，有效期至 <b class="mono">{{ passExpire }}</b></template>。
+            </p>
+          </template>
+
+          <template v-else-if="passInfo.enabled">
+            <div class="pass-price">
+              <span class="cur">¥</span><span class="num mono">{{ passInfo.price }}</span>
+              <span class="unit">/ 整学期 {{ passInfo.days }} 天</span>
+            </div>
+            <ul class="pass-benefits">
+              <li>整学期答题 / 考试<b>全免单</b>，不限门数</li>
+              <li>解锁<b>暴力档</b>提速，比免费队列快得多</li>
+              <li>下单<b>优先排队</b>，永远排在免费单前面</li>
+            </ul>
+            <button class="btn btn-primary pass-btn" :disabled="passPaying" @click="buyPass">
+              {{ passPaying ? '处理中…' : `立即开通 ¥${passInfo.price}` }}
+            </button>
+            <p class="tip">单门考试约 ¥5，跑三门就回本；一门一付还是整学期，你自己算。</p>
+          </template>
+
+          <p v-else class="tip">学期卡暂未开售，可先靠邀请领免费刷课卡。</p>
+
+          <!-- 收款面板（复用 batch-create / batch-check 通道） -->
+          <div v-if="passOpen" class="pay-box">
+            <template v-if="passPaid">
+              <p class="pay-done">支付成功，学期卡已开通</p>
+              <button class="btn pay-ghost" @click="closePass">知道了</button>
+            </template>
+            <template v-else>
+              <div class="pay-methods">
+                <button class="pm" :class="{ on: passMethod === 'wx' }" @click="passMethod = 'wx'">微信支付</button>
+                <button class="pm" :class="{ on: passMethod === 'ali' }" @click="passMethod = 'ali'">支付宝</button>
+              </div>
+              <div class="pay-qr">
+                <img v-if="passQr" :src="passQr" alt="支付二维码">
+                <div v-else class="pay-qr-empty">该通道暂不可用，换个支付方式试试</div>
+              </div>
+              <p class="pay-amount mono">应付 ¥{{ passAmount }}</p>
+              <p class="tip">扫码支付，付完本页会自动刷新，无需手动确认。</p>
+              <button class="btn pay-ghost" @click="closePass">关闭</button>
+            </template>
+          </div>
+        </section>
+
         <!-- 邀请链接 -->
         <section class="card anim-rise">
           <div class="card-head">
@@ -184,7 +323,7 @@ onMounted(load)
         <!-- 我的卡 -->
         <section v-if="data.cards?.length" class="card anim-rise">
           <div class="card-head">
-            <h3>我的刷课卡</h3>
+            <h3>我的卡券</h3>
             <span class="muted">共 <b class="mono">{{ data.cards.length }}</b> 张</span>
           </div>
           <div class="card-grid">
@@ -194,7 +333,7 @@ onMounted(load)
                 <span class="status-tag" :class="c.valid ? 'ok' : 'muted'">{{ c.valid ? '生效中' : '已过期' }}</span>
               </div>
               <div class="ticket-body">
-                <span class="ticket-label">刷课卡</span>
+                <span class="ticket-label">{{ c.kind === 'pass' ? '学期卡' : '刷课卡' }}</span>
                 <span class="ticket-days mono">{{ c.valid ? `剩 ${c.days_left} 天` : '—' }}</span>
               </div>
               <div class="ticket-foot">
@@ -215,7 +354,8 @@ onMounted(load)
             <li>每满 {{ data.threshold }} 位有效邀请，可领取 1 张 {{ data.valid_days }} 天刷课卡，可重复领取。</li>
             <li>持卡期间<b>答题 / 考试免单</b>（刷视频本来就免费），额度内可重复使用。</li>
             <li>持卡下单<b>优先排队</b>：排在所有普通免费单之前，不用等免费队列。</li>
-            <li>免费单（含持卡）走<b>免费队列</b>且只能用<b>保守档</b>；想用暴力档提速，需按门课付费 —— 付费订单走独立通道，永远不排在免费队列后面。</li>
+            <li>免费单（含刷课卡）走<b>免费队列</b>且只能用<b>保守档</b>；<b>学期卡</b>与按门课付费的单解锁<b>暴力档</b>，走独立通道，永远不排在免费队列后面。</li>
+            <li><b>学期卡</b>：付费开通，整学期（{{ passInfo.days }} 天）内答题/考试全免单、不限门数，并解锁暴力档与优先排队。</li>
             <li>卡片与当前浏览器身份绑定；领卡时填了联系方式的，换设备 / 清缓存后联系客服可找回。</li>
             <li>同一好友仅计一次；需通过你的链接进入并完成下单才计入，自己邀请自己不计。</li>
           </ol>
@@ -408,6 +548,75 @@ onMounted(load)
   font-size: 11.5px;
   color: var(--c-text-muted);
 }
+
+/* ==================== 学期卡 ==================== */
+.pass-card { background: linear-gradient(150deg, var(--c-primary-bg), var(--c-surface) 62%); }
+.pass-own { font-size: 13.5px; line-height: 1.9; color: var(--c-text-secondary); }
+.pass-own b { color: var(--c-primary); font-weight: 700; }
+.pass-price { display: flex; align-items: baseline; gap: 6px; }
+.pass-price .cur { font-size: 16px; font-weight: 700; color: var(--c-primary); }
+.pass-price .num { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; color: var(--c-primary); }
+.pass-price .unit { font-size: 12.5px; color: var(--c-text-muted); }
+.pass-benefits {
+  margin: 14px 0 16px;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--c-text-secondary);
+}
+.pass-benefits b { color: var(--c-text); }
+.pass-btn { width: 100%; height: 46px; font-size: 14.5px; font-weight: 700; }
+
+/* 收款面板 */
+.pay-box {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--c-border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.pay-methods { display: flex; gap: 8px; }
+.pm {
+  height: 34px;
+  padding: 0 16px;
+  border: 1.5px solid var(--c-border);
+  border-radius: 999px;
+  background: var(--c-surface);
+  color: var(--c-text-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: all .2s ease;
+}
+.pm.on { border-color: var(--c-primary); background: var(--c-primary-bg); color: var(--c-primary); font-weight: 700; }
+.pay-qr {
+  width: 200px; height: 200px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+}
+.pay-qr img { width: 100%; height: 100%; object-fit: contain; }
+.pay-qr-empty { font-size: 12px; color: var(--c-text-muted); text-align: center; padding: 0 16px; line-height: 1.7; }
+.pay-amount { font-size: 15px; font-weight: 700; color: var(--c-text); }
+.pay-done { font-size: 14px; font-weight: 700; color: var(--c-success); }
+.pay-ghost {
+  height: 36px;
+  padding: 0 18px;
+  border: 1.5px solid var(--c-border);
+  border-radius: 10px;
+  background: var(--c-surface);
+  color: var(--c-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.pay-ghost:hover { border-color: var(--c-primary); color: var(--c-primary); }
+.pay-box .tip { margin: 0; text-align: center; }
 
 /* ==================== 规则 ==================== */
 .rules {

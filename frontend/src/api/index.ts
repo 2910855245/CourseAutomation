@@ -157,6 +157,10 @@ export const api = {
     me: () => get<ApiResponse<any>>('/api/invite/me'),
     claim: (contact: string) => post<ApiResponse<any>>('/api/invite/claim', { contact }),
   },
+  // 学期卡：建单只拿到 order_id，收款复用 /api/payment/batch-create（同一单号）
+  pass: {
+    create: () => post<ApiResponse<{ order_id: string; price: number; days: number }>>('/api/promo/pass/create'),
+  },
   adminPromo: {
     stats: () => get<ApiResponse<any>>('/api/admin/promo/stats'),
   },

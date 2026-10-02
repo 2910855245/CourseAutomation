@@ -34,6 +34,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/invite/me", get(invite_me))
         .route("/api/invite/claim", post(invite_claim))
         .route("/api/me/benefit", get(my_benefit))
+        .route("/api/promo/pass/create", post(pass_create))
 }
 
 /// 从 Cookie 头里取 vid
@@ -168,6 +169,18 @@ async fn my_benefit(
             }),
         },
     }))
+}
+
+/// 下单买学期卡：只建业务单，收款走前端已有的 /api/ypay/create（同一个单号）。
+async fn pass_create(
+    State(state): State<AppState>,
+    ext: Option<Extension<VisitorId>>,
+) -> Json<Value> {
+    let vid = ext.map(|e| visitor_ext(&e)).unwrap_or_default();
+    match promo::create_pass_order(&state.db, &vid).await {
+        Ok(data) => Json(json!({"success": true, "message": "订单已创建", "data": data})),
+        Err(e) => Json(json!({"success": false, "message": format!("{e}")})),
+    }
 }
 
 pub async fn admin_promo_stats(State(state): State<AppState>) -> Json<Value> {

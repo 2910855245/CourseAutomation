@@ -474,7 +474,8 @@ impl Db {
         let Ok(mut stmt) = conn.prepare(&format!(
             "SELECT {ORDER_COLS} FROM orders
              WHERE out_trade_no LIKE 'BATCH-%' AND paid=0
-               AND status IN ('pending','awaiting_payment')"
+               AND status IN ('pending','awaiting_payment')
+               AND task_type != 'pass'   -- 学期卡不能被按金额凑数的回退匹配误判为已付"
         )) else {
             return vec![];
         };
@@ -523,6 +524,7 @@ impl Db {
         let Ok(mut stmt) = conn.prepare(
             "SELECT o.order_id FROM orders o
              WHERE o.paid = 1 AND o.status = 'paid' AND o.deleted_at IS NULL
+               AND o.task_type != 'pass'   -- 学期卡订单就是一次发卡，永远没有队列任务
                AND NOT EXISTS (SELECT 1 FROM queue_jobs_school q WHERE q.order_id = o.order_id)
                AND NOT EXISTS (SELECT 1 FROM queue_jobs_chaoxing q WHERE q.order_id = o.order_id)
              ORDER BY CASE WHEN o.paid_processed LIKE 'free:%' THEN 1 ELSE 0 END ASC,
@@ -672,6 +674,12 @@ impl Db {
             return Ok(false);
         }
         let task_type_raw = order["task_type"].as_str().unwrap_or("full");
+        // 学期卡是"付费即发卡"的虚拟商品，没有课要刷：绝不能进队列。
+        // 白名单回退 logic 会把 'pass' 归一成 'full'，一旦放过去就会拿空凭据
+        // 去刷课，必须在这里先挡掉。
+        if task_type_raw == crate::promo::KIND_PASS {
+            return Ok(false);
+        }
         // 对齐 normalize_task_type：白名单外回退 full
         let task_type = match task_type_raw {
             "video" | "exam" | "full" | "chaoxing_points" => task_type_raw,

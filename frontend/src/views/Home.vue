@@ -61,16 +61,19 @@ const freeTotal = computed(() =>
 const totalText = computed(() => loadingPrices.value ? '计价中…' : `¥${summary.value.total.toFixed(2)}`)
 // 免单原因要分开说：持卡免的是考试费，视频免费是所有人本来就有的
 const freeTagText = computed(() => {
+  // 学期卡（turbo）优先：它是付费卡，别跟免费刷课卡混为一谈
+  if (benefit.value.turbo) return '学期卡免单'
   if (benefit.value.reason === 'card') return '刷课卡免考试费'
   if (benefit.value.reason === 'global') return '限时免费'
   return '视频免费'
 })
 function isSpeedLocked(key: string) {
-  return key !== 'gentle' && freeTotal.value
+  // 学期卡买了暴力档权益，不再锁
+  return key !== 'gentle' && freeTotal.value && !benefit.value.turbo
 }
 function pickSpeed(key: 'turbo' | 'gentle') {
   if (isSpeedLocked(key)) {
-    store.toast('免费刷课只能使用保守档，付费答题可解锁暴力档', 'warning')
+    store.toast('免费刷课只能使用保守档，开通学期卡或按门付费可解锁暴力档', 'warning')
     return
   }
   setSpeedMode(key)

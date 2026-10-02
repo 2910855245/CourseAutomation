@@ -251,6 +251,7 @@ CREATE TABLE IF NOT EXISTS brush_cards (
     owner_vid VARCHAR(64) NOT NULL,
     contact VARCHAR(255) DEFAULT '',
     source VARCHAR(32) DEFAULT 'invite',
+    card_kind VARCHAR(16) DEFAULT 'invite',
     granted_at VARCHAR(255) NOT NULL,
     expires_at VARCHAR(255) NOT NULL,
     used_orders INTEGER DEFAULT 0,
@@ -342,6 +343,10 @@ const SPEED_MODE_COLUMN: &[(&str, &str)] = &[("speed_mode", "VARCHAR(255) DEFAUL
 /// 订单上的访客标识（营销归因：付款成功后据此把邀请记为有效）
 const ORDER_VISITOR_COLUMN: &[(&str, &str)] = &[("vid", "VARCHAR(64) DEFAULT ''")];
 
+/// 卡类型：老库的刷课卡都是邀请得来的，补列默认 'invite' 即保持原行为。
+/// 付费买的学期卡写 'pass'（不限次 + 暴力档 + 插队）。
+const CARD_KIND_COLUMN: &[(&str, &str)] = &[("card_kind", "VARCHAR(16) DEFAULT 'invite'")];
+
 /// 队列任务所属通道：付费（答题/考试）与免费（刷视频）。
 ///
 /// 与 `priority` 正交：`lane` 决定占哪条并发额度，`priority` 只决定池内先后。
@@ -379,6 +384,7 @@ pub fn ensure_schema(pool: &Pool<SqliteConnectionManager>) -> Result<()> {
     add_missing_columns(&conn, "queue_jobs_school", SPEED_MODE_COLUMN)?;
     add_missing_columns(&conn, "queue_jobs_chaoxing", SPEED_MODE_COLUMN)?;
     add_missing_columns(&conn, "orders", ORDER_VISITOR_COLUMN)?;
+    add_missing_columns(&conn, "brush_cards", CARD_KIND_COLUMN)?;
     add_missing_columns(&conn, "queue_jobs_school", LANE_COLUMN)?;
     add_missing_columns(&conn, "queue_jobs_chaoxing", LANE_COLUMN)?;
 

@@ -84,6 +84,20 @@ fn enqueue_order_sync(db: &Db, order_id: &str) -> bool {
     if order.get("status").and_then(Value::as_str) != Some("paid") {
         return false;
     }
+    // 学期卡是虚拟商品：收款即发卡，没有课要刷、也不进队列。
+    // 这里是三条收款路径（回调/轮询/对账）共同的收口点，放这儿发卡最稳。
+    if order.get("task_type").and_then(Value::as_str) == Some(crate::promo::KIND_PASS) {
+        let vid = order.get("vid").and_then(Value::as_str).unwrap_or("");
+        if vid.is_empty() {
+            // 没有 vid 就挂不到人头上，发出去也是废卡。留日志便于人工补发。
+            tracing::error!(order_id, "学期卡订单缺少 vid，无法发卡");
+            return false;
+        }
+        if let Some(expires) = crate::promo::issue_pass_card(db, vid, order_id) {
+            tracing::info!(order_id, vid, expires, "学期卡已发放");
+        }
+        return true;
+    }
     // 对齐 q.get_job_by_order_id(order_id)：两表查最新任务
     if db.queue_job_status_by_order_sync(order_id).is_some() {
         return false;
@@ -169,6 +183,12 @@ async fn payment_create(State(state): State<AppState>, Json(body): Json<PaymentC
     let site_url = crate::pay::get_site_url(&db).await;
     let price = order.get("price").and_then(Value::as_f64).unwrap_or(0.0);
     let username = order.get("username").and_then(Value::as_str).unwrap_or("");
+    // 学期卡订单没有学号，收款页标题得说人话（否则会显示成"网课代刷-"）
+    let title = if order.get("task_type").and_then(Value::as_str) == Some(crate::promo::KIND_PASS) {
+        "网课学期卡".to_string()
+    } else {
+        format!("网课代刷-{username}")
+    };
     let client = reqwest::Client::new();
     let result = crate::pay::create_order(
         &db,
@@ -176,7 +196,7 @@ async fn payment_create(State(state): State<AppState>, Json(body): Json<PaymentC
         body.pay_type,
         price,
         &body.order_id,
-        &format!("网课代刷-{username}"),
+        &title,
         &format!("{site_url}/api/payment/notify"),
         &format!("{site_url}/#/orders"),
         "",
@@ -728,6 +748,12 @@ async fn ypay_create(State(state): State<AppState>, Json(body): Json<PaymentCrea
     let site_url = crate::pay::get_site_url(&db).await;
     let price = order.get("price").and_then(Value::as_f64).unwrap_or(0.0);
     let username = order.get("username").and_then(Value::as_str).unwrap_or("");
+    // 学期卡订单没有学号，收款页标题得说人话（否则会显示成"网课代刷-"）
+    let title = if order.get("task_type").and_then(Value::as_str) == Some(crate::promo::KIND_PASS) {
+        "网课学期卡".to_string()
+    } else {
+        format!("网课代刷-{username}")
+    };
     let client = reqwest::Client::new();
     let result = crate::pay::create_order(
         &db,
@@ -735,7 +761,7 @@ async fn ypay_create(State(state): State<AppState>, Json(body): Json<PaymentCrea
         body.pay_type,
         price,
         &body.order_id,
-        &format!("网课代刷-{username}"),
+        &title,
         &format!("{site_url}/api/payment/notify"),
         &format!("{site_url}/#/orders"),
         "",

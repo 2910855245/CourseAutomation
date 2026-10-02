@@ -205,7 +205,9 @@ mod tests {
 
     #[test]
     fn test_token_roundtrip() {
-        std::env::set_var("JWT_SECRET_KEY", "test-secret");
+        // 不要在这里 set_var：测试是并行线程跑的，改全局环境变量会和
+        // progress::orders_scope（view_token 也读同一个 env）抢时序，
+        // 让那边偶发地对不上签名。secret() 本身有兜底值，测试不需要它。
         let token = create_token("admin1", "admin").unwrap();
         let claims = verify_token(&token).unwrap();
         assert_eq!(claims.sub, "admin1");

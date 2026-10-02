@@ -27,6 +27,13 @@ pub const CFG_THRESHOLD: &str = "invite_threshold";
 pub const CFG_REQUIRE_ORDER: &str = "invite_require_order";
 pub const CFG_VALID_DAYS: &str = "card_valid_days";
 pub const CFG_MAX_ORDERS: &str = "card_max_orders";
+pub const CFG_PASS_PRICE: &str = "pass_price";
+pub const CFG_PASS_DAYS: &str = "pass_days";
+pub const CFG_PASS_ENABLED: &str = "pass_enabled";
+
+/// 卡类型：邀请得的刷课卡（30 天、免费+保守档）与付费买的学期卡（整学期、免费+暴力档+插队）
+pub const KIND_INVITE: &str = "invite";
+pub const KIND_PASS: &str = "pass";
 
 /// 当前生效的营销配置（一次读齐，避免多处各读一次）
 #[derive(Debug, Clone)]
@@ -37,6 +44,9 @@ pub struct PromoConfig {
     pub require_order: bool,
     pub valid_days: i64,
     pub max_orders: i64,
+    pub pass_enabled: bool,
+    pub pass_price: f64,
+    pub pass_days: i64,
 }
 
 impl PromoConfig {
@@ -47,6 +57,11 @@ impl PromoConfig {
         let threshold = get(CFG_THRESHOLD).await.parse::<i64>().ok().unwrap_or(3).clamp(1, 1000);
         let valid_days = get(CFG_VALID_DAYS).await.parse::<i64>().ok().unwrap_or(30).clamp(1, 3650);
         let max_orders = get(CFG_MAX_ORDERS).await.parse::<i64>().ok().unwrap_or(0).max(0);
+        // 学期卡默认 19.9 元 / 180 天：付费入口需要有个能直接跑的默认值，
+        // 后台改价后立即生效（读的是 system_config，不重启）
+        let pass_price = get(CFG_PASS_PRICE).await.parse::<f64>().ok()
+            .filter(|p| *p >= 0.0).unwrap_or(19.9);
+        let pass_days = get(CFG_PASS_DAYS).await.parse::<i64>().ok().unwrap_or(180).clamp(1, 3650);
         Self {
             free_mode: get(CFG_FREE_MODE).await == "1",
             // 默认开启：这是拉新功能，装好就该能用
@@ -55,6 +70,9 @@ impl PromoConfig {
             require_order: get(CFG_REQUIRE_ORDER).await != "0",
             valid_days,
             max_orders,
+            pass_enabled: get(CFG_PASS_ENABLED).await != "0",
+            pass_price,
+            pass_days,
         }
     }
 }
@@ -65,8 +83,10 @@ impl PromoConfig {
 /// 含义是「**这一单不用付钱**」，来源只有两种：全局免费活动，或刷课卡
 /// （卡的权益 = 免考试费 + 优先排队）。
 ///
-/// 免费单一律只能用保守档（串行）：适中/暴力是付费权益，服务端会在创建订单时
+/// 免费单一律只能用保守档（串行）：暴力档是付费权益，服务端会在创建订单时
 /// 强制改写档位，前端置灰只是提示。
+///
+/// 例外：**学期卡**持有者买了暴力档权益，`turbo` 为真时不再强制改写。
 #[derive(Debug, Clone, Default)]
 pub struct Benefit {
     pub free: bool,
@@ -75,6 +95,8 @@ pub struct Benefit {
     pub card_id: String,
     /// 免费单锁定的档位（恒为保守档）
     pub speed_mode: String,
+    /// 是否允许使用暴力档（仅学期卡为真）
+    pub turbo: bool,
 }
 
 impl Benefit {
@@ -90,6 +112,7 @@ impl Benefit {
             "reason": self.reason,
             "card_id": self.card_id,
             "speed_mode": self.speed_mode,
+            "turbo": self.turbo,
         })
     }
 }
@@ -289,14 +312,18 @@ pub async fn invite_overview(db: &Db, vid: &str) -> Result<Value> {
         };
 
         let mut stmt = conn.prepare(
-            "SELECT code, granted_at, expires_at, revoked, used_orders FROM brush_cards
-             WHERE owner_vid=?1 ORDER BY granted_at DESC LIMIT 20")?;
+            "SELECT code, granted_at, expires_at, revoked, used_orders, COALESCE(card_kind,'invite')
+             FROM brush_cards WHERE owner_vid=?1
+             ORDER BY CASE COALESCE(card_kind,'invite') WHEN 'pass' THEN 0 ELSE 1 END,
+                      granted_at DESC LIMIT 20")?;
         let cards: Vec<Value> = stmt.query_map(rusqlite::params![vid], |r| {
             let code: String = r.get(0)?;
             let expires: String = r.get(2)?;
             let revoked: i64 = r.get(3)?;
+            let kind: String = r.get(5)?;
             Ok(json!({
                 "code": code,
+                "kind": kind,
                 "granted_at": r.get::<_, String>(1)?,
                 "expires_at": expires.clone(),
                 "valid": card_valid(&expires, revoked != 0, now_secs),
@@ -305,6 +332,7 @@ pub async fn invite_overview(db: &Db, vid: &str) -> Result<Value> {
             }))
         })?.collect::<Result<Vec<_>, _>>()?;
         let has_valid_card = cards.iter().any(|c| c["valid"].as_bool() == Some(true));
+        let has_pass = cards.iter().any(|c| c["kind"] == "pass" && c["valid"].as_bool() == Some(true));
 
         Ok(json!({
             "code": code,
@@ -320,7 +348,14 @@ pub async fn invite_overview(db: &Db, vid: &str) -> Result<Value> {
             "can_claim": can_claim,
             "cards": cards,
             "has_valid_card": has_valid_card,
+            "has_pass": has_pass,
             "free_mode": cfg.free_mode,
+            // 学期卡售卖信息（价格/天数/开关都由后台配置，前端只负责展示）
+            "pass": {
+                "enabled": cfg.pass_enabled,
+                "price": cfg.pass_price,
+                "days": cfg.pass_days,
+            },
         }))
     })
     .await?
@@ -394,7 +429,8 @@ pub async fn check_benefit(db: &Db, vid: &str) -> Benefit {
     let cfg = PromoConfig::load(db).await;
     if cfg.free_mode {
         return Benefit { free: true, reason: "global".into(), card_id: String::new(),
-                         speed_mode: crate::speed::SpeedMode::Gentle.as_str().into() };
+                         speed_mode: crate::speed::SpeedMode::Gentle.as_str().into(),
+                         turbo: false };
     }
     if vid.is_empty() {
         return Benefit::paid();
@@ -403,21 +439,28 @@ pub async fn check_benefit(db: &Db, vid: &str) -> Benefit {
     let vid_s = vid.to_string();
     let max_orders = cfg.max_orders;
     let now_secs = crate::queue::local_secs() as i64;
-    let found = tokio::task::spawn_blocking(move || -> Option<String> {
+    // 返回 (card_id, 是否学期卡)：学期卡不限次数、且带暴力档权益
+    let found = tokio::task::spawn_blocking(move || -> Option<(String, bool)> {
         let conn = pool.get().ok()?;
         let mut stmt = conn.prepare(
-            "SELECT card_id, expires_at, revoked, used_orders FROM brush_cards
-             WHERE owner_vid=?1 ORDER BY expires_at DESC").ok()?;
+            "SELECT card_id, expires_at, revoked, used_orders, COALESCE(card_kind,'invite')
+             FROM brush_cards WHERE owner_vid=?1
+             ORDER BY CASE COALESCE(card_kind,'invite') WHEN 'pass' THEN 0 ELSE 1 END,
+                      expires_at DESC").ok()?;
         let rows = stmt.query_map(rusqlite::params![vid_s], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?))
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?, r.get::<_, String>(4)?))
         }).ok()?;
         for row in rows.flatten() {
-            let (card_id, expires, revoked, used) = row;
-            if card_valid(&expires, revoked != 0, now_secs)
-                && (max_orders == 0 || used < max_orders)
-            {
-                return Some(card_id);
+            let (card_id, expires, revoked, used, kind) = row;
+            if !card_valid(&expires, revoked != 0, now_secs) {
+                continue;
             }
+            // 学期卡不限次数；刷课卡按全局 max_orders 计（0 = 不限）
+            if kind != KIND_PASS && max_orders != 0 && used >= max_orders {
+                continue;
+            }
+            return Some((card_id, kind == KIND_PASS));
         }
         None
     })
@@ -425,10 +468,88 @@ pub async fn check_benefit(db: &Db, vid: &str) -> Benefit {
     .ok()
     .flatten();
     match found {
-        Some(card_id) => Benefit { free: true, reason: "card".into(), card_id,
-                                   speed_mode: crate::speed::SpeedMode::Gentle.as_str().into() },
+        Some((card_id, is_pass)) => Benefit {
+            free: true,
+            reason: "card".into(),
+            card_id,
+            speed_mode: if is_pass { crate::speed::SpeedMode::Turbo.as_str().into() }
+                        else { crate::speed::SpeedMode::Gentle.as_str().into() },
+            turbo: is_pass,
+        },
         None => Benefit::paid(),
     }
+}
+
+/// 学期卡付款成功后发卡（幂等：card_id 由订单号派生，重复调用不会多发）。
+///
+/// 为什么幂等要做在这里：支付回调、前端轮询、后台对账三条路径都会走到
+/// `enqueue_order_sync`，任一时刻都可能重复触发。
+/// 同步实现：收款确认的入队路径本身就在阻塞线程里跑，不能再嵌一层 await。
+pub(crate) fn issue_pass_card(db: &Db, vid: &str, order_id: &str) -> Option<String> {
+    let conn = db.clone_pool().get().ok()?;
+    // 天数直接读配置（同步读，避免跨线程再取一次 PromoConfig）
+    let days = crate::queue::config_get_blocking(&conn, CFG_PASS_DAYS)
+        .and_then(|v| v.parse::<i64>().ok()).unwrap_or(180).clamp(1, 3650);
+    let now = crate::queue::now_str();
+    let expires = iso_after_days(days);
+    // code 由订单号派生：同一单无论被哪条路径触发（回调/轮询/对账）都只发一张
+    let digest: String = order_id.trim_start_matches("ORD-").chars().take(7).collect();
+    let code = format!("P{}", digest.to_uppercase());
+    let card_id = format!("CARD-{order_id}");
+    conn.execute(
+        "INSERT OR IGNORE INTO brush_cards
+            (card_id, code, owner_vid, contact, source, card_kind, granted_at, expires_at)
+         VALUES (?1, ?2, ?3, '', 'paid', ?4, ?5, ?6)",
+        rusqlite::params![card_id, code, vid, KIND_PASS, now, expires],
+    ).ok()?;
+    Some(expires)
+}
+
+/// 创建学期卡订单（一条 `task_type='pass'` 的业务单，等 ypay 收款）。
+///
+/// 为什么复用 orders 表：收款回调 / 前端轮询 / 后台对账三条路径都是围绕
+/// orders 单号转的，另起一张表就得把这三条链路各写一遍。代价只是要在
+/// 入队与补投两处把它挡掉（见 ypay_db 的 submit_paid_order_job_sync /
+/// find_orders_paid_without_job_sync）。
+pub async fn create_pass_order(db: &Db, vid: &str) -> Result<Value> {
+    let cfg = PromoConfig::load(db).await;
+    if !cfg.pass_enabled {
+        anyhow::bail!("学期卡暂未开售");
+    }
+    if vid.is_empty() {
+        anyhow::bail!("访客身份缺失");
+    }
+    // 有效期内不重复卖：用户在有效期内再买一次是纯亏，直接挡住
+    if check_benefit(db, vid).await.turbo {
+        anyhow::bail!("你已在学期卡有效期内，无需重复购买");
+    }
+    let order_id = crate::order::gen_order_id();
+    let price = cfg.pass_price;
+    let now = crate::queue::now_str();
+    let pool = db.clone_pool();
+    let oid = order_id.clone();
+    let vid_s = vid.to_string();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let conn = pool.get()?;
+        conn.execute(
+            "INSERT INTO orders (order_id, out_trade_no, ezfpy_trade_no, payment_channel,
+                                 paid_processed, user_id, customer_name, customer_contact,
+                                 username, password, website_id, task_type, course_ids,
+                                 video_count, exam_count, price, notes, status, paid,
+                                 admin_note, created_at, updated_at, speed_mode, vid)
+             VALUES (?1,'','','','unprocessed','','','','','',0,?2,'[]',0,0,?3,'',
+                     'pending',0,'',?4,?4,'gentle',?5)",
+            rusqlite::params![oid, KIND_PASS, price, now, vid_s],
+        )?;
+        Ok(())
+    })
+    .await??;
+    Ok(json!({
+        "order_id": order_id,
+        "price": price,
+        "days": cfg.pass_days,
+        "view_token": crate::order::view_token(&order_id),
+    }))
 }
 
 /// 免费单用掉卡额度（按订单数递增；全局免费不计数）。
@@ -450,10 +571,12 @@ pub async fn consume_card(db: &Db, card_id: &str, orders: i64) {
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(0)
             .max(0);
+        // 学期卡不限次数（COALESCE 兼容老库缺列），刷课卡才受 max_orders 约束
         conn.execute(
             "UPDATE brush_cards SET used_orders = used_orders + ?1
              WHERE card_id=?2 AND revoked=0 AND expires_at > ?3
-               AND (?4 = 0 OR used_orders + ?1 <= ?4)",
+               AND (COALESCE(card_kind,'invite') = 'pass'
+                    OR ?4 = 0 OR used_orders + ?1 <= ?4)",
             rusqlite::params![orders, card_id, now, max_orders],
         )?;
         Ok(())
@@ -481,6 +604,15 @@ pub async fn admin_stats(db: &Db) -> Result<Value> {
         let cards_active: i64 = conn.query_row(
             "SELECT COUNT(*) FROM brush_cards WHERE revoked=0 AND expires_at > ?1",
             rusqlite::params![today], |r| r.get(0)).unwrap_or(0);
+        // 学期卡单独计数：这是唯一的付费卡，直接对应收入
+        let pass_cards: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM brush_cards WHERE revoked=0
+               AND COALESCE(card_kind,'invite')='pass'",
+            [], |r| r.get(0)).unwrap_or(0);
+        let pass_cards_active: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM brush_cards WHERE revoked=0 AND expires_at > ?1
+               AND COALESCE(card_kind,'invite')='pass'",
+            rusqlite::params![today], |r| r.get(0)).unwrap_or(0);
         // 免费订单（全局免费或卡免单）：用 payment_channel='free' 标记统计
         let free_orders: i64 = conn.query_row(
             "SELECT COUNT(*) FROM orders WHERE deleted_at IS NULL AND payment_channel='free'",
@@ -506,10 +638,14 @@ pub async fn admin_stats(db: &Db) -> Result<Value> {
                 "require_order": cfg.require_order,
                 "valid_days": cfg.valid_days,
                 "max_orders": cfg.max_orders,
+                "pass_enabled": cfg.pass_enabled,
+                "pass_price": cfg.pass_price,
+                "pass_days": cfg.pass_days,
             },
             "visitors": visitors, "visitors_today": visitors_today,
             "invites": invites, "invites_valid": invites_valid,
             "cards": cards, "cards_active": cards_active,
+            "pass_cards": pass_cards, "pass_cards_active": pass_cards_active,
             "free_orders": free_orders, "free_orders_today": free_orders_today,
             "conversion": if invites > 0 { invites_valid as f64 / invites as f64 } else { 0.0 },
             "top_inviters": top,
@@ -566,10 +702,21 @@ mod tests {
     #[test]
     fn test_benefit_json() {
         let b = Benefit { free: true, reason: "card".into(), card_id: "CARD-1".into(),
-                          speed_mode: "gentle".into() };
+                          speed_mode: "gentle".into(), turbo: false };
         assert!(b.is_free());
         assert_eq!(b.to_json()["reason"], "card");
         assert!(!Benefit::paid().is_free());
+    }
+
+    #[test]
+    fn test_pass_card_derives_turbo() {
+        // 学期卡是唯一解锁暴力档的免费待遇：turbo 决定 order.rs 是否放行暴力档
+        let invite = Benefit::paid();
+        assert!(!invite.turbo);
+        let pass = Benefit { free: true, reason: "card".into(), card_id: "CARD-ORD-1".into(),
+                             speed_mode: "turbo".into(), turbo: true };
+        assert_eq!(pass.to_json()["turbo"], serde_json::json!(true));
+        assert_eq!(pass.to_json()["speed_mode"], "turbo");
     }
 
     #[test]
