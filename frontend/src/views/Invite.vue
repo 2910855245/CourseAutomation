@@ -92,7 +92,14 @@ const passBatchIds = ref<Record<string, string>>({})
 const passOutTradeNos = ref<Record<string, string>>({})
 let passTimer: ReturnType<typeof setInterval> | null = null
 
-const passInfo = computed(() => data.value?.pass || { enabled: false, price: 19.9, days: 180 })
+const passInfo = computed(() =>
+  data.value?.pass || { enabled: false, price: 19.9, days: 180, exam_price: 5 })
+/** 跑几门考试的花费才超过学期卡（价格都由后台配，不能写死数字） */
+const passBreakEven = computed(() => {
+  const exam = passInfo.value.exam_price || 5
+  if (exam <= 0) return 1
+  return Math.max(1, Math.floor((passInfo.value.price || 0) / exam) + 1)
+})
 const hasPass = computed(() => data.value?.has_pass === true)
 const passCard = computed(() =>
   (data.value?.cards || []).find((c: any) => c.kind === 'pass' && c.valid) || null)
@@ -223,7 +230,10 @@ onBeforeUnmount(stopPassPoll)
             <button class="btn btn-primary pass-btn" :disabled="passPaying" @click="buyPass">
               {{ passPaying ? '处理中…' : `立即开通 ¥${passInfo.price}` }}
             </button>
-            <p class="tip">单门考试约 ¥5，跑三门就回本；一门一付还是整学期，你自己算。</p>
+            <p class="tip">
+              按门付费是单门考试 ¥{{ passInfo.exam_price || 5 }}，跑 {{ passBreakEven }} 门就超过学期卡；
+              一门一付还是整学期，你自己算。
+            </p>
           </template>
 
           <p v-else class="tip">学期卡暂未开售，可先靠邀请领免单卡。</p>

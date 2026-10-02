@@ -57,8 +57,11 @@ const speedModeDesc = computed(() => ({
 const freeTotal = computed(() =>
   benefit.value.free || (!loadingPrices.value && summary.value.total <= 0),
 )
-/** 合计展示：定价加载中时不显示 ¥0.00（避免"0 元下单"的误导） */
-const totalText = computed(() => loadingPrices.value ? '计价中…' : `¥${summary.value.total.toFixed(2)}`)
+/** 合计展示：定价加载中时不显示 ¥0.00（避免"0 元下单"的误导）。
+ *  学习通是一口价、不依赖逐课试算，所以它不该显示"计价中…"。 */
+const totalText = computed(() =>
+  (loadingPrices.value && activeTab.value !== 'chaoxing')
+    ? '计价中…' : `¥${summary.value.total.toFixed(2)}`)
 // 免单原因要分开说：持卡免的是考试费，视频免费是所有人本来就有的
 const freeTagText = computed(() => {
   // 学期卡（turbo）优先：它是付费卡，别跟邀请送的免单卡混为一谈
@@ -400,7 +403,11 @@ onMounted(async () => {
                 </div>
 
                 <div class="cr-side">
-                  <span v-if="coursePrice(c) > 0" class="cr-price mono">¥{{ coursePrice(c).toFixed(2) }}</span>
+                  <!-- 学习通整批一口价，不按门标价（按门标会让人以为每门都收 ¥8） -->
+                  <span v-if="p.website_id === 4" class="cr-done-tag">一口价</span>
+                  <!-- 持卡免单：标"已免"而不是原价，否则逐门原价与底部合计 ¥0.00 自相矛盾 -->
+                  <span v-else-if="benefit.free && coursePrice(c) > 0" class="cr-free-tag">已免 ¥{{ coursePrice(c).toFixed(2) }}</span>
+                  <span v-else-if="coursePrice(c) > 0" class="cr-price mono">¥{{ coursePrice(c).toFixed(2) }}</span>
                   <span v-else-if="loadingPrices" class="cr-done-tag">计价中…</span>
                   <span v-else-if="isCourseDone(c)" class="cr-done-tag">已完成</span>
                   <span v-else-if="isCourseEnded(c)" class="cr-done-tag">已结束</span>
@@ -505,7 +512,12 @@ onMounted(async () => {
 
           <!-- 计费口径：刷视频免费，答题/考试按门课收费 -->
           <p class="billing-note">
-            刷视频<b>免费</b>（免费单串行排队）<template v-if="!freeTotal">；本次含未完成的答题/考试，按门课计费<span class="mono"> {{ totalText }}</span>，付费后进入快速通道、不用排队</template><template v-else>；所选课程没有待完成的答题/考试，直接提交即可开跑</template>
+            <template v-if="activeTab === 'chaoxing'">
+              学习通按<b>整批一口价</b>计费 —— 与勾选几门课无关<template v-if="!freeTotal">，本次<span class="mono"> {{ totalText }}</span>，付费后进入快速通道</template><template v-else>；本次由{{ freeTagText }}，直接提交即可开跑</template>
+            </template>
+            <template v-else>
+              刷视频<b>免费</b>（免费单串行排队）<template v-if="!freeTotal">；本次含未完成的答题/考试，按门课计费<span class="mono"> {{ totalText }}</span>，付费后进入快速通道、不用排队</template><template v-else>；{{ benefit.free ? freeTagText + '，直接提交即可开跑' : '所选课程没有待完成的答题/考试，直接提交即可开跑' }}</template>
+            </template>
           </p>
 
           <!-- 营销位：免费资格与邀请进度 -->

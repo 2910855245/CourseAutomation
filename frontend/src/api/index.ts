@@ -254,7 +254,7 @@ export const api = {
     // username：服务端据此回查自己扫描时留下的快照（定价事实只认快照，
     // 客户端传的明细仅作老调用兜底）；website_id 让服务端知道该查哪个平台的快照
     calculate: (d: { username?: string; courses: { course_id: string; website_id?: number; video_total: number; video_completed: number; exam_total: number; exam_done: number; homework_total: number; homework_done: number }[] }) =>
-      post<ApiResponse<{ courses: { course_id: string; type: string; price: number; label: string }[]; total: number; pricing_mode: string }>>('/api/pricing/calculate', d),
+      post<ApiResponse<{ courses: { course_id: string; type: string; price: number; label: string }[]; total: number; pricing_mode: string; chaoxing_price?: number }>>('/api/pricing/calculate', d),
   },
   ypay: {
     clearOrders: () => post<ApiResponse<any>>('/api/ypay/clear-orders'),

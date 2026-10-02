@@ -78,17 +78,12 @@ export function useHomeState() {
   let loginErrorTimer: any = null
   let countdownTimer: any = null
 
-  // 首页只用到学习通一口价（提前展示要付多少）；学校平台的价由后端逐门算，
-  // 前端拿 /api/pricing/calculate 的结果。视频价已下线，不再读那几档。
+  // 首页只用到学习通一口价（提前展示要付多少）；学校平台的价由后端逐门算。
+  //
+  // 取值来源必须是 /api/pricing/calculate 的 chaoxing_price，不能是 /api/pricing：
+  // 后者是管理员接口，客户页调用只会 401（此前就是这么写的 —— 结果一口价永远
+  // 停在默认 8，后台改价客户页看不见）。
   const packagePricing = ref({ priceChaoxing: 8 })
-
-  async function loadPackagePricing() {
-    try {
-      const d = (await api.pricing.get()).data as any
-      if (d) packagePricing.value = { priceChaoxing: d.priceChaoxing ?? 8 }
-    } catch { }
-  }
-  loadPackagePricing()
 
   // ── 刷课节奏档位（暴力 / 保守）──
   // 与后端 speed.rs 的 SpeedMode 对应（turbo/gentle 是落库标识；balanced 已下线，
@@ -227,24 +222,41 @@ export function useHomeState() {
         for (const item of res.data.courses) map[item.course_id] = { price: item.price, type: item.type, label: item.label }
         backendPrices.value = map
       }
+      // 学习通一口价：跟试算一起回（客户页拿不到管理员那份 /api/pricing 配置）
+      const cx = (res.data as any)?.chaoxing_price
+      if (typeof cx === 'number' && cx > 0) packagePricing.value = { priceChaoxing: cx }
     } catch { } finally { if (seq === priceSeq) loadingPrices.value = false }
   }
 
   const summary = computed(() => {
     let courses = 0, videos = 0, exams = 0, totalPrice = 0
     const courseBreakdown: { name: string; videos: number; completed: number; price: number }[] = []
+    // 学习通是**整批一口价**（后端 compute_item_prices 对 website_id=4 只取一次
+    // price_chaoxing），所以这里也必须只计一次：按门累加会把 ¥8 显示成 ¥8×门数。
+    let chaoxingVideos = 0
+    let hasChaoxing = false
     for (const p of scanData.value) {
       for (const c of p.courses) {
         if (checkedCourseIds.value.has(c.course_id)) {
           courses++; videos += c.video_pending
           const ePending = Math.max(0, c.exam_total - c.exam_done)
           if (ePending > 0) exams += ePending
+          if (p.website_id === 4) {
+            hasChaoxing = true; chaoxingVideos += c.video_total
+            continue
+          }
           const bp = backendPrices.value[c.course_id]
           const price = bp ? bp.price : 0
           totalPrice += price
           courseBreakdown.push({ name: c.course_name, videos: c.video_total, completed: c.video_completed, price })
         }
       }
+    }
+    if (hasChaoxing) {
+      // 与 submitAndPay 里 wid===4 的取值同源（后台配置的学习通一口价）
+      const fee = packagePricing.value.priceChaoxing || 8
+      totalPrice += fee
+      courseBreakdown.push({ name: '学习通（一口价）', videos: chaoxingVideos, completed: 0, price: fee })
     }
     return { courses, videos, exams, total: totalPrice, breakdown: courseBreakdown }
   })
@@ -361,6 +373,8 @@ export function useHomeState() {
       }
       scanDone.value = true
       store.toast(`学习通扫描完成，共 ${platform.courses.length} 门课程`, 'success')
+      // 拉一次试算：主要是为了拿到后台配置的学习通一口价（结算条要显示它）
+      await fetchBackendPrices()
     } catch (e: any) { store.toast('扫描失败：' + (e?.message || '网络错误'), 'error') }
     finally { scanning.value = false; rescanning.value = false; stopScanTimer() }
   }

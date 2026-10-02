@@ -1223,7 +1223,11 @@ async fn pricing_calculate(State(state): State<AppState>, Json(body): Json<Value
     Json(json!({
         "success": true,
         "message": "ok",
-        "data": {"courses": entries, "total": total, "pricing_mode": "package"},
+        // chaoxing_price 一并回给前端：学习通是整批一口价、不跟着课程明细算，
+        // 而 /api/pricing（配置读取）是管理员接口、客户页拿不到 ——
+        // 不在这里带上，客户页就只能显示硬编码的默认价，后台改价永远不生效。
+        "data": {"courses": entries, "total": total, "pricing_mode": "package",
+                 "chaoxing_price": cfg["price_chaoxing"].as_f64().unwrap_or(8.0)},
     }))
 }
 

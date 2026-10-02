@@ -285,6 +285,10 @@ fn mark_converted_inner(conn: &rusqlite::Connection, invitee_vid: &str, order_id
 /// 邀请概况（邀请页用）
 pub async fn invite_overview(db: &Db, vid: &str) -> Result<Value> {
     let cfg = PromoConfig::load(db).await;
+    // 邀请页要用真实的单门考试价跟学期卡做对比（"跑几门就回本"），
+    // 写死 ¥5 的话后台一改价文案就失准
+    let exam_price = crate::order::pricing_config(db).await.ok()
+        .and_then(|c| c["price_exam_only"].as_f64()).unwrap_or(5.0);
     let pool = db.clone_pool();
     let vid = vid.to_string();
     let now_secs = crate::queue::local_secs() as i64;
@@ -359,6 +363,8 @@ pub async fn invite_overview(db: &Db, vid: &str) -> Result<Value> {
                 "enabled": cfg.pass_enabled,
                 "price": cfg.pass_price,
                 "days": cfg.pass_days,
+                // 单门考试价：前端据此算"跑几门回本"，不写死
+                "exam_price": exam_price,
             },
         }))
     })
