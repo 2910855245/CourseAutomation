@@ -1,4 +1,4 @@
-//! 营销推广：免费刷开关、邀请拉新、刷课卡。
+//! 营销推广：全场免费开关、邀请拉新、免单卡、学期卡。
 //!
 //! 身份：每个访客由服务端下发一个 `vid`（HttpOnly cookie，见 [`COOKIE_NAME`]），
 //! 邀请关系与卡片都挂在 vid 上，**不依赖浏览器 localStorage**。vid 丢失时
@@ -31,7 +31,11 @@ pub const CFG_PASS_PRICE: &str = "pass_price";
 pub const CFG_PASS_DAYS: &str = "pass_days";
 pub const CFG_PASS_ENABLED: &str = "pass_enabled";
 
-/// 卡类型：邀请得的刷课卡（30 天、免费+保守档）与付费买的学期卡（整学期、免费+暴力档+插队）
+/// 卡类型：邀请得的免单卡（30 天、答题/考试免单+保守档）与付费买的学期卡
+/// （整学期、免单+暴力档+插队）。
+///
+/// 命名说明：以前叫"刷课卡"，但刷视频早已对所有人免费，卡的权益其实是
+/// **免答题/考试费**；旧名让用户以为这是免刷课的卡，看着像废卡。对外统一叫「免单卡」。
 pub const KIND_INVITE: &str = "invite";
 pub const KIND_PASS: &str = "pass";
 
@@ -80,8 +84,8 @@ impl PromoConfig {
 /// 该访客当前能享受的免费待遇。
 ///
 /// 商业规则：刷视频对所有人免费，平台收入来自答题/考试。因此这里的 `free`
-/// 含义是「**这一单不用付钱**」，来源只有两种：全局免费活动，或刷课卡
-/// （卡的权益 = 免考试费 + 优先排队）。
+/// 含义是「**这一单不用付钱**」，来源只有两种：全场免费活动，或免单卡 / 学期卡
+/// （卡的权益 = 免答题/考试费 + 优先排队；学期卡另加暴力档）。
 ///
 /// 免费单一律只能用保守档（串行）：暴力档是付费权益，服务端会在创建订单时
 /// 强制改写档位，前端置灰只是提示。
@@ -90,7 +94,7 @@ impl PromoConfig {
 #[derive(Debug, Clone, Default)]
 pub struct Benefit {
     pub free: bool,
-    /// global（全局免费）/ card（刷课卡）
+    /// global（全场免费）/ card（免单卡或学期卡）
     pub reason: String,
     pub card_id: String,
     /// 免费单锁定的档位（恒为保守档）
@@ -387,7 +391,7 @@ pub async fn claim_card(db: &Db, vid: &str, contact: &str) -> Result<Value> {
             "SELECT COUNT(*) FROM brush_cards WHERE owner_vid=?1",
             rusqlite::params![vid_s], |r| r.get(0))?;
         if valid / threshold - claimed <= 0 {
-            anyhow::bail!("暂无可领取的刷课卡（还差 {} 位好友下单）", threshold - valid % threshold);
+            anyhow::bail!("暂无可领取的免单卡（还差 {} 位好友下单）", threshold - valid % threshold);
         }
         let now = crate::queue::now_str();
         let expires = iso_after_days(valid_days);
@@ -420,7 +424,7 @@ pub async fn claim_card(db: &Db, vid: &str, contact: &str) -> Result<Value> {
         anyhow::bail!("卡号生成失败（连续撞号）")
     })
     .await??;
-    tracing::info!(vid = %vid, code = %card["code"], "发出刷课卡");
+    tracing::info!(vid = %vid, code = %card["code"], "发出免单卡");
     Ok(card)
 }
 

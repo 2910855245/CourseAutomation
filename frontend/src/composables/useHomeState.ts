@@ -114,7 +114,8 @@ export function useHomeState() {
   const inviteInfo = ref<{ code: string; threshold: number; invited_valid: number; can_claim: number; enabled: boolean }>(
     { code: '', threshold: 3, invited_valid: 0, can_claim: 0, enabled: true }
   )
-  const myCard = ref<{ code: string; expires_at: string; days_left: number } | null>(null)
+  // kind: 'invite'（邀请送的免单卡）/ 'pass'（付费学期卡）—— 两者权益不同，文案要分开
+  const myCard = ref<{ code: string; expires_at: string; days_left: number; kind?: string } | null>(null)
 
   async function loadBenefit() {
     try {

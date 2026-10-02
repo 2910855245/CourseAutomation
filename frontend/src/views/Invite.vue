@@ -73,7 +73,7 @@ async function claim() {
     const r = await api.invite.claim(contact.value)
     data.value = r.data?.overview || data.value
     if (contact.value) localStorage.setItem('invite_contact', contact.value)
-    store.toast(`领取成功：${r.data?.card?.code || '刷课卡'}`, 'success')
+    store.toast(`领取成功：${r.data?.card?.code || '免单卡'}`, 'success')
   } catch (e: any) {
     store.toast(e?.message || '领取失败', 'error')
   } finally { claiming.value = false }
@@ -178,13 +178,13 @@ onBeforeUnmount(stopPassPoll)
         <h1 class="hero-title">邀请好友，得优先通道</h1>
         <p class="hero-sub">
           每成功邀请 <strong class="mono">{{ data?.threshold || 3 }}</strong> 位好友下单，
-          即可领取 <strong class="mono">{{ data?.valid_days || 30 }}</strong> 天刷课卡 ——
-          答题/考试<strong>免单</strong>，下单还能<strong>优先排队</strong>，不用等免费队列。
+          即可领取 <strong class="mono">{{ data?.valid_days || 30 }}</strong> 天<strong>免单卡</strong> ——
+          <strong>答题 / 考试免单</strong>（刷视频本来就免费），下单还能<strong>优先排队</strong>，不用等免费队列。
         </p>
 
         <div v-if="data?.free_mode" class="hero-banner">
           <span class="hb-dot" />
-          限时活动进行中：当前<b>全场免费</b>，刷课卡可留到活动结束后继续免单
+          限时活动进行中：当前<b>全场免费</b>（含考试 / 作业），免单卡可留到活动结束后继续免单
         </div>
       </section>
 
@@ -226,7 +226,7 @@ onBeforeUnmount(stopPassPoll)
             <p class="tip">单门考试约 ¥5，跑三门就回本；一门一付还是整学期，你自己算。</p>
           </template>
 
-          <p v-else class="tip">学期卡暂未开售，可先靠邀请领免费刷课卡。</p>
+          <p v-else class="tip">学期卡暂未开售，可先靠邀请领免单卡。</p>
 
           <!-- 收款面板（复用 batch-create / batch-check 通道） -->
           <div v-if="passOpen" class="pay-box">
@@ -290,7 +290,7 @@ onBeforeUnmount(stopPassPoll)
             <div class="claim-info">
               <div class="claim-title">
                 <template v-if="data.can_claim > 0">
-                  可领取 <b class="mono">{{ data.can_claim }}</b> 张刷课卡
+                  可领取 <b class="mono">{{ data.can_claim }}</b> 张免单卡
                 </template>
                 <template v-else>
                   再邀请 <b class="mono">{{ data.need_more || progress.need - progress.done }}</b> 位好友下单即可领卡
@@ -333,7 +333,7 @@ onBeforeUnmount(stopPassPoll)
                 <span class="status-tag" :class="c.valid ? 'ok' : 'muted'">{{ c.valid ? '生效中' : '已过期' }}</span>
               </div>
               <div class="ticket-body">
-                <span class="ticket-label">{{ c.kind === 'pass' ? '学期卡' : '刷课卡' }}</span>
+                <span class="ticket-label">{{ c.kind === 'pass' ? '学期卡' : '免单卡' }}</span>
                 <span class="ticket-days mono">{{ c.valid ? `剩 ${c.days_left} 天` : '—' }}</span>
               </div>
               <div class="ticket-foot">
@@ -351,10 +351,10 @@ onBeforeUnmount(stopPassPoll)
           </div>
           <ol class="rules">
             <li>分享链接给好友，好友<b>通过链接进入并完成一次下单</b>记为 1 位有效邀请。</li>
-            <li>每满 {{ data.threshold }} 位有效邀请，可领取 1 张 {{ data.valid_days }} 天刷课卡，可重复领取。</li>
-            <li>持卡期间<b>答题 / 考试免单</b>（刷视频本来就免费），额度内可重复使用。</li>
+            <li>每满 {{ data.threshold }} 位有效邀请，可领取 1 张 {{ data.valid_days }} 天<b>免单卡</b>，可重复领取。</li>
+            <li><b>免单卡</b>的权益是<b>答题 / 考试免单</b>（刷视频本来就免费）+ 优先排队，额度内可重复使用。</li>
             <li>持卡下单<b>优先排队</b>：排在所有普通免费单之前，不用等免费队列。</li>
-            <li>免费单（含刷课卡）走<b>免费队列</b>且只能用<b>保守档</b>；<b>学期卡</b>与按门课付费的单解锁<b>暴力档</b>，走独立通道，永远不排在免费队列后面。</li>
+            <li>免费单（含免单卡）走<b>免费队列</b>且只能用<b>保守档</b>；<b>学期卡</b>与按门课付费的单解锁<b>暴力档</b>，走独立通道，永远不排在免费队列后面。</li>
             <li><b>学期卡</b>：付费开通，整学期（{{ passInfo.days }} 天）内答题/考试全免单、不限门数，并解锁暴力档与优先排队。</li>
             <li>卡片与当前浏览器身份绑定；领卡时填了联系方式的，换设备 / 清缓存后联系客服可找回。</li>
             <li>同一好友仅计一次；需通过你的链接进入并完成下单才计入，自己邀请自己不计。</li>

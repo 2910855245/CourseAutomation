@@ -61,9 +61,9 @@ const freeTotal = computed(() =>
 const totalText = computed(() => loadingPrices.value ? '计价中…' : `¥${summary.value.total.toFixed(2)}`)
 // 免单原因要分开说：持卡免的是考试费，视频免费是所有人本来就有的
 const freeTagText = computed(() => {
-  // 学期卡（turbo）优先：它是付费卡，别跟免费刷课卡混为一谈
+  // 学期卡（turbo）优先：它是付费卡，别跟邀请送的免单卡混为一谈
   if (benefit.value.turbo) return '学期卡免单'
-  if (benefit.value.reason === 'card') return '刷课卡免考试费'
+  if (benefit.value.reason === 'card') return '免单卡：答题/考试费已免'
   if (benefit.value.reason === 'global') return '限时免费'
   return '视频免费'
 })
@@ -511,8 +511,11 @@ onMounted(async () => {
           <!-- 营销位：免费资格与邀请进度 -->
           <div v-if="benefit.free || inviteInfo.can_claim > 0 || myCard" class="promo-strip">
             <template v-if="myCard">
-              <span class="ps-tag ok">刷课卡生效中</span>
-              <span class="ps-text">有效期还剩 <b class="mono">{{ myCard.days_left }}</b> 天，答题/考试免单并优先排队</span>
+              <span class="ps-tag ok">{{ myCard.kind === 'pass' ? '学期卡生效中' : '免单卡生效中' }}</span>
+              <span class="ps-text">
+                有效期还剩 <b class="mono">{{ myCard.days_left }}</b> 天，答题/考试免单{{
+                  myCard.kind === 'pass' ? '、暴力档提速' : '' }}并优先排队
+              </span>
             </template>
             <template v-else-if="benefit.reason === 'global'">
               <span class="ps-tag ok">限时免费</span>
@@ -520,7 +523,7 @@ onMounted(async () => {
             </template>
             <template v-else>
               <span class="ps-tag warn">可领卡</span>
-              <span class="ps-text">你有 <b class="mono">{{ inviteInfo.can_claim }}</b> 张刷课卡待领取</span>
+              <span class="ps-text">你有 <b class="mono">{{ inviteInfo.can_claim }}</b> 张免单卡待领取</span>
             </template>
             <router-link to="/invite" class="ps-link">
               {{ myCard || benefit.reason === 'global' ? '邀请好友得更多' : '立即领取' }} →

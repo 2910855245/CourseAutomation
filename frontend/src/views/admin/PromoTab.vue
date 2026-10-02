@@ -148,7 +148,10 @@ onMounted(load)
         <div class="opt-row">
           <div class="opt-main">
             <div class="opt-title">邀请活动</div>
-            <div class="opt-desc">关闭后邀请页不再发放刷课卡（已发出的卡仍在有效期内可用）。</div>
+            <div class="opt-desc">
+              好友通过邀请链接进来即记录；每满设定人数可领 1 张<b>免单卡</b>（权益＝答题/考试免单 + 优先排队）。
+              关闭后邀请页不再发卡，已发出的仍在有效期内可用。
+            </div>
           </div>
           <select v-model="inviteEnabled" class="opt-input" :class="{ on: inviteEnabled }">
             <option :value="true">开启</option>
@@ -173,7 +176,7 @@ onMounted(load)
             <input v-model.number="threshold" type="number" min="1" max="1000" class="opt-input full">
           </div>
           <div class="field">
-            <label>刷课卡有效期（天）</label>
+            <label>免单卡有效期（天）</label>
             <input v-model.number="validDays" type="number" min="1" max="3650" class="opt-input full">
           </div>
           <div class="field">
