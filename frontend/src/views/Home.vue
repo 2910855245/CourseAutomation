@@ -231,21 +231,21 @@ onMounted(async () => {
                 <template v-if="activeTab === 'school'">
                   <div class="field">
                     <label class="field-label">学号</label>
-                    <input v-model="username" :disabled="scanning" autocomplete="username" />
+                    <input v-model="username" placeholder="请输入学号" :disabled="scanning" autocomplete="username" />
                   </div>
                   <div class="field">
                     <label class="field-label">密码</label>
-                    <input v-model="password" type="password" :disabled="scanning" autocomplete="current-password" @keyup.enter="startScan" />
+                    <input v-model="password" type="password" placeholder="请输入平台密码" :disabled="scanning" autocomplete="current-password" @keyup.enter="startScan" />
                   </div>
                 </template>
                 <template v-else>
                   <div class="field">
                     <label class="field-label">手机号</label>
-                    <input v-model="chaoxingUsername" :disabled="scanning" autocomplete="username" />
+                    <input v-model="chaoxingUsername" placeholder="请输入手机号" :disabled="scanning" autocomplete="username" />
                   </div>
                   <div class="field">
                     <label class="field-label">密码</label>
-                    <input v-model="chaoxingPassword" type="password" :disabled="scanning" autocomplete="current-password" @keyup.enter="startChaoxingScan" />
+                    <input v-model="chaoxingPassword" type="password" placeholder="请输入密码" :disabled="scanning" autocomplete="current-password" @keyup.enter="startChaoxingScan" />
                   </div>
                 </template>
 
