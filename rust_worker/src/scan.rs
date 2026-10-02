@@ -283,7 +283,26 @@ const MEDIA_PROBE_BYTES: u64 = 512 * 1024;
 
 /// 媒体探测的进程级并发上限。CDN 不是平台、不必走 0.5s 出站闸门，
 /// 但一次扫描可能有上百节要补，无节制打会把自己变成流量放大器。
-const MEDIA_PROBE_CONCURRENCY: usize = 6;
+///
+/// 16 是实测折中：一次扫描常见 40~60 节，6 并发要分 7~10 批、光这一步就二十来秒；
+/// 16 并发下 40 节只要 3 批。再往上收益递减，而单一 CDN 节点被同 IP 打太密
+/// 反而可能被限速，可能越调越慢。
+const MEDIA_PROBE_CONCURRENCY: usize = 16;
+
+/// 扫描时的课程级并发。
+///
+/// **与"刷课档位"解耦**：扫描只是读课程列表 / 视频列表 / 视频文件头，不提交任何
+/// 学习记录，不参与平台按 beginTime/finalTime 的重叠检测 —— 免费单锁保守档是为了
+/// 保护"刷课"，不该顺带把"看清单"也锁成一门一门读。保守档原先 scan_concurrency=1，
+/// 课程之间还 sleep 3 秒、开扫前再随机 jitter 0~3 秒，5 门课光纯等待就十几秒。
+///
+/// 真正的压力上限是全局 [`scan_sem`]（在飞 8 个平台请求），课程级并发取同一个值就行，
+/// 永远不可能比页级信号量更宽松。
+const SCAN_COURSE_CONCURRENCY: usize = SCAN_CONCURRENCY;
+
+/// 扫描时同批课程的首请求抖动上限（毫秒）。只用来把同批请求抹开几十毫秒，
+/// 不做秒级错峰 —— 秒级错峰是给"上报"用的，扫描不需要。
+const SCAN_COURSE_JITTER_MS: u64 = 100;
 
 static MEDIA_PROBE_SEM: tokio::sync::OnceCell<Arc<tokio::sync::Semaphore>> =
     tokio::sync::OnceCell::const_new();
@@ -577,11 +596,11 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
     }
 
     // 并发扫描各课程视频（每课程一个 tokio task）。
-    // 并发度与错峰由档位决定：急速档全量并行，温柔档一次只扫 1~2 门并长间隔错开。
-    let profile = crate::speed::SpeedMode::parse(&task.speed_mode).profile();
+    // 并发度**不跟档位走**（见 SCAN_COURSE_CONCURRENCY）：扫描是纯读，锁它没有风控收益，
+    // 只让免费用户白等。刷课阶段的并发仍严格按档位（免费=串行），那是另一条链路。
     let shared_client = Arc::new(client);
     let cookie = Arc::new(task.cookie_str.clone());
-    let scan_sem = Arc::new(tokio::sync::Semaphore::new(profile.scan_concurrency.max(1)));
+    let scan_sem = Arc::new(tokio::sync::Semaphore::new(SCAN_COURSE_CONCURRENCY));
     let mut handles = Vec::new();
     for course in selected {
         // 先取扫描许可再派发：超出并发的课程会在此等待，天然形成分批扫描
@@ -594,18 +613,19 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
         let b = base_url.clone();
         let cid = course.course_id.clone();
         let cname = course.name.clone();
-        let jitter = profile.scan_jitter();
+        let jitter = std::time::Duration::from_millis(
+            rand::random::<u64>() % (SCAN_COURSE_JITTER_MS + 1));
         handles.push(tokio::spawn(async move {
             let _permit = permit;
-            // 启动抖动：把同批课程的首请求错开，避免瞬间并发突发打到平台
+            // 启动抖动：把同批课程的首请求错开几十毫秒，避免同一瞬间齐发
             if !jitter.is_zero() {
                 tokio::time::sleep(jitter).await;
             }
             let videos = fetch_course_videos(&c, &ck, &b, &cid, &cname).await;
             (cname, cid, videos)
         }));
-        // 课程之间错峰：温柔档拉长到几十秒，急速档为零
-        profile.sleep_course_stagger().await;
+        // 课程之间不再错峰：全局 scan_sem 已经把在飞平台请求压在 8 个以内，
+        // 再加秒级停顿只是白等（保守档原来这里是 3 秒/门）。
     }
     let mut all_videos: Vec<Video> = Vec::new();
     let mut scan_failed = 0u64;
