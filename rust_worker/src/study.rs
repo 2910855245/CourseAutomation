@@ -43,6 +43,50 @@ fn next_tick_secs(past_target: bool, wall_left: f64) -> f64 {
     }
 }
 
+/// 平台连续拒收多少份上报，就判这一节失败。
+///
+/// 为什么要有上限：平台会明确回 `status=0` 拒收（实测是 MySQL 1062 唯一键冲突
+/// `Duplicate entry 'studyId-时间' for key 'classDate'`）。此前不看 status，
+/// 被拒了照样推进、墙钟走满就宣布完成 —— 于是订单显示 100%、平台上这一节一秒
+/// 都没记上（真实案例：ORD-B2270270 的《12.3 压力应对》报了 43 次全被拒，
+/// 平台进度 0%，我们却记了"127/127 完成"）。宁可显式失败，也不谎报完成。
+const MAX_REJECTS: u32 = 6;
+
+/// 撞上记账时间片时最多退避几个片（每片最长 20 分钟）
+const MAX_SLOT_WAITS: u32 = 1;
+
+/// 平台的记账时间片长度：唯一键 `classDate` 的分钟位只有 :00/:20/:40，
+/// 即 **20 分钟一片**，同一节视频在同一片内只允许有一行。
+const SLOT_SECS: i64 = 20 * 60;
+
+/// 距离下一个记账时间片边界的秒数。
+///
+/// 实测：同一节在同一个片内第二次写入会被平台整条拒绝（1062），
+/// 同片内怎么重试都写不进去 —— **只有换片才能落账**。
+fn secs_to_next_slot() -> u64 {
+    secs_to_next_slot_from(crate::queue::local_secs() as i64)
+}
+
+/// 同上，但时间自己给（便于单测，不依赖时钟）
+fn secs_to_next_slot_from(now_secs: i64) -> u64 {
+    (SLOT_SECS - now_secs.rem_euclid(SLOT_SECS)) as u64
+}
+
+/// 拒收阈值 / 退避时长 / 撞片退避开关都可用环境变量覆盖：
+/// E2E 测试要把等待压到毫秒级，否则一次拒收用例要等半分钟。
+fn max_rejects() -> u32 {
+    std::env::var("STUDY_MAX_REJECTS").ok().and_then(|v| v.parse().ok()).unwrap_or(MAX_REJECTS)
+}
+
+fn reject_backoff() -> f64 {
+    std::env::var("STUDY_REJECT_BACKOFF_SECS").ok().and_then(|v| v.parse().ok())
+        .unwrap_or(1.5)
+}
+
+fn slot_wait_enabled() -> bool {
+    std::env::var("STUDY_SLOT_WAIT").map(|v| v.trim() != "0").unwrap_or(true)
+}
+
 /// 进度百分比，收敛到 1 位小数：原始浮点（如 1/61 → 1.639344262295082）
 /// 落库后会在订单页整串显示出来。
 fn pct_of(done: u64, total: u64) -> f64 {
@@ -405,6 +449,11 @@ async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
     let mut total_time: u64 = 0;
     let mut study_id: i64 = 0;
     let mut last_report: u64 = 0;
+    // 平台**真正记上**的秒数：只有 status=1 的上报才算。完成判据用它，
+    // 不用 total_time —— 后者只是"我们发了多少"，被拒的份一秒都没落账。
+    let mut credited: u64 = 0;
+    let mut rejections: u32 = 0;
+    let mut slot_waits: u32 = 0;
 
     loop {
         // 报满 studyTime 后一次睡到下一续报点，不再每秒空转（见 next_tick_secs）
@@ -491,14 +540,58 @@ async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
                                 continue;
                             }
                             if body.need_code == 0 {
+                                // 验证码过了但平台仍拒收（如时间片冲突）：同样不算记上
+                                if body.status != 1 {
+                                    rejections += 1;
+                                    crate::logs::warn(crate::logs::CAT_REPORT, &shared.order_id, &video.node_id,
+                                        format!("验证码重报仍被平台拒收（第 {rejections} 次）: {}",
+                                                crate::logs::clip(&body.msg, 90)));
+                                    if rejections > max_rejects() {
+                                        anyhow::bail!("平台连续拒收上报 {} 次（{}），这一节平台没记上",
+                                                      max_rejects(), crate::logs::clip(&body.msg, 60));
+                                    }
+                                    tokio::time::sleep(Duration::from_secs_f64(
+                                        reject_backoff() * rejections as f64)).await;
+                                    continue;
+                                }
                                 if body.state == 1 { study_id = 0; }
                                 else if body.studyId > 0 { study_id = body.studyId; }
+                                credited = credited.max(study_time);
                                 break;
                             }
                             // 验证码未被平台接受 → 退避后重新取图识别
                             tokio::time::sleep(Duration::from_secs_f64(0.3 * retries as f64)).await;
                             continue;
                         }
+                        // 平台明确拒收（status=0，且不是掉线/验证码）：这一份一秒没记上。
+                        // 必须挡在这里 —— 放过它就等于允许"被拒也照推进度"，最后墙钟走满
+                        // 报 100%，平台上却还是未学。
+                        if resp.status != 1 {
+                            rejections += 1;
+                            let slot_conflict = resp.msg.contains("Duplicate entry")
+                                || resp.msg.contains("数据出现异常");
+                            crate::logs::warn(crate::logs::CAT_REPORT, &shared.order_id, &video.node_id,
+                                format!("上报被平台拒收（第 {rejections}/{} 次）: {}",
+                                        max_rejects(), crate::logs::clip(&resp.msg, 90)));
+                            if rejections > max_rejects() {
+                                anyhow::bail!("平台连续拒收上报 {} 次（{}），这一节平台没记上",
+                                              max_rejects(), crate::logs::clip(&resp.msg, 60));
+                            }
+                            if slot_conflict && slot_wait_enabled() && slot_waits < MAX_SLOT_WAITS {
+                                // 同片内重试是纯浪费（实测 43 次全撞在同一个片上），
+                                // 只有跨过片边界才能写进去
+                                slot_waits += 1;
+                                let wait = secs_to_next_slot() + 3;
+                                crate::logs::warn(crate::logs::CAT_REPORT, &shared.order_id, &video.node_id,
+                                    format!("撞上平台 20 分钟记账片（同一节同片只能写一行），退避 {wait}s 到下一片再报"));
+                                tokio::time::sleep(Duration::from_secs(wait)).await;
+                            } else {
+                                tokio::time::sleep(Duration::from_secs_f64(
+                                    reject_backoff() * rejections as f64)).await;
+                            }
+                            continue;
+                        }
+                        credited = credited.max(study_time);
                         break;
                     }
                     Err(e) => {
@@ -515,8 +608,11 @@ async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
             }
         }
 
-        // 完成条件：studyTime 报满 + 墙钟 ≥ 比率×时长（保守档比率=1.0，报满即收工）
-        if total_time >= actual_target
+        // 完成条件：**平台已记账的** studyTime 报满 + 墙钟 ≥ 比率×时长
+        // （保守档比率=1.0，报满即收工）。
+        // 判据必须是 credited 而不是 total_time：total_time 只代表"我们发了多少"，
+        // 被平台拒收的份一秒都没落账，拿它判完成就是假成功。
+        if credited >= actual_target
             && start.elapsed().as_secs_f64() >= duration as f64 * shared.profile.wall_ratio
         {
             return Ok(true);
@@ -717,6 +813,9 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
     // done_counter 从基数递增，进度条才是"整单视角"的累计值，重启后不会归零。
     let done_counter = Arc::new(std::sync::atomic::AtomicU64::new(task.already_done));
     let failed_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    // 本地判定"这一节完成了"的节点集合，收尾时拿去和平台的 state 对账
+    let done_nodes: Arc<std::sync::Mutex<std::collections::HashSet<String>>> =
+        Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
 
     // 进度回报参数：闭包要 move 进去，先转成 owned；总节数在这里定死
     let push_url = push_url.to_string();
@@ -755,6 +854,7 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
         let shared = shared.clone();
         let done_counter = done_counter.clone();
         let failed_counter = failed_counter.clone();
+        let done_nodes = done_nodes.clone();
         let push_url = push_url.clone();
         let push_token = push_token.clone();
         set.spawn(async move {
@@ -767,6 +867,9 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
                 Ok(true) => {
                     let d = done_counter.fetch_add(1, order) + 1;
                     let f = failed_counter.load(order);
+                    if let Ok(mut g) = done_nodes.lock() {
+                        g.insert(v.node_id.clone());
+                    }
                     eprintln!("[rust_worker] 视频完成 {}/{} 《{}》时长 {}s 墙钟 {}s",
                               d + f, total_videos, v.name, v.duration.unwrap_or(0), wall);
                     crate::logs::info(crate::logs::CAT_REPORT, &shared.order_id, &v.node_id,
@@ -814,16 +917,79 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
 
     drop(_bg);
 
+    // ── 平台复核：唯一能戳穿"我们记了完成、平台其实没记上"的手段 ──
+    //
+    // 逐课程重拉一次平台的节列表（`/user/study_record/video`，与扫描同源），
+    // 看平台自己的 state 里是不是「已学」。实测平台会因
+    // (studyId, 20 分钟记账片) 唯一键冲突整条拒收上报 —— 只信本地"墙钟走满"
+    // 就会出现订单 100%、平台一节没动（真实案例 ORD-B2270270）。
+    //
+    // 代价：每门课一次列表请求（多页），时长探测命中进程内缓存不再重复下载。
+    // 值这个价 —— 谎报完成是客户投诉与退款的第一来源。
+    let mut false_done = 0usize;
+    {
+        let cookie = shared.cookie_str.lock().await.clone();
+        for (course_id, vids) in &groups {
+            let mine: Vec<&Video> = match done_nodes.lock() {
+                Ok(g) => vids.iter().filter(|v| g.contains(&v.node_id)).collect(),
+                Err(p) => {
+                    let g = p.into_inner();
+                    vids.iter().filter(|v| g.contains(&v.node_id)).collect()
+                }
+            };
+            if mine.is_empty() {
+                continue;
+            }
+            match crate::scan::fetch_course_videos(&shared.client, &cookie, &shared.base_url,
+                                                   course_id, "").await {
+                // 列表为空说明这次复核没拿到有效数据（接口异常/课程已下架），
+                // 不能据此判定"所有节都没完成" —— 那会把正常订单误判成失败。
+                Ok(plat) if plat.is_empty() => {
+                    crate::logs::warn(crate::logs::CAT_REPORT, &task.order_id, "",
+                        format!("平台复核跳过（课程 {course_id} 的节列表为空）"));
+                }
+                Ok(plat) => {
+                    let plat_done: std::collections::HashSet<&str> = plat.iter()
+                        .filter(|v| v.platform_done)
+                        .map(|v| v.node_id.as_str())
+                        .collect();
+                    let known: std::collections::HashSet<&str> =
+                        plat.iter().map(|v| v.node_id.as_str()).collect();
+                    for v in mine {
+                        if plat_done.contains(v.node_id.as_str()) {
+                            continue;
+                        }
+                        // 只在"平台列表里确实有这一节、且没标已学"时才判假完成；
+                        // 节点不在列表里（被平台下架/换版本）只告警不扣分。
+                        if known.contains(v.node_id.as_str()) {
+                            false_done += 1;
+                            crate::logs::warn(crate::logs::CAT_REPORT, &task.order_id, &v.node_id,
+                                format!("平台未记账：本地判定完成，但平台 state 不是「已学」《{}》", v.name));
+                        } else {
+                            crate::logs::warn(crate::logs::CAT_REPORT, &task.order_id, &v.node_id,
+                                format!("平台列表里找不到这一节，无法复核《{}》", v.name));
+                        }
+                    }
+                }
+                Err(e) => crate::logs::warn(crate::logs::CAT_REPORT, &task.order_id, "",
+                    format!("平台复核跳过（读取课程 {course_id} 的节列表失败）：{e}")),
+            }
+        }
+    }
+    if false_done > 0 {
+        // 从成功数里扣掉并计入失败：宁可让订单显式失败，也不报假 100%
+        let order = std::sync::atomic::Ordering::Relaxed;
+        done_counter.fetch_sub(false_done as u64, order);
+        failed_counter.fetch_add(false_done as u64, order);
+        crate::logs::warn(crate::logs::CAT_REPORT, &task.order_id, "",
+            format!("平台复核发现 {false_done} 节本地记了完成、平台却是未学，已改为失败"));
+    }
+
     let done = done_counter.load(std::sync::atomic::Ordering::Relaxed);
     let failed = failed_counter.load(std::sync::atomic::Ordering::Relaxed);
     // 与进度条同一口径：done 是从 already_done 起的累计值，分母也用整单总节数
     let total = total_videos;
 
-    // 完成判据只看本地：每个视频的成败由 study_video 自己判定
-    // （studyTime 报满 + 墙钟 ≥ 档位比率×时长），failed 计数就是硬信号。
-    // 不再额外拉一次账号维度的平台完成率做"复核" —— 该接口不带 courseId，
-    // 只能给出账号全量完成率，与本单选中的课程子集不是一回事，既不能当判据，
-    // 又要多打一次平台请求，纯属噪声。
     if failed > 0 {
         crate::logs::warn(crate::logs::CAT_REPORT, &task.order_id, "",
             format!("刷课结束（有失败）{done}/{total}，失败 {failed} 节"));
@@ -839,6 +1005,22 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
 mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;
+
+    /// 退避必须正好落在平台的 20 分钟记账片边界上（:00/:20/:40），
+    /// 否则退避完了还是同一个片，白白再撞一次唯一键。
+    #[test]
+    fn test_secs_to_next_slot_lands_on_boundary() {
+        // 取几个代表性时刻：正落在边界、片开头、片末尾
+        for now in [0i64, 1, 1_199, 1_200, 1_201, 1_792_000_000, 1_792_000_137] {
+            let w = secs_to_next_slot_from(now) as i64;
+            assert!((1..=SLOT_SECS).contains(&w), "now={now} 退避 {w}s 超出范围");
+            assert_eq!((now + w).rem_euclid(SLOT_SECS), 0, "now={now} 退避后不在片边界");
+        }
+        // 片末尾（差 1 秒到边界）只需等 1 秒，不该等满一片
+        assert_eq!(secs_to_next_slot_from(1_199), 1);
+        // 刚好在边界上 → 当前片刚刚开始，只能等满一片
+        assert_eq!(secs_to_next_slot_from(1_200), SLOT_SECS as u64);
+    }
 
     /// 回归：报满 studyTime 后的"撑墙钟"阶段必须按 30s 粒度推进，
     /// 而不是 1s 空转（否则一个 45 分钟视频要多发上千次重复上报）
@@ -864,6 +1046,12 @@ mod tests {
     /// 极简 HTTP/1.1 mock：POST /user/node/study → 记录上报并回成功 JSON，
     /// 其余路径一律 200（run_study 里只有启动 cookie 检查与心跳会走到）
     async fn spawn_mock_platform() -> (String, Arc<StdMutex<Vec<(String, f64)>>>) {
+        spawn_mock_platform_with(false).await
+    }
+
+    /// `reject = true` 时上报一律回 `status=0`（模拟线上实测的
+    /// `Duplicate entry ... for key 'classDate'` 拒收）
+    async fn spawn_mock_platform_with(reject: bool) -> (String, Arc<StdMutex<Vec<(String, f64)>>>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let log: Arc<StdMutex<Vec<(String, f64)>>> = Arc::new(StdMutex::new(Vec::new()));
@@ -902,14 +1090,38 @@ mod tests {
                             break (head, body);
                         }
                     };
-                    let _ = head_end;
+                    // 收尾复核会 GET /user/study_record/video：回一份"平台已学"的列表。
+                    // 不实现它，复核就会把 8 节全判成"平台未记账"，测试反而测不到正路。
+                    if head_end.starts_with("GET") && head_end.contains("/user/study_record/video") {
+                        let cid = head_end.split("courseId=").nth(1)
+                            .map(|s| s.split(|c: char| !c.is_ascii_alphanumeric())
+                                .next().unwrap_or("").to_string())
+                            .unwrap_or_default();
+                        let n = if cid == "A" { 1 } else { 7 };
+                        let items: Vec<String> = (0..n).map(|i| format!(
+                            r#"{{"id":"{cid}-n{i}","name":"{cid} 第{i}节","state":"<span style=\"color: #2bbc66\">已学</span>","videoDuration":"00:00:02","viewedDuration":"00:00:02","duration":"2","localFile":null}}"#
+                        )).collect();
+                        let payload = format!(
+                            r#"{{"status":true,"list":[{}],"pageInfo":{{"pageCount":1}}}}"#,
+                            items.join(","));
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            payload.len(), payload);
+                        let _ = sock.write_all(resp.as_bytes()).await;
+                        let _ = sock.shutdown().await;
+                        return;
+                    }
                     let body = String::from_utf8_lossy(&body).to_string();
                     if body.contains("nodeId=") {
                         let node = body.split('&').find_map(|kv| kv.strip_prefix("nodeId="))
                             .unwrap_or("?").to_string();
                         log.lock().unwrap().push((node, t0.elapsed().as_secs_f64()));
                     }
-                    let payload = r#"{"status":1,"state":0,"studyId":1,"need_code":0,"offline":false,"msg":""}"#;
+                    let payload = if reject {
+                        r#"{"status":0,"state":0,"studyId":0,"need_code":0,"offline":false,"msg":"提交失败"}"#
+                    } else {
+                        r#"{"status":1,"state":0,"studyId":1,"need_code":0,"offline":false,"msg":""}"#
+                    };
                     let resp = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                         payload.len(), payload);
@@ -932,6 +1144,46 @@ mod tests {
             name: format!("{course} 第{i}节"),
             course_id: course.to_string(),
         }).collect()
+    }
+
+    /// 核心回归：平台明确拒收（status=0）时**必须判失败**，不能照样报完成。
+    ///
+    /// 线上事故背景：平台因 (studyId, 20 分钟记账片) 唯一键冲突整条拒收上报，
+    /// 而我们此前不看 status —— 墙钟走满就宣布"127/127 完成"，平台上那一节
+    /// 一秒都没记上（客户看到 100%，后台一对账才发现差 2 节）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_rejected_reports_must_not_report_completion() {
+        // 把拒收阈值与退避压到毫秒级，否则本用例要等半分钟
+        std::env::set_var("PLATFORM_REQUEST_SPACING_SECS", "0");
+        std::env::set_var("STUDY_MAX_REJECTS", "2");
+        std::env::set_var("STUDY_REJECT_BACKOFF_SECS", "0.01");
+        std::env::set_var("STUDY_SLOT_WAIT", "0");   // 关掉 20 分钟撞片退避
+        let (base_url, _log) = spawn_mock_platform_with(true).await;
+
+        let task = TaskInput {
+            order_id: "TEST-REJECT".into(),
+            username: String::new(),
+            password: String::new(),
+            base_url,
+            cookies: vec![],
+            videos: mock_videos("A", 1, 2),
+            concurrency: 0,
+            push_ws: false,
+            speed_mode: "gentle".into(),
+            already_done: 0,
+        };
+
+        let res = run_study(&task, "", "").await;
+        std::env::remove_var("PLATFORM_REQUEST_SPACING_SECS");
+        std::env::remove_var("STUDY_MAX_REJECTS");
+        std::env::remove_var("STUDY_REJECT_BACKOFF_SECS");
+        std::env::remove_var("STUDY_SLOT_WAIT");
+
+        // 关键断言：全被拒 → 必须报失败（Err），绝不能在平台上没记账时说成功
+        assert!(res.is_err(), "平台全程拒收上报，却报告了完成 —— 假成功回归");
+        let msg = res.unwrap_err().to_string();
+        assert!(msg.contains("未完成") || msg.contains("拒收"),
+                "失败原因应指向「没刷成」，实际: {msg}");
     }
 
     /// 端到端：课程长度极不均（1 节 vs 7 节）时，
