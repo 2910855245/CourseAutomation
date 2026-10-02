@@ -613,14 +613,39 @@ pub async fn admin_stats(db: &Db) -> Result<Value> {
             "SELECT COUNT(*) FROM brush_cards WHERE revoked=0 AND expires_at > ?1
                AND COALESCE(card_kind,'invite')='pass'",
             rusqlite::params![today], |r| r.get(0)).unwrap_or(0);
-        // 免费订单（全局免费或卡免单）：用 payment_channel='free' 标记统计
+        // 免费订单按来源拆开统计。
+        // 为什么要拆：刷视频对所有人免费，所以"免费订单"这个总数几乎全是纯视频单 ——
+        // 混在一起看，老板既看不出卡到底被用了多少次，也看不出活动期用量。
+        // 依据是 paid_processed 的 'free:<reason>' 前缀（入队时写入，见 order.rs）：
+        //   free:video  纯视频单（本来就免费）
+        //   free:card   卡/学期卡免单（考试费被卡抵掉）
+        //   free:global 全场免费活动
+        let free_by = |reason: &'static str, today_only: bool| -> i64 {
+            let sql = if today_only {
+                "SELECT COUNT(*) FROM orders WHERE deleted_at IS NULL
+                   AND paid_processed=?1 AND created_at LIKE ?2"
+            } else {
+                "SELECT COUNT(*) FROM orders WHERE deleted_at IS NULL AND paid_processed=?1"
+            };
+            let arg = format!("free:{reason}");
+            if today_only {
+                conn.query_row(sql, rusqlite::params![arg, today_like], |r| r.get(0))
+            } else {
+                conn.query_row(sql, rusqlite::params![arg], |r| r.get(0))
+            }
+            .unwrap_or(0)
+        };
         let free_orders: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM orders WHERE deleted_at IS NULL AND payment_channel='free'",
+            "SELECT COUNT(*) FROM orders WHERE deleted_at IS NULL AND paid_processed LIKE 'free:%'",
             [], |r| r.get(0)).unwrap_or(0);
         let free_orders_today: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM orders WHERE deleted_at IS NULL AND payment_channel='free'
+            "SELECT COUNT(*) FROM orders WHERE deleted_at IS NULL AND paid_processed LIKE 'free:%'
              AND created_at LIKE ?1",
             rusqlite::params![today_like], |r| r.get(0)).unwrap_or(0);
+        let free_video_orders = free_by("video", false);
+        let free_video_orders_today = free_by("video", true);
+        let free_card_orders = free_by("card", false);
+        let free_card_orders_today = free_by("card", true);
         let mut top: Vec<Value> = Vec::new();
         let mut stmt = conn.prepare(
             "SELECT v.invite_code, COUNT(i.id), COALESCE(SUM(i.converted),0)
@@ -647,6 +672,11 @@ pub async fn admin_stats(db: &Db) -> Result<Value> {
             "cards": cards, "cards_active": cards_active,
             "pass_cards": pass_cards, "pass_cards_active": pass_cards_active,
             "free_orders": free_orders, "free_orders_today": free_orders_today,
+            // 按来源拆开：纯视频单（本来就免费）不该和"卡免单"混在一个数里
+            "free_video_orders": free_video_orders,
+            "free_video_orders_today": free_video_orders_today,
+            "free_card_orders": free_card_orders,
+            "free_card_orders_today": free_card_orders_today,
             "conversion": if invites > 0 { invites_valid as f64 / invites as f64 } else { 0.0 },
             "top_inviters": top,
         }))

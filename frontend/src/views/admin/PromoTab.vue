@@ -111,9 +111,14 @@ onMounted(load)
           <div class="kpi-sub">累计售出 {{ stats?.pass_cards ?? 0 }} 张</div>
         </div>
         <div class="kpi">
-          <div class="kpi-val mono">{{ stats?.free_orders ?? 0 }}</div>
-          <div class="kpi-label">免费订单</div>
-          <div class="kpi-sub">今日 {{ stats?.free_orders_today ?? 0 }} 单</div>
+          <div class="kpi-val mono">{{ stats?.free_video_orders ?? 0 }}</div>
+          <div class="kpi-label">纯视频免费单</div>
+          <div class="kpi-sub">今日 {{ stats?.free_video_orders_today ?? 0 }} 单 · 天然免费</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-val mono">{{ stats?.free_card_orders ?? 0 }}</div>
+          <div class="kpi-label">卡 / 学期卡免单</div>
+          <div class="kpi-sub">今日 {{ stats?.free_card_orders_today ?? 0 }} 单 · 卡的真实用量</div>
         </div>
       </div>
 
@@ -121,13 +126,18 @@ onMounted(load)
       <div class="settings-card">
         <h3>营销配置</h3>
         <p class="settings-hint">
-          免费开关一旦打开，所有访客下单都是 0 元并直接进队列。
+          <b>刷视频对所有人永久免费</b>（纯视频单本来就 0 元，直接进队列），
+          平台收入来自答题 / 考试。所以下面「全场免费」开关管的是<b>考试 / 作业要不要也免费</b>。
         </p>
 
         <div class="opt-row">
           <div class="opt-main">
-            <div class="opt-title">免费刷开关（全场 0 元）</div>
-            <div class="opt-desc">活动期一键放开，关闭后恢复按定价收费；免费单默认走保守档。</div>
+            <div class="opt-title">全场免费（含考试 / 作业）</div>
+            <div class="opt-desc">
+              刷视频本来就免费，这个开关只决定<b>考试 / 作业是否也变 0 元</b>。
+              开着时所有新单 0 元直接进队列（活动期用），关闭后恢复按收费标准收费。
+              免费单一律走保守档。
+            </div>
           </div>
           <select v-model="freeMode" class="opt-input" :class="{ on: freeMode }">
             <option :value="true">开启</option>
