@@ -33,11 +33,9 @@ pub async fn pricing_config(db: &Db) -> Result<Value> {
     let pool = db.clone_pool();
     tokio::task::spawn_blocking(move || -> Result<Value> {
         let conn = pool.get()?;
+        // 只剩真正在收钱的三档：视频（含打包价/进度折扣）已对所有人免费
         let defaults = [
-            ("price_small", 3.0), ("price_medium", 5.0), ("price_large", 6.0),
-            ("discount_25", 0.7), ("discount_50", 0.5), ("discount_75", 0.3),
-            ("price_minimum", 2.0), ("price_exam_only", 5.0), ("price_homework_only", 3.0),
-            ("price_chaoxing", 8.0),
+            ("price_exam_only", 5.0), ("price_homework_only", 3.0), ("price_chaoxing", 8.0),
         ];
         let mut cfg = serde_json::Map::new();
         for (key, default) in defaults {
@@ -51,30 +49,8 @@ pub async fn pricing_config(db: &Db) -> Result<Value> {
     .await?
 }
 
-/// 打包价（对齐 pricing_service.calculate_package_price）
-fn calculate_package_price(cfg: &Value, video_total: i64, video_completed: i64) -> f64 {
-    if video_total <= 0 {
-        return 0.0;
-    }
-    let base = if video_total <= 30 {
-        cfg["price_small"].as_f64().unwrap_or(3.0)
-    } else if video_total <= 80 {
-        cfg["price_medium"].as_f64().unwrap_or(5.0)
-    } else {
-        cfg["price_large"].as_f64().unwrap_or(6.0)
-    };
-    let progress = video_completed as f64 / video_total as f64 * 100.0;
-    let coeff = if progress <= 25.0 {
-        1.0
-    } else if progress <= 50.0 {
-        cfg["discount_25"].as_f64().unwrap_or(0.7)
-    } else if progress <= 75.0 {
-        cfg["discount_50"].as_f64().unwrap_or(0.5)
-    } else {
-        cfg["discount_75"].as_f64().unwrap_or(0.3)
-    };
-    (base * coeff).round_to_2().max(cfg["price_minimum"].as_f64().unwrap_or(2.0))
-}
+// 视频打包价（按小/中/大课 × 进度折扣）随"刷视频免费"一起下线：
+// 现在只有考试/作业/学习通三档收费，见 [`price_single_course`]。
 
 trait Round2 {
     fn round_to_2(self) -> f64;
@@ -419,27 +395,13 @@ mod tests {
     use super::*;
 
     fn test_cfg() -> Value {
-        json!({"price_small": 3.0, "price_medium": 5.0, "price_large": 6.0,
-               "discount_25": 0.7, "discount_50": 0.5, "discount_75": 0.3,
-               "price_minimum": 2.0, "price_exam_only": 5.0, "price_homework_only": 3.0,
-               "price_chaoxing": 8.0})
-    }
-
-    #[test]
-    fn test_package_pricing() {
-        let cfg = test_cfg();
-        assert_eq!(calculate_package_price(&cfg, 20, 0), 3.0);      // 小档全价
-        assert_eq!(calculate_package_price(&cfg, 50, 0), 5.0);      // 中档
-        assert_eq!(calculate_package_price(&cfg, 100, 0), 6.0);     // 大档
-        assert_eq!(calculate_package_price(&cfg, 20, 6), 2.1);      // 30%进度 ×0.7
-        assert_eq!(calculate_package_price(&cfg, 20, 12), 2.0);     // 60%×0.5=1.5→最低2.0
-        assert_eq!(calculate_package_price(&cfg, 20, 20), 2.0);     // 100%×0.3=0.9→最低2.0
-        assert_eq!(calculate_package_price(&cfg, 0, 0), 0.0);
+        json!({"price_exam_only": 5.0, "price_homework_only": 3.0, "price_chaoxing": 8.0})
     }
 
     #[test]
     fn test_view_token() {
-        std::env::set_var("JWT_SECRET_KEY", "secret");
+        // 不要在这里 set_var：测试是并行线程跑的，改全局 env 会和
+        // progress::orders_scope 抢时序（那边也用 view_token），导致偶发对不上。
         let t = view_token("ORD-TEST");
         assert_eq!(t.len(), 24);
         assert_eq!(t, view_token("ORD-TEST"));

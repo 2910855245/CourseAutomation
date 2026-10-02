@@ -917,11 +917,6 @@ useAdminStore().init({
 }
 .pkg-card-label { font-size: 12px; color: var(--c-text-muted); font-weight: 500; margin-bottom: 6px; }
 .pkg-card-price { font-size: 22px; font-weight: 800; color: var(--c-text); }
-.pkg-discount-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
-.pkg-discount-tag {
-  padding: 4px 10px; background: var(--c-border-light); border-radius: 6px;
-  font-size: 12px; color: var(--c-text-secondary); font-weight: 600;
-}
 .pricing-section-header {
   display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;
 }
@@ -943,24 +938,6 @@ useAdminStore().init({
   outline: none; text-align: center;
 }
 .pkg-card-input input:focus { border-color: var(--c-primary); box-shadow: 0 0 0 3px var(--c-primary-bg); }
-.pkg-discount-edit {
-  display: flex; align-items: center; gap: 4px;
-  padding: 4px 8px; background: var(--c-surface); border: 1.5px solid var(--c-border); border-radius: 6px;
-}
-.pkg-disc-label { font-size: 11px; color: var(--c-text-muted); font-weight: 600; white-space: nowrap; }
-.pkg-discount-edit input {
-  width: 56px; height: 28px; padding: 0 4px;
-  border: 1px solid var(--c-border); border-radius: 4px;
-  background: var(--c-surface); color: var(--c-text); font-size: 13px; font-weight: 600;
-  outline: none; text-align: center;
-}
-.pkg-discount-edit .pkg-input-prefix {
-  font-size: 13px; height: 28px; padding: 0 4px;
-  border-radius: 4px 0 0 4px;
-}
-.pkg-discount-edit input:focus { border-color: var(--c-primary); }
-
-/* AI 定价顾问 */
 
 .field-hint { font-size: 11px; color: var(--c-text-muted); }
 

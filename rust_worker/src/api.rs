@@ -1113,15 +1113,9 @@ async fn queue_stats(State(state): State<AppState>) -> Json<Value> {
     }
 }
 
-/// 定价配置键：前端 camelCase ↔ 库内 snake_case（对齐 useSystemConfig.loadPricing）
+/// 收费标准键：前端 camelCase ↔ 库内 snake_case（对齐 useSystemConfig.loadPricing）。
+/// 视频打包价（小/中/大课）与进度折扣已随"刷视频免费"下线，只剩真正在收钱的三档。
 const PRICING_KEYS: &[(&str, &str, f64)] = &[
-    ("priceSmall", "price_small", 3.0),
-    ("priceMedium", "price_medium", 5.0),
-    ("priceLarge", "price_large", 6.0),
-    ("discount25", "discount_25", 0.7),
-    ("discount50", "discount_50", 0.5),
-    ("discount75", "discount_75", 0.3),
-    ("priceMinimum", "price_minimum", 2.0),
     ("priceExamOnly", "price_exam_only", 5.0),
     ("priceHomeworkOnly", "price_homework_only", 3.0),
     ("priceChaoxing", "price_chaoxing", 8.0),
@@ -1139,11 +1133,6 @@ async fn pricing(State(state): State<AppState>) -> Json<Value> {
             ).ok().flatten();
             data.insert(camel.to_string(), json!(v.and_then(|s| s.parse::<f64>().ok()).unwrap_or(*default)));
         }
-        // 前端类型里声明的单价/模式字段（当前按打包定价，单价位占位）
-        data.insert("videoUnitPrice".into(), json!(0));
-        data.insert("examUnitPrice".into(), json!(0));
-        data.insert("homeworkUnitPrice".into(), json!(0));
-        data.insert("pricingMode".into(), json!("package"));
         Ok(Value::Object(data))
     })
     .await

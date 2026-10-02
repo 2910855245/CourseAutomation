@@ -124,18 +124,16 @@ export function useSystemConfig() {
     } finally { testingModel.value = '' }
   }
 
-  // ── Pricing ──
-  const applyingPackage = ref(false)
+  // ── Pricing（收费标准）──
+  // 只剩三档是真正在收钱的：纯考试 / 纯作业 / 学习通一口价。
+  // 原先的"小/中/大课打包价 + 进度折扣 + 最低价"随"刷视频免费"一起下线
+  // —— 后端 price_single_course 已经不看它们了，留着只会让人以为视频要钱。
   const packagePricing = reactive({
-    priceSmall: 3, priceMedium: 5, priceLarge: 6,
-    discount25: 0.7, discount50: 0.5, discount75: 0.3, priceMinimum: 2,
     priceExamOnly: 5, priceHomeworkOnly: 3, priceChaoxing: 8,
   })
   const editingPricing = ref(false)
   const savingPricing = ref(false)
   const editPricing = reactive({
-    priceSmall: 3, priceMedium: 5, priceLarge: 6,
-    discount25: 0.7, discount50: 0.5, discount75: 0.3, priceMinimum: 2,
     priceExamOnly: 5, priceHomeworkOnly: 3, priceChaoxing: 8,
   })
 
@@ -143,31 +141,12 @@ export function useSystemConfig() {
     try {
       const res = await api.pricing.get()
       const d = res.data || {} as any
-      packagePricing.priceSmall = d.priceSmall || 3
-      packagePricing.priceMedium = d.priceMedium || 5
-      packagePricing.priceLarge = d.priceLarge || 6
-      packagePricing.discount25 = d.discount25 || 0.7
-      packagePricing.discount50 = d.discount50 || 0.5
-      packagePricing.discount75 = d.discount75 || 0.3
-      packagePricing.priceMinimum = d.priceMinimum || 2
       packagePricing.priceExamOnly = d.priceExamOnly || 5
       packagePricing.priceHomeworkOnly = d.priceHomeworkOnly || 3
       packagePricing.priceChaoxing = d.priceChaoxing || 8
       Object.assign(editPricing, { ...packagePricing })
     } catch (e: any) {
-      store.toast('加载定价配置失败: ' + (e?.message || '网络错误'), 'error')
-    }
-  }
-
-  async function applyPackagePricing() {
-    applyingPackage.value = true
-    try {
-      await api.pricing.applyPackage({ ...packagePricing })
-      store.toast('打包定价方案已应用', 'success')
-    } catch (e: any) {
-      store.toast('应用失败: ' + (e?.message || '网络错误'), 'error')
-    } finally {
-      applyingPackage.value = false
+      store.toast('加载收费标准失败: ' + (e?.message || '网络错误'), 'error')
     }
   }
 
@@ -181,7 +160,7 @@ export function useSystemConfig() {
       await api.pricing.applyPackage({ ...editPricing })
       Object.assign(packagePricing, editPricing)
       editingPricing.value = false
-      store.toast('定价配置已保存', 'success')
+      store.toast('收费标准已保存', 'success')
     } catch (e: any) {
       store.toast('保存失败: ' + (e?.message || '网络错误'), 'error')
     } finally {
@@ -212,9 +191,9 @@ export function useSystemConfig() {
     // AI 能力开关
     thinkingMode, visionOcr, examSolve, savingAiOptions, saveAiOptions,
     // Pricing
-    applyingPackage, packagePricing,
+    packagePricing,
     editingPricing, savingPricing, editPricing,
-    loadPricing, applyPackagePricing, cancelEditPricing, savePricingConfig,
+    loadPricing, cancelEditPricing, savePricingConfig,
 
     // Constants
     platformColors, taskTypeNames,

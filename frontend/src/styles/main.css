@@ -1363,19 +1363,6 @@ input:disabled {
   text-align: center;
 }
 
-.pkg-discount-edit {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-}
-
-.pkg-disc-label {
-  font-size: var(--fs-sm);
-  color: var(--c-text-secondary);
-  min-width: 68px;
-}
-
 .pkg-input-prefix {
   color: var(--c-text-muted);
   font-size: var(--fs-sm);
@@ -1767,6 +1754,7 @@ input:disabled {
 /* 系统开了「减少动态效果」（晕动症 / 省电）时收掉入场、流光、骨架屏这类
    循环动画：保留 .01ms 的过渡而不是 0，避免状态切换变成硬闪烁。 */
 @media (prefers-reduced-motion: reduce) {
+
   *,
   *::before,
   *::after {

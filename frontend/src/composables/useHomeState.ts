@@ -78,30 +78,14 @@ export function useHomeState() {
   let loginErrorTimer: any = null
   let countdownTimer: any = null
 
-  const packagePricing = ref({
-    priceSmall: 3, priceMedium: 5, priceLarge: 6,
-    discount25: 0.7, discount50: 0.5, discount75: 0.3, priceMinimum: 2,
-    priceExamOnly: 5, priceHomeworkOnly: 3, priceChaoxing: 8,
-  })
+  // 首页只用到学习通一口价（提前展示要付多少）；学校平台的价由后端逐门算，
+  // 前端拿 /api/pricing/calculate 的结果。视频价已下线，不再读那几档。
+  const packagePricing = ref({ priceChaoxing: 8 })
 
   async function loadPackagePricing() {
     try {
-      const res = await api.pricing.get()
-      const d = res.data as any
-      if (d) {
-        packagePricing.value = {
-          priceSmall: d.priceSmall ?? 3,
-          priceMedium: d.priceMedium ?? 5,
-          priceLarge: d.priceLarge ?? 6,
-          discount25: d.discount25 ?? 0.7,
-          discount50: d.discount50 ?? 0.5,
-          discount75: d.discount75 ?? 0.3,
-          priceMinimum: d.priceMinimum ?? 2,
-          priceExamOnly: d.priceExamOnly ?? 5,
-          priceHomeworkOnly: d.priceHomeworkOnly ?? 3,
-          priceChaoxing: d.priceChaoxing ?? 8,
-        }
-      }
+      const d = (await api.pricing.get()).data as any
+      if (d) packagePricing.value = { priceChaoxing: d.priceChaoxing ?? 8 }
     } catch { }
   }
   loadPackagePricing()

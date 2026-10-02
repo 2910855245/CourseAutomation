@@ -245,12 +245,8 @@ export const api = {
   // 后端从未注册这些路由，对应的两个后台页面（网络代理 / 风险监控）
   // 已一并移除，避免留下「点了必然 404」的死接口定义。
   pricing: {
+    // 刷视频免费后只剩三档收费（视频打包价/进度折扣已下线）
     get: () => get<ApiResponse<{
-      videoUnitPrice: number; examUnitPrice: number; homeworkUnitPrice: number;
-      pricingMode: string;
-      priceSmall: number; priceMedium: number; priceLarge: number;
-      discount25: number; discount50: number; discount75: number;
-      priceMinimum: number;
       priceExamOnly: number; priceHomeworkOnly: number;
       priceChaoxing: number;
     }>>('/api/pricing'),

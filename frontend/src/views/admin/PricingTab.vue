@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { useAdminStore } from '@/stores/admin'
-const { applyPackagePricing, applyingPackage, cancelEditPricing, editPricing, editingPricing, packagePricing, savePricingConfig, savingPricing } = useAdminStore().state().sysConfig
+const { cancelEditPricing, editPricing, editingPricing, packagePricing, savePricingConfig, savingPricing } = useAdminStore().state().sysConfig
 </script>
 
 <template>
   <div class="pricing-tab">
-    <!-- AI 定价顾问 -->
-    <div class="settings-card ai-advisor-card">
+    <div class="settings-card">
       <div class="pricing-mode-header">
         <h3>
           <svg
@@ -28,17 +27,18 @@ const { applyPackagePricing, applyingPackage, cancelEditPricing, editPricing, ed
             cy="16"
             r="2"
           /></svg>
-          定价配置
+          收费标准
         </h3>
       </div>
 
-      <!-- 当前生效定价 -->
-      <div
-        class="pricing-section"
-        style="margin-bottom:20px"
-      >
+      <p class="pricing-hint">
+        <b>刷视频对所有人免费</b>，所以这里没有视频价。真正收费的只有下面三档，
+        按「这门课还剩几项要做」逐门计算；考试与作业都有时取两者较高的那个价。
+      </p>
+
+      <div class="pricing-section">
         <div class="pricing-section-header">
-          <span class="pricing-section-title">当前定价方案</span>
+          <span class="pricing-section-title">当前收费标准</span>
           <button
             v-if="!editingPricing"
             class="btn btn-xs btn-ghost"
@@ -73,76 +73,11 @@ const { applyPackagePricing, applyingPackage, cancelEditPricing, editPricing, ed
             </button>
           </div>
         </div>
+
         <div class="pkg-current-grid">
           <div class="pkg-card">
             <div class="pkg-card-label">
-              小课 (≤30视频)
-            </div>
-            <div
-              v-if="!editingPricing"
-              class="pkg-card-price"
-            >
-              ¥{{ packagePricing.priceSmall }}
-            </div>
-            <div
-              v-else
-              class="pkg-card-input"
-            >
-              <span class="pkg-input-prefix">¥</span><input
-                v-model.number="editPricing.priceSmall"
-                type="number"
-                min="0"
-                step="0.5"
-              >
-            </div>
-          </div>
-          <div class="pkg-card">
-            <div class="pkg-card-label">
-              中课 (31-80视频)
-            </div>
-            <div
-              v-if="!editingPricing"
-              class="pkg-card-price"
-            >
-              ¥{{ packagePricing.priceMedium }}
-            </div>
-            <div
-              v-else
-              class="pkg-card-input"
-            >
-              <span class="pkg-input-prefix">¥</span><input
-                v-model.number="editPricing.priceMedium"
-                type="number"
-                min="0"
-                step="0.5"
-              >
-            </div>
-          </div>
-          <div class="pkg-card">
-            <div class="pkg-card-label">
-              大课 (>80视频)
-            </div>
-            <div
-              v-if="!editingPricing"
-              class="pkg-card-price"
-            >
-              ¥{{ packagePricing.priceLarge }}
-            </div>
-            <div
-              v-else
-              class="pkg-card-input"
-            >
-              <span class="pkg-input-prefix">¥</span><input
-                v-model.number="editPricing.priceLarge"
-                type="number"
-                min="0"
-                step="0.5"
-              >
-            </div>
-          </div>
-          <div class="pkg-card">
-            <div class="pkg-card-label">
-              纯考试
+              纯考试（每门）
             </div>
             <div
               v-if="!editingPricing"
@@ -164,7 +99,7 @@ const { applyPackagePricing, applyingPackage, cancelEditPricing, editPricing, ed
           </div>
           <div class="pkg-card">
             <div class="pkg-card-label">
-              纯作业
+              纯作业（每门）
             </div>
             <div
               v-if="!editingPricing"
@@ -186,7 +121,7 @@ const { applyPackagePricing, applyingPackage, cancelEditPricing, editPricing, ed
           </div>
           <div class="pkg-card">
             <div class="pkg-card-label">
-              学习通（积分+作业）
+              学习通（一口价）
             </div>
             <div
               v-if="!editingPricing"
@@ -207,64 +142,11 @@ const { applyPackagePricing, applyingPackage, cancelEditPricing, editPricing, ed
             </div>
           </div>
         </div>
-        <div class="pkg-discount-row">
-          <span
-            v-if="!editingPricing"
-            class="pkg-discount-tag"
-          >25-50%进度: ×{{ packagePricing.discount25 }}</span>
-          <span
-            v-if="!editingPricing"
-            class="pkg-discount-tag"
-          >50-75%进度: ×{{ packagePricing.discount50 }}</span>
-          <span
-            v-if="!editingPricing"
-            class="pkg-discount-tag"
-          >>75%进度: ×{{ packagePricing.discount75 }}</span>
-          <span
-            v-if="!editingPricing"
-            class="pkg-discount-tag"
-          >最低: ¥{{ packagePricing.priceMinimum }}</span>
-          <template v-else>
-            <span class="pkg-discount-edit"><span class="pkg-disc-label">25-50%:</span><input
-              v-model.number="editPricing.discount25"
-              type="number"
-              min="0"
-              max="1"
-              step="0.05"
-            ></span>
-            <span class="pkg-discount-edit"><span class="pkg-disc-label">50-75%:</span><input
-              v-model.number="editPricing.discount50"
-              type="number"
-              min="0"
-              max="1"
-              step="0.05"
-            ></span>
-            <span class="pkg-discount-edit"><span class="pkg-disc-label">>75%:</span><input
-              v-model.number="editPricing.discount75"
-              type="number"
-              min="0"
-              max="1"
-              step="0.05"
-            ></span>
-            <span class="pkg-discount-edit"><span class="pkg-disc-label">最低:</span><span class="pkg-input-prefix">¥</span><input
-              v-model.number="editPricing.priceMinimum"
-              type="number"
-              min="0"
-              step="0.5"
-            ></span>
-          </template>
-        </div>
-      </div>
 
-        <!-- 一键应用 -->
-        <button
-          class="btn btn-success btn-lg btn-block"
-          :disabled="applyingPackage"
-          style="margin-top: 16px;"
-          @click="applyPackagePricing"
-        >
-          {{ applyingPackage ? '应用中...' : '一键应用此方案' }}
-        </button>
+        <p class="pricing-hint foot">
+          另有「学期卡」（整学期答题/考试全免）的价格与开关，在「营销推广」页配置。
+        </p>
+      </div>
     </div>
   </div>
 </template>
@@ -308,12 +190,22 @@ const { applyPackagePricing, applyingPackage, cancelEditPricing, editPricing, ed
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--c-text);
-  margin-bottom: 20px;
+  margin-bottom: 12px;
 }
 
 .pricing-mode-header svg {
   color: var(--c-primary);
 }
+
+.pricing-hint {
+  font-size: 12.5px;
+  line-height: 1.8;
+  color: var(--c-text-muted);
+  margin-bottom: 20px;
+}
+
+.pricing-hint b { color: var(--c-text-secondary); }
+.pricing-hint.foot { margin: 16px 0 0; }
 
 .pricing-section-header {
   display: flex;
@@ -347,9 +239,6 @@ const { applyPackagePricing, applyingPackage, cancelEditPricing, editPricing, ed
 
 .pkg-current-grid .pkg-card:nth-child(2) { animation-delay: .04s; }
 .pkg-current-grid .pkg-card:nth-child(3) { animation-delay: .08s; }
-.pkg-current-grid .pkg-card:nth-child(4) { animation-delay: .12s; }
-.pkg-current-grid .pkg-card:nth-child(5) { animation-delay: .16s; }
-.pkg-current-grid .pkg-card:nth-child(6) { animation-delay: .20s; }
 
 .pkg-card {
   background: var(--c-bg);
@@ -392,8 +281,7 @@ const { applyPackagePricing, applyingPackage, cancelEditPricing, editPricing, ed
   color: var(--c-text-muted);
 }
 
-.pkg-card-input input,
-.pkg-discount-edit input {
+.pkg-card-input input {
   width: 90px;
   padding: 6px 10px;
   border: 1px solid var(--c-border);
@@ -406,47 +294,9 @@ const { applyPackagePricing, applyingPackage, cancelEditPricing, editPricing, ed
   transition: border-color .2s ease, box-shadow .2s ease;
 }
 
-.pkg-card-input input:focus,
-.pkg-discount-edit input:focus {
+.pkg-card-input input:focus {
   border-color: var(--c-primary);
   box-shadow: 0 0 0 3px var(--c-primary-soft, rgba(0, 113, 227, .12));
-}
-
-.pkg-discount-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 16px;
-}
-
-.pkg-discount-tag {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--c-text-secondary);
-  background: var(--c-bg);
-  border: 1px solid var(--c-border);
-  padding: 5px 12px;
-  border-radius: 999px;
-}
-
-.pkg-discount-edit {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--c-bg);
-  border: 1px solid var(--c-border);
-  padding: 5px 12px;
-  border-radius: 10px;
-}
-
-.pkg-disc-label {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--c-text-muted);
-}
-
-.pkg-discount-edit input {
-  width: 70px;
 }
 
 @media (max-width: 768px) {
