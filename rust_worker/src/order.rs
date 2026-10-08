@@ -178,6 +178,55 @@ pub fn compute_item_prices(cfg: &Value, orders: &[Value], username: &str) -> Res
     Ok(prices)
 }
 
+/// 该账号已被"进行中订单"占用的 (website_id, course_id) 集合。
+///
+/// 为什么必须在服务端拦：前端会在扫描后拉 `/api/orders/active-courses` 把已提交
+/// 的课标成"已提交"并置灰，但那是**客户端自觉** —— 该请求失败（网络抖动、被限流、
+/// 500）时前端 `catch {}` 静默放过，用户就能对同一批课再下一单：同一份活被跑两遍
+/// （多占一份平台会话、多刷一轮风控），付费单还会被重复收钱。
+///
+/// 这里做最后一道权威闸：**同一账号 + 同一平台 + 同一门课，只要还有未终态的
+/// 订单，就不再重复建单**。已取消/已完成/失败的单不算占用（客户可以重新下单）。
+async fn active_courses_of(db: &Db, username: &str) -> std::collections::HashSet<(i64, String)> {
+    use std::collections::HashSet;
+    if username.is_empty() {
+        return HashSet::new();
+    }
+    let pool = db.clone_pool();
+    let u = username.to_string();
+    tokio::task::spawn_blocking(move || -> HashSet<(i64, String)> {
+        let mut out = HashSet::new();
+        let Ok(conn) = pool.get() else { return out };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT website_id, course_ids FROM orders
+             WHERE username=?1 AND deleted_at IS NULL
+               AND status IN ('pending','accepted','queued','running','retrying','paid','waiting')",
+        ) else {
+            return out;
+        };
+        let rows = stmt.query_map(rusqlite::params![u], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        });
+        let Ok(rows) = rows else { return out };
+        for row in rows.flatten() {
+            let (wid, raw) = row;
+            if let Ok(arr) = serde_json::from_str::<Value>(&raw) {
+                if let Some(list) = arr.as_array() {
+                    for v in list {
+                        if let Some(s) = v.as_str() {
+                            // "courseId:classId" → 只取课程 ID（与扫描结果对齐）
+                            out.insert((wid, s.split(':').next().unwrap_or(s).to_string()));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    })
+    .await
+    .unwrap_or_default()
+}
+
 /// 创建订单（对齐 db.create_order）
 async fn create_order(db: &Db, username: &str, password: &str, item: &Value,
                       user_id: &str) -> Result<Value> {
@@ -270,10 +319,26 @@ pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
     let mut payable_total = 0.0f64;
     // 卡的额度只被"卡真正免掉的钱"消耗：纯视频单本来就免费，不该扣卡额度
     let mut card_charged = 0i64;
+    // 已被进行中订单占用的课程（服务端防重，见 active_courses_of）
+    let busy = active_courses_of(db, &username).await;
+    let mut skipped: Vec<Value> = Vec::new();
 
     for item in &orders {
         let course_ids = item["course_ids"].as_array().cloned().unwrap_or_default();
         if course_ids.is_empty() && item["video_count"].as_i64().unwrap_or(0) == 0 {
+            continue;
+        }
+        // 防重：这门课已有进行中的订单 → 不再重复建单（同一份活跑两遍 = 白占平台
+        // 会话 + 重复收钱）。返回给前端用于提示，不再静默吞掉。
+        let wid = item["website_id"].as_i64().unwrap_or(1);
+        let dup: Vec<String> = course_ids.iter()
+            .filter_map(|v| v.as_str())
+            .map(|s| s.split(':').next().unwrap_or(s).to_string())
+            .filter(|c| busy.contains(&(wid, c.clone())))
+            .collect();
+        if !dup.is_empty() {
+            skipped.push(json!({"website_id": wid, "course_ids": dup,
+                                "reason": "已有进行中的订单，无需重复提交"}));
             continue;
         }
         let mut item = item.clone();
@@ -373,11 +438,22 @@ pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
                        "订单已分流：免费单直接入队，付费单待支付");
     }
 
+    // 全被防重挡下时不能说"成功创建 0 个订单"就完事 —— 用户需要知道原因
+    let message = if created.is_empty() && !skipped.is_empty() {
+        "所选课程均已有进行中的订单，无需重复提交".to_string()
+    } else if !skipped.is_empty() {
+        format!("成功创建 {} 个订单（{} 门课已有进行中的订单，已跳过）", created.len(), skipped.len())
+    } else {
+        format!("成功创建 {} 个订单", created.len())
+    };
+
     Ok(json!({
         "success": true,
-        "message": format!("成功创建 {} 个订单", created.len()),
+        "message": message,
         "data": {
             "orders": created,
+            // 被防重挡下的课程（前端据此提示，而不是静默少下单）
+            "skipped": skipped,
             // 已直接开跑的免费单 / 还需支付才能跑的付费单
             "free_order_ids": free_ids,
             "payable_order_ids": payable_ids,

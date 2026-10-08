@@ -490,7 +490,18 @@ export function useHomeState() {
     paying.value = true; payError.value = ''
     try {
       await fetchBackendPrices()
-      try { const r = await api.orders.activeCourses(username.value.trim()); const activeIds: string[] = r?.data || []; for (const cid of activeIds) { checkedCourseIds.value.delete(cid); submittedCourseIds.value.add(cid) } } catch { }
+      // 提交前的防重检查**不能失败即放过**：查不到"哪些课已有进行中的订单"时，
+      // 之前是静默 `catch {}` 继续提交，用户就能对同一批课重复下单。
+      // 现在直接拦住并提示重试（后端也有权威防重，这里是双保险）。
+      try {
+        const r = await api.orders.activeCourses(username.value.trim())
+        const activeIds: string[] = r?.data || []
+        for (const cid of activeIds) { checkedCourseIds.value.delete(cid); submittedCourseIds.value.add(cid) }
+      } catch {
+        store.toast('无法确认是否已有进行中的订单，请稍后重试', 'warning')
+        paying.value = false
+        return
+      }
       if (checkedCourseIds.value.size === 0) { store.toast('所选课程均已有进行中的订单，无需重复提交', 'info'); paying.value = false; return }
       const grouped: Record<number, { ids: string[]; v: number; e: number; details: { video_total: number; video_completed: number; exam_total: number; exam_done: number }[] }> = {}
       for (const plat of scanData.value) {
@@ -536,7 +547,18 @@ export function useHomeState() {
       const allPairs = existingPairs ? existingPairs + ',' + tokenPairs.join(',') : tokenPairs.join(',')
       sessionStorage.setItem('last_order_tokens', allPairs); localStorage.setItem('last_order_tokens', allPairs)
       const orderedCourseIds = Object.values(grouped).flatMap(g => g.ids)
-      if (!allOrders.length) { store.toast('订单创建成功，但未返回订单信息', 'warning'); paying.value = false; return }
+      // 后端会把"这门课已有进行中订单"的项挡下来（防重复建单）。要明确告诉用户
+      // 少了哪些，否则她以为全提交了、实际只提交了一部分。
+      const skipped = (batchRes?.data?.skipped || []) as { course_ids: string[] }[]
+      if (skipped.length) {
+        const n = skipped.reduce((s, k) => s + (k.course_ids?.length || 0), 0)
+        store.toast(`有 ${n} 门课已有进行中的订单，本次未重复提交`, 'info')
+      }
+      if (!allOrders.length) {
+        store.toast(skipped.length ? '所选课程均已有进行中的订单' : '订单创建成功，但未返回订单信息', 'warning')
+        paying.value = false
+        return
+      }
       // 后端逐单分流：0 元单（只剩视频要刷）已经直接进队列开跑，不需要也不该支付
       const payableIds: string[] = (batchRes?.data?.payable_order_ids || []).filter(Boolean)
       if (payableIds.length) {

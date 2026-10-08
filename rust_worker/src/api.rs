@@ -1952,12 +1952,13 @@ fn find_job_table(conn: &rusqlite::Connection, job_id: &str) -> Option<&'static 
     None
 }
 
-async fn queue_job_cancel(State(state): State<AppState>, Path(job_id): Path<String>) -> Json<Value> {
-    // 先真正停掉在跑的任务，再改库状态。
-    // 此前只 UPDATE 一行状态：任务照旧跑完，并在完成时把状态覆盖回 completed，
-    // 管理员看到的是"取消成功但任务又跑起来了"。
+/// 真正停掉在跑的任务，返回它的 order_id。
+///
+/// 只改库状态是不够的：任务协程会照旧跑完，并在完成时把状态覆盖回 completed
+/// —— 管理员看到的是"取消成功但任务又跑起来了"。
+async fn abort_running_job(state: &AppState, job_id: &str) -> String {
     let db = state.db.clone_pool();
-    let jid = job_id.clone();
+    let jid = job_id.to_string();
     let order_id = tokio::task::spawn_blocking(move || -> Option<String> {
         let conn = db.get().ok()?;
         let table = find_job_table(&conn, &jid)?;
@@ -1976,32 +1977,72 @@ async fn queue_job_cancel(State(state): State<AppState>, Path(job_id): Path<Stri
             tracing::info!(job_id = %job_id, order_id = %order_id, "已中止运行中的刷课任务");
         }
     }
+    order_id
+}
+
+async fn queue_job_cancel(State(state): State<AppState>, Path(job_id): Path<String>) -> Json<Value> {
+    abort_running_job(&state, &job_id).await;
     queue_job_action(&state, &job_id,
         "UPDATE {t} SET status='cancelled', finished_at=?1 WHERE job_id=?2 AND status IN ('pending','running','retrying','waiting')",
-        "任务已取消").await
+        "任务已取消", true).await
 }
 
 async fn queue_job_retry(State(state): State<AppState>, Path(job_id): Path<String>) -> Json<Value> {
     queue_job_action(&state, &job_id,
         "UPDATE {t} SET status='retrying', retry_count=retry_count+1, error_message='', finished_at=NULL WHERE job_id=?2 AND status IN ('failed','cancelled')",
-        "任务已重新入队").await
+        "任务已重新入队", false).await
 }
 
 async fn queue_job_delete(State(state): State<AppState>, Path(job_id): Path<String>) -> Json<Value> {
+    // 删除也必须真的停掉在跑的协程：否则它跑完会把状态覆盖回 completed，
+    // 于是"删掉的任务"又出现在列表里（line 上实测过这种反复）。
+    abort_running_job(&state, &job_id).await;
     queue_job_action(&state, &job_id,
-        "UPDATE {t} SET deleted_at=?1 WHERE job_id=?2", "任务已删除").await
+        "UPDATE {t} SET deleted_at=?1 WHERE job_id=?2", "任务已删除", true).await
 }
 
 /// 队列 job 通用动作：定位表 → 执行 UPDATE（?1=now, ?2=job_id）
-async fn queue_job_action(state: &AppState, job_id: &str, sql_tpl: &str, ok_msg: &str) -> Json<Value> {
+///
+/// `close_order`：任务从"进行中"被停掉时，把订单也收尾（置 cancelled）。
+/// 为什么必须有：订单只要停在 running 就永远出不来 ——
+///   - 订单页一直显示"处理中"、进度不动；
+///   - `/api/orders/active-courses` 把它算作进行中，客户再扫也选不了这批课；
+///   - 补投扫描 `find_orders_paid_without_job_sync` 的 NOT EXISTS 不滤 deleted_at，
+///     有任务行（哪怕已删）就不再补投 → 既不会跑，也不会自愈。
+/// 于是"删了任务"反而把客户卡死。这里让删除/取消的语义变成"这单不要了"。
+async fn queue_job_action(state: &AppState, job_id: &str, sql_tpl: &str, ok_msg: &str,
+                          close_order: bool) -> Json<Value> {
     let db = state.db.clone_pool();
     let jid = job_id.to_string();
     let tpl = sql_tpl.to_string();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
         let conn = db.get()?;
         let table = find_job_table(&conn, &jid).ok_or_else(|| anyhow::anyhow!("任务不存在"))?;
+        // 先读动作前的状态：取消会把状态改成 cancelled，改完就分不清"本来是不是在跑"
+        let (order_id, prev): (String, String) = conn
+            .query_row(
+                &format!("SELECT COALESCE(order_id,''), COALESCE(status,'') FROM {table} WHERE job_id=?1"),
+                rusqlite::params![jid],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap_or_default();
         let sql = tpl.replace("{t}", table);
-        Ok(conn.execute(&sql, rusqlite::params![crate::queue::now_str(), jid])?)
+        let now = crate::queue::now_str();
+        let n = conn.execute(&sql, rusqlite::params![now, jid])?;
+        let was_active = matches!(prev.as_str(), "pending" | "running" | "retrying" | "waiting");
+        if n > 0 && close_order && was_active && !order_id.is_empty() {
+            conn.execute(
+                "UPDATE orders SET status='cancelled', finished_at=?1, updated_at=?1,
+                        admin_note=CASE WHEN COALESCE(admin_note,'')=''
+                                        THEN '任务被后台取消/删除，订单一并收尾'
+                                        ELSE admin_note END
+                 WHERE order_id=?2 AND deleted_at IS NULL
+                   AND status NOT IN ('completed','failed','cancelled')",
+                rusqlite::params![now, order_id],
+            )?;
+            log_event(&conn, "order_cancelled", "admin", "任务取消/删除，订单已一并收尾", &order_id)?;
+        }
+        Ok(n)
     })
     .await
     .map_err(|e| anyhow::anyhow!("{e}"))

@@ -188,6 +188,8 @@ export const api = {
       post<ApiResponse<{
         orders: any[]; free_order_ids: string[]; payable_order_ids: string[]
         total_price: number; paid: boolean; free: boolean; free_reason: string
+        // 服务端防重挡下的课程（这门课已有进行中的订单，本次未重复建单）
+        skipped: { website_id: number; course_ids: string[]; reason: string }[]
       }>>('/api/orders/batch', d),
     get: (id: string, token?: string) => get<ApiResponse<OrderItem>>('/api/orders/' + id + (token ? '?token=' + encodeURIComponent(token) : '')),
     cancel: (id: string, token?: string) => del<ApiResponse<any>>('/api/orders/' + id + (token ? '?token=' + encodeURIComponent(token) : '')),
