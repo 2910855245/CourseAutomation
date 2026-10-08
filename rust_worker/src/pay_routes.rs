@@ -3,13 +3,13 @@
 //! 响应 JSON 字段名与 Python 逐字对齐；路由全部公开（对齐 Python get_optional_user）。
 //! 已知缺口（汇报父代理）：
 //! - qr_image（二维码 PNG base64）不生成，一律返回 null（Python make_qr_base64 失败也返回 None，形状兼容）。
-//! - POST /api/ypay/decode-qr 与 GET /api/ypay/qrcode/{trade_no} 返回 code=-1 说明（不移植 pyzbar/qrcode PNG）。
+//! - GET /api/ypay/qrcode/{trade_no} 返回 code=-1 说明（不移植 qrcode PNG）。
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -33,7 +33,11 @@ pub fn router() -> Router<AppState> {
         .route("/api/ypay/check/{trade_no}", get(ypay_check))
         .route("/api/ypay/order/{trade_no}", get(ypay_order_detail))
         .route("/api/ypay/batch-create", post(ypay_batch_create))
-        .route("/api/ypay/decode-qr", post(ypay_decode_qr))
+        // 上传收款码图片识别：默认 2MB body 限额放不下手机截图，放宽到 11MB（对齐 Python 10MB 上限 + 余量）
+        .route(
+            "/api/ypay/decode-qr",
+            post(ypay_decode_qr).layer(DefaultBodyLimit::max(11 * 1024 * 1024)),
+        )
         .route("/api/ypay/qrcode/{trade_no}", get(ypay_qrcode_png))
 }
 
@@ -1155,14 +1159,93 @@ async fn ypay_batch_create(State(state): State<AppState>, Json(body): Json<Batch
     }))
 }
 
-// ── /api/ypay/decode-qr（已知缺口：不移植 pyzbar，返回 code=-1 说明）───────
+// ── /api/ypay/decode-qr（对齐 Python：上传收款码图片 → 识别出二维码内容）────
 
-async fn ypay_decode_qr() -> Json<Value> {
-    Json(json!({"code": -1, "message": "二维码解码功能未在 Rust worker 实现，请手动输入"}))
+/// 上传二维码图片（multipart 字段 file）→ 返回解码出的内容。
+///
+/// 为什么需要：管理端「收款码内容」支持上传图片自动填（微信赞赏码/收款码截图），
+/// Python 版用 pyzbar 解码；Rust 版此前是"未实现"占位 —— 上传永远失败，
+/// 管理员只能手抄二维码里的长链接（wxp:// 之类）。
+/// 这里用纯 Rust 的 rqrr 解码（无 zbar 系统库依赖），报错文案与 Python 逐字对齐。
+async fn ypay_decode_qr(mut multipart: Multipart) -> Json<Value> {
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => {
+                if field.name() != Some("file") {
+                    continue;
+                }
+                if !field.content_type().is_some_and(|ct| ct.starts_with("image/")) {
+                    return Json(json!({"code": -1, "message": "请上传图片文件"}));
+                }
+                let data = match field.bytes().await {
+                    Ok(b) => b,
+                    Err(e) => return Json(json!({"code": -1, "message": format!("解码失败: {e}")})),
+                };
+                if data.len() > 10 * 1024 * 1024 {
+                    return Json(json!({"code": -1, "message": "图片大小不能超过10MB"}));
+                }
+                return Json(match decode_qr_from_image(&data) {
+                    Some(content) => json!({"code": 0, "message": "解码成功", "data": content}),
+                    None => json!({"code": -1, "message": "未检测到二维码，请手动输入"}),
+                });
+            }
+            Ok(None) => return Json(json!({"code": -1, "message": "请上传图片文件"})),
+            Err(e) => return Json(json!({"code": -1, "message": format!("解码失败: {e}")})),
+        }
+    }
+}
+
+/// 从图片字节解出二维码文本：多码图片取第一张能识别的，识别不出返回 None。
+fn decode_qr_from_image(bytes: &[u8]) -> Option<String> {
+    let gray = image::load_from_memory(bytes).ok()?.to_luma8();
+    let mut prepared = rqrr::PreparedImage::prepare(gray);
+    for grid in prepared.detect_grids() {
+        if let Ok((_meta, content)) = grid.decode() {
+            if !content.is_empty() {
+                return Some(content);
+            }
+        }
+    }
+    None
 }
 
 // ── /api/ypay/qrcode/{trade_no}（已知缺口：不移植 qrcode PNG，返回 code=-1 说明）
 
 async fn ypay_qrcode_png(Path(_trade_no): Path<String>) -> Json<Value> {
     Json(json!({"code": -1, "message": "二维码 PNG 生成未在 Rust worker 实现"}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_qr_from_image;
+    use image::ImageEncoder as _;
+
+    fn png_of(img: &image::ImageBuffer<image::Luma<u8>, Vec<u8>>) -> Vec<u8> {
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(img.as_raw(), img.width(), img.height(), image::ExtendedColorType::L8)
+            .unwrap();
+        png
+    }
+
+    /// 往返：生成二维码 → PNG 编码 → 解码还原原文（覆盖管理端上传截图的主路径）
+    #[test]
+    fn test_decode_qr_from_uploaded_png() {
+        let content = "https://example.com/qr-upload-roundtrip";
+        let img = qrcode::QrCode::new(content.as_bytes())
+            .unwrap()
+            .render::<image::Luma<u8>>()
+            .min_dimensions(200, 200)
+            .quiet_zone(true)
+            .build();
+        assert_eq!(decode_qr_from_image(&png_of(&img)).as_deref(), Some(content));
+    }
+
+    /// 无码白图 / 非图片字节 → None（前端据此提示"未检测到二维码"）
+    #[test]
+    fn test_decode_qr_rejects_non_qr() {
+        let blank = image::ImageBuffer::from_pixel(64, 64, image::Luma([255u8]));
+        assert_eq!(decode_qr_from_image(&png_of(&blank)), None);
+        assert_eq!(decode_qr_from_image(b"not an image"), None);
+    }
 }
