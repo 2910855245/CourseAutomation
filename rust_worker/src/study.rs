@@ -87,6 +87,44 @@ fn slot_wait_enabled() -> bool {
     std::env::var("STUDY_SLOT_WAIT").map(|v| v.trim() != "0").unwrap_or(true)
 }
 
+/// 平台拒收文案里的「章节未到解锁时间」——学校的硬时间闸，重试多少次都一样。
+/// 提取 "本章节解锁时间未到，【2026-11-05 13:20:00】后解锁!" 里的时间；
+/// 文案带锁但没有时间时给个兜底串（仍按未解锁处理）。
+fn locked_until(msg: &str) -> Option<String> {
+    // 平台原文案是"解锁时间未到"，我们自己的 bail 文案是"未到解锁时间"——两种词序都要认
+    if !msg.contains("解锁时间未到") && !msg.contains("未到解锁时间") {
+        return None;
+    }
+    Some(
+        msg.split_once('【')
+            .and_then(|(_, r)| r.split_once('】'))
+            .map(|(t, _)| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| "未知时间".to_string()),
+    )
+}
+
+/// 视频失败的分类（决定外层怎么记账）：
+/// - Locked：平台时间锁，不算失败（订单不该因为学校没解锁就判失败）
+/// - SlotDup：撞 20 分钟记账片反复被拒 —— 大概率平台早就有这一行（重复拒收=已记上），
+///   收尾时拿平台 state 复核，是「已学」就改判完成
+/// - Other：真失败
+enum VideoFailureKind {
+    Locked(String),
+    SlotDup,
+    Other,
+}
+
+fn classify_video_failure(err: &str) -> VideoFailureKind {
+    if let Some(until) = locked_until(err) {
+        return VideoFailureKind::Locked(until);
+    }
+    if err.contains("数据出现异常") || err.contains("Duplicate") {
+        return VideoFailureKind::SlotDup;
+    }
+    VideoFailureKind::Other
+}
+
 /// 进度百分比，收敛到 1 位小数：原始浮点（如 1/61 → 1.639344262295082）
 /// 落库后会在订单页整串显示出来。
 fn pct_of(done: u64, total: u64) -> f64 {
@@ -161,6 +199,14 @@ pub struct Video {
     /// 而校准后的文件真值又比平台元数据长 —— 拿数值比较必然少算几节。
     #[serde(default)]
     pub platform_done: bool,
+    /// 平台给的解锁时间（Unix 秒；0/缺省 = 没有时间锁）。
+    ///
+    /// 平台在视频列表接口里直接给 `lock`/`unlockTime`：部分课程按周解锁
+    /// （实测 10-08 / 11-05 / 12-03 各放两节，13:20:00），未到时间的节
+    /// 平台会整条拒收上报。扫描阶段必须据它把"还没解锁"的节挡在队列外 ——
+    /// 否则每节都要白跑一轮会话、再把订单判失败。
+    #[serde(default)]
+    pub unlock_ts: i64,
     #[serde(default)]
     pub viewed_duration: u64,
     /// 视频文件地址。平台列表接口不返回时长，补时长要从文件本身读（见 scan 的媒体探测）。
@@ -215,6 +261,10 @@ pub struct TaskInput {
     /// "进度被重置"（用户看到的百分比突然掉回 1%，其实只是把已完成的从分子里漏掉了）。
     #[serde(default)]
     pub already_done: u64,
+    /// 本轮被平台时间锁挡下的节数说明（扫描侧统计；空串 = 没有）。
+    /// 刷课进度文案把它挂在尾巴上，客户能知道"少的那几节是平台还没解锁"。
+    #[serde(default)]
+    pub locked_note: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -567,6 +617,11 @@ async fn study_video(shared: &Shared, video: &Video) -> Result<bool> {
                         // 必须挡在这里 —— 放过它就等于允许"被拒也照推进度"，最后墙钟走满
                         // 报 100%，平台上却还是未学。
                         if resp.status != 1 {
+                            // 章节未到解锁时间：学校的硬时间闸，重试没有意义 ——
+                            // 立刻跳过，不占拒收次数；外层按"未解锁"单独记账，不判订单失败。
+                            if let Some(until) = locked_until(&resp.msg) {
+                                anyhow::bail!("本章节未到解锁时间（{until} 解锁），本轮跳过");
+                            }
                             rejections += 1;
                             let slot_conflict = resp.msg.contains("Duplicate entry")
                                 || resp.msg.contains("数据出现异常");
@@ -813,13 +868,21 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
     // done_counter 从基数递增，进度条才是"整单视角"的累计值，重启后不会归零。
     let done_counter = Arc::new(std::sync::atomic::AtomicU64::new(task.already_done));
     let failed_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    // 平台未到解锁时间、被安全网兜住的节数（正常应被扫描侧提前过滤，这里只是兜底）
+    let locked_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
     // 本地判定"这一节完成了"的节点集合，收尾时拿去和平台的 state 对账
     let done_nodes: Arc<std::sync::Mutex<std::collections::HashSet<String>>> =
+        Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+    // 撞记账片判失败的节：重复拒收大概率说明平台早就有这一行，
+    // 收尾时若 state 是「已学」则改判完成（别再白白判成失败）
+    let dup_failed_nodes: Arc<std::sync::Mutex<std::collections::HashSet<String>>> =
         Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
 
     // 进度回报参数：闭包要 move 进去，先转成 owned；总节数在这里定死
     let push_url = push_url.to_string();
     let push_token = push_token.to_string();
+    // 未解锁说明也要 owned（spawn 的任务要求 'static，不能借用 task）
+    let locked_note = task.locked_note.clone();
     // 分母 = 已完成的 + 本轮待刷的 = 整单总节数
     let total_videos = task.already_done + queue.len() as u64;
 
@@ -829,7 +892,8 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
         "type": "progress", "phase": "video",
         "progress": pct_of(task.already_done, total_videos),
         "done": task.already_done, "failed": 0, "total": total_videos,
-        "step": format!("已刷 {}/{} 节", task.already_done, total_videos),
+        "step": format!("已刷 {}/{} 节{}", task.already_done, total_videos,
+                        if task.locked_note.is_empty() { String::new() } else { format!("（{}）", task.locked_note) }),
     }), &push_url, &push_token).await;
 
     // 视频并发闸：档位决定同时在跑几路会话（急速 8 / 均衡 4 / 温柔 1）。
@@ -854,16 +918,19 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
         let shared = shared.clone();
         let done_counter = done_counter.clone();
         let failed_counter = failed_counter.clone();
+        let locked_counter = locked_counter.clone();
+        let dup_failed_nodes = dup_failed_nodes.clone();
         let done_nodes = done_nodes.clone();
         let push_url = push_url.clone();
         let push_token = push_token.clone();
+        let locked_note = locked_note.clone();
         set.spawn(async move {
             let _permit = permit;
             let t0 = Instant::now();
             let r = study_video(&shared, &v).await;
             let wall = t0.elapsed().as_secs();
             let order = std::sync::atomic::Ordering::Relaxed;
-            let (done, failed) = match r {
+            let (done, failed, locked) = match r {
                 Ok(true) => {
                     let d = done_counter.fetch_add(1, order) + 1;
                     let f = failed_counter.load(order);
@@ -876,7 +943,7 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
                         format!("视频完成 {}/{}（{}%）《{}》时长 {}s 墙钟 {}s",
                                 d + f, total_videos, pct_of(d, total_videos),
                                 v.name, v.duration.unwrap_or(0), wall));
-                    (d, f)
+                    (d, f, locked_counter.load(order))
                 }
                 Ok(false) => {
                     let f = failed_counter.fetch_add(1, order) + 1;
@@ -885,15 +952,35 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
                     crate::logs::warn(crate::logs::CAT_REPORT, &shared.order_id, &v.node_id,
                         format!("视频未完成 {}/{} 《{}》墙钟 {}s（studyTime 未报满）",
                                 f, total_videos, v.name, wall));
-                    (done_counter.load(order), f)
+                    (done_counter.load(order), f, locked_counter.load(order))
                 }
                 Err(e) => {
-                    let f = failed_counter.fetch_add(1, order) + 1;
-                    eprintln!("[rust_worker] 视频失败 {}/{} 《{}》err={e:#}",
-                              f, total_videos, v.name);
-                    crate::logs::error(crate::logs::CAT_REPORT, &shared.order_id, &v.node_id,
-                        format!("视频失败 {}/{} 《{}》err={e:#}", f, total_videos, v.name));
-                    (done_counter.load(order), f)
+                    let emsg = format!("{e:#}");
+                    match classify_video_failure(&emsg) {
+                        // 平台时间锁（安全网）：不计失败 —— 扫描侧正常已提前过滤，
+                        // 这里兜住的是"解锁时间在扫描后才知道"之类的边角
+                        VideoFailureKind::Locked(until) => {
+                            let l = locked_counter.fetch_add(1, order) + 1;
+                            eprintln!("[rust_worker] 视频跳过（未解锁）《{}》——{until} 后解锁",
+                                      v.name);
+                            crate::logs::warn(crate::logs::CAT_REPORT, &shared.order_id, &v.node_id,
+                                format!("视频跳过（未解锁）：《{}》{until} 后解锁，不判失败", v.name));
+                            (done_counter.load(order), failed_counter.load(order), l)
+                        }
+                        kind => {
+                            let f = failed_counter.fetch_add(1, order) + 1;
+                            if matches!(kind, VideoFailureKind::SlotDup) {
+                                if let Ok(mut g) = dup_failed_nodes.lock() {
+                                    g.insert(v.node_id.clone());
+                                }
+                            }
+                            eprintln!("[rust_worker] 视频失败 {}/{} 《{}》err={e:#}",
+                                      f, total_videos, v.name);
+                            crate::logs::error(crate::logs::CAT_REPORT, &shared.order_id, &v.node_id,
+                                format!("视频失败 {}/{} 《{}》err={e:#}", f, total_videos, v.name));
+                            (done_counter.load(order), f, locked_counter.load(order))
+                        }
+                    }
                 }
             };
             // 每节结束回报一次进度：进度条按**成功**节数走，
@@ -901,14 +988,20 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
             // 收敛到 1 位小数：原始浮点（如 1/61 → 1.639344262295082）落库后
             // 会在订单页整串显示出来
             let pct = pct_of(done, total_videos);
-            let step = if failed > 0 {
-                format!("已完成 {done}/{total_videos} 节（失败 {failed}）")
+            // 未解锁说明挂文案尾巴：客户要知道"少的那几节是平台还没解锁"
+            let tail = if locked_note.is_empty() { String::new() } else { format!("（{}）", locked_note) };
+            let step = if failed > 0 || locked > 0 {
+                let mut parts: Vec<String> = Vec::new();
+                if failed > 0 { parts.push(format!("失败 {failed}")); }
+                if locked > 0 { parts.push(format!("未解锁 {locked}")); }
+                format!("已完成 {done}/{total_videos} 节（{}）", parts.join("，"))
             } else {
-                format!("已刷 {done}/{total_videos} 节")
+                format!("已刷 {done}/{total_videos} 节{tail}")
             };
             push_ws(&shared, serde_json::json!({
                 "type": "progress", "phase": "video",
-                "progress": pct, "done": done, "failed": failed, "total": total_videos,
+                "progress": pct, "done": done, "failed": failed, "locked": locked,
+                "total": total_videos,
                 "step": step,
             }), &push_url, &push_token).await;
         });
@@ -927,6 +1020,8 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
     // 代价：每门课一次列表请求（多页），时长探测命中进程内缓存不再重复下载。
     // 值这个价 —— 谎报完成是客户投诉与退款的第一来源。
     let mut false_done = 0usize;
+    // 撞片判失败的节里，有多少其实平台早就记上了（复核后改判完成）
+    let mut dup_promoted = 0usize;
     {
         let cookie = shared.cookie_str.lock().await.clone();
         for (course_id, vids) in &groups {
@@ -937,7 +1032,15 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
                     vids.iter().filter(|v| g.contains(&v.node_id)).collect()
                 }
             };
-            if mine.is_empty() {
+            // 撞记账片判失败的节：平台若显示已学，说明其实早就记上了（重复拒收=已有一行）
+            let dup_mine: Vec<&Video> = match dup_failed_nodes.lock() {
+                Ok(g) => vids.iter().filter(|v| g.contains(&v.node_id)).collect(),
+                Err(p) => {
+                    let g = p.into_inner();
+                    vids.iter().filter(|v| g.contains(&v.node_id)).collect()
+                }
+            };
+            if mine.is_empty() && dup_mine.is_empty() {
                 continue;
             }
             match crate::scan::fetch_course_videos(&shared.client, &cookie, &shared.base_url,
@@ -955,6 +1058,14 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
                         .collect();
                     let known: std::collections::HashSet<&str> =
                         plat.iter().map(|v| v.node_id.as_str()).collect();
+                    // 撞片判失败的节：平台若显示已学 → 其实早就记上了，改判完成
+                    for v in dup_mine {
+                        if plat_done.contains(v.node_id.as_str()) {
+                            dup_promoted += 1;
+                            crate::logs::warn(crate::logs::CAT_REPORT, &task.order_id, &v.node_id,
+                                format!("平台已记账：撞片拒收的节实为已完成，改判完成《{}》", v.name));
+                        }
+                    }
                     for v in mine {
                         if plat_done.contains(v.node_id.as_str()) {
                             continue;
@@ -976,6 +1087,13 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
             }
         }
     }
+    if dup_promoted > 0 {
+        let order = std::sync::atomic::Ordering::Relaxed;
+        done_counter.fetch_add(dup_promoted as u64, order);
+        failed_counter.fetch_sub(dup_promoted as u64, order);
+        crate::logs::warn(crate::logs::CAT_REPORT, &task.order_id, "",
+            format!("平台复核：{dup_promoted} 节撞记账片判失败的节实为平台已记账，已改判完成"));
+    }
     if false_done > 0 {
         // 从成功数里扣掉并计入失败：宁可让订单显式失败，也不报假 100%
         let order = std::sync::atomic::Ordering::Relaxed;
@@ -987,17 +1105,36 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
 
     let done = done_counter.load(std::sync::atomic::Ordering::Relaxed);
     let failed = failed_counter.load(std::sync::atomic::Ordering::Relaxed);
+    let locked = locked_counter.load(std::sync::atomic::Ordering::Relaxed);
     // 与进度条同一口径：done 是从 already_done 起的累计值，分母也用整单总节数
     let total = total_videos;
+    // 未解锁说明：优先用扫描侧统计的，其次用安全网兜住的
+    let note = if !task.locked_note.is_empty() {
+        task.locked_note.clone()
+    } else if locked > 0 {
+        format!("另有 {locked} 节平台未解锁")
+    } else {
+        String::new()
+    };
+    let tail = if note.is_empty() { String::new() } else { format!("（{note}）") };
 
     if failed > 0 {
         crate::logs::warn(crate::logs::CAT_REPORT, &task.order_id, "",
-            format!("刷课结束（有失败）{done}/{total}，失败 {failed} 节"));
-        anyhow::bail!("部分视频未完成 {done}/{total}");
+            format!("刷课结束（有失败）{done}/{total}，失败 {failed} 节{tail}"));
+        anyhow::bail!("部分视频未完成 {done}/{total}{tail}");
     }
-    eprintln!("[rust_worker] 任务完成 {done}/{total}");
+    // 全部可刷的节都完成了；未解锁的节不判失败（学校没解锁不是客户/我们的错），
+    // 但必须如实写进结尾文案，避免客户以为"剩下的节被漏掉了"。
+    eprintln!("[rust_worker] 任务完成 {done}/{total} 节{tail}");
     crate::logs::info(crate::logs::CAT_REPORT, &task.order_id, "",
-        format!("刷课完成 {done}/{total} 节（100%）"));
+        format!("刷课完成 {done}/{total} 节{tail}"));
+    // 最终帧：把结尾状态（含未解锁说明）推给订单页，否则进度条停在中间帧
+    push_ws(&shared, serde_json::json!({
+        "type": "progress", "phase": "video",
+        "progress": pct_of(done, total), "done": done, "failed": failed,
+        "locked": locked, "total": total,
+        "step": format!("已刷 {done}/{total} 节{tail}"),
+    }), &push_url, &push_token).await;
     Ok(())
 }
 
@@ -1036,6 +1173,36 @@ mod tests {
         assert!((next_tick_secs(true, 5.5) - 5.5).abs() < 1e-9);
         // 已到终点：不再睡（由完成判据收尾）
         assert_eq!(next_tick_secs(true, -3.0), 0.0);
+    }
+
+    /// 解锁时间提取：平台文案 "本章节解锁时间未到，【2026-11-05 13:20:00】后解锁!"
+    #[test]
+    fn test_locked_until_extracts_time() {
+        assert_eq!(
+            super::locked_until("本章节解锁时间未到，【2026-11-05 13:20:00】后解锁!").as_deref(),
+            Some("2026-11-05 13:20:00")
+        );
+        // 带锁但没给时间：仍按未解锁处理（兜底串）
+        assert_eq!(super::locked_until("本章节解锁时间未到").as_deref(), Some("未知时间"));
+        // 其它拒收文案不得误判成解锁
+        assert_eq!(super::locked_until("数据出现异常:execute sql statement error:23000,1062"), None);
+    }
+
+    /// 失败分类：解锁 → Locked / 撞片 → SlotDup / 其余 → Other
+    #[test]
+    fn test_classify_video_failure() {
+        assert!(matches!(
+            super::classify_video_failure("本章节未到解锁时间（2026-11-05 13:20:00 解锁），本轮跳过"),
+            super::VideoFailureKind::Locked(_)
+        ));
+        assert!(matches!(
+            super::classify_video_failure("平台连续拒收上报 6 次（数据出现异常:execute sql statement error:23000,1062,Duplicate entr…）"),
+            super::VideoFailureKind::SlotDup
+        ));
+        assert!(matches!(
+            super::classify_video_failure("上报请求失败: connection timed out"),
+            super::VideoFailureKind::Other
+        ));
     }
 
     // ── mock 平台 E2E：验证视频级调度的三条契约 ──────────────────────────
@@ -1139,6 +1306,7 @@ mod tests {
             duration: Some(duration),
             platform_duration: Some(duration),
             platform_done: false,
+            unlock_ts: 0,
             viewed_duration: 0,
             local_file: None,
             name: format!("{course} 第{i}节"),
@@ -1171,6 +1339,7 @@ mod tests {
             push_ws: false,
             speed_mode: "gentle".into(),
             already_done: 0,
+            locked_note: String::new(),
         };
 
         let res = run_study(&task, "", "").await;
@@ -1209,6 +1378,7 @@ mod tests {
             push_ws: false,            // 不打推送端点
             speed_mode: "balanced".into(),   // 4 路会话 + 0.5s 启动错峰
             already_done: 0,
+            locked_note: String::new(),
         };
 
         let started = Instant::now();

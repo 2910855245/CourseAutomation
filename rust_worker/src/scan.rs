@@ -514,6 +514,11 @@ pub async fn fetch_course_videos(client: &Client, cookie: &str, base_url: &str,
                 // 平台自己的判定（state 里带"已学"）：与平台页面一致，优先采信
                 platform_done: item["state"].as_str()
                     .map(|s| s.contains("\u{5df2}\u{5b66}")).unwrap_or(false),
+                // 平台的时间锁：unlockTime 是 Unix 秒字符串（'0' = 无锁）
+                unlock_ts: field(item, "unlockTime", "unlock_time")
+                    .as_str()
+                    .and_then(|s| s.trim().parse::<i64>().ok())
+                    .unwrap_or(0),
                 viewed_duration: viewed_secs(item),
                 local_file: field(item, "localFile", "local_file").as_str()
                     .filter(|s| !s.is_empty()).map(str::to_string),
@@ -668,10 +673,32 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
     if skipped > 0 {
         eprintln!("[scan] 已有完成进度的 {skipped} 节不再重复刷（本单待刷 {} 节）", all_videos.len());
     }
+    // 平台时间锁：未到解锁时间的节平台必然拒收上报（本章节解锁时间未到），
+    // 挡在队列外，别白跑一轮会话再把订单判失败。解锁后客户重扫即可补刷。
+    let now_secs = crate::queue::local_secs() as i64;
+    let before_lock = all_videos.len();
+    all_videos.retain(|v| v.unlock_ts == 0 || v.unlock_ts <= now_secs);
+    let locked = before_lock - all_videos.len();
+    if locked > 0 {
+        eprintln!("[scan] {locked} 节未到平台解锁时间，本轮不刷（平台会拒收上报，解锁后重扫可补）");
+        crate::logs::info(crate::logs::CAT_REPORT, &task.order_id, "",
+            format!("扫描发现 {locked} 节未到平台解锁时间，本轮跳过（解锁后可重扫补刷）"));
+    }
+    let locked_note = if locked > 0 {
+        format!("另有 {locked} 节平台未解锁")
+    } else {
+        String::new()
+    };
     if all_videos.is_empty() {
-        // 视频全都已经刷满了：没有要做的活，直接进入考试环节，
-        // 而不是当成错误（那是"扫描失败"才会有的结论）
-        tracing::info!(order_id = %task.order_id, "所选课程视频均已完成，跳过刷课");
+        if locked > 0 {
+            // 不是"都已完成"，是"可刷的都完成了、剩下的被平台锁着"——如实说明
+            eprintln!("[scan] 可刷的视频均已完成，另有 {locked} 节未到平台解锁时间，本轮不刷");
+            tracing::info!(order_id = %task.order_id, locked, "可刷视频均已完成，剩余章节未解锁");
+        } else {
+            // 视频全都已经刷满了：没有要做的活，直接进入考试环节，
+            // 而不是当成错误（那是"扫描失败"才会有的结论）
+            tracing::info!(order_id = %task.order_id, "所选课程视频均已完成，跳过刷课");
+        }
         if needs_exam(&task.task_type) {
             solve_exams(task, &shared_client, &base_url, &exam_courses, push_url, push_token).await?;
         }
@@ -698,6 +725,8 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
         // 分母用量：把已刷满、被上面 retain 跳过的节数带进刷课任务，
         // 让进度条按整单累计而不是按"本轮剩余"重算（否则每次重扫都归零）
         already_done: skipped as u64,
+        // 被平台时间锁挡下的节数说明：刷课界面挂在进度文案尾巴上
+        locked_note,
     };
     run_study(&study_task, push_url, push_token).await?;
 
@@ -872,6 +901,7 @@ mod tests {
             duration: duration.as_u64(),
             platform_duration: duration.as_u64(),
             platform_done: false,
+            unlock_ts: 0,
             viewed_duration: viewed,
             local_file: None,
             name: "v".into(),
@@ -895,6 +925,7 @@ mod tests {
             duration: Some(710),          // 文件真值（平台元数据失真时更长）
             platform_duration: Some(155), // 平台自己的元数据
             platform_done: false,
+            unlock_ts: 0,
             viewed_duration: 160,
             local_file: None,
             name: "v".into(),
@@ -925,6 +956,7 @@ mod tests {
             duration: Some(900),  // 媒体探测抬高后的真值
             platform_duration: meta_duration_secs(&raw),
             platform_done: raw["state"].as_str().map(|s| s.contains("已学")).unwrap_or(false),
+            unlock_ts: 0,
             viewed_duration: viewed_secs(&raw),
             local_file: None,
             name: "5.2 科学运动".into(),
