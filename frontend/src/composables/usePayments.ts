@@ -73,10 +73,11 @@ export function usePayments() {
 
   async function applyAutoConcurrency() {
     try {
-      await api.queue.autoConfig()
+      // 后端 message 会回带具体数值（付费 X / 免费 Y），比固定文案有信息量
+      const res = await api.queue.autoConfig()
       await loadQueueData()
       await detectServerSpecs()
-      store.toast('已自动应用推荐并发数', 'success')
+      store.toast(res.message || '已自动应用推荐并发数', 'success')
     } catch (e: any) { store.toast(e.message, 'error') }
   }
 

@@ -113,7 +113,7 @@ function pctText(v: number | undefined) {
         </button>
         <button
           class="btn btn-ghost btn-sm"
-          title="根据服务器配置自动设置"
+          title="按实时资源（CPU/可用内存）与平台会话闸，自动设置付费/免费两条通道的并发"
           @click="applyAutoConcurrency"
         >
           智能检测
@@ -135,13 +135,16 @@ function pctText(v: number | undefined) {
           <span class="spec-label">CPU</span><span class="spec-val">{{ serverSpecs.cpu_count }} 核</span>
         </div>
         <div class="spec-row">
-          <span class="spec-label">内存</span><span class="spec-val">{{ serverSpecs.total_mem_gb }} GB</span>
+          <span class="spec-label">内存</span><span class="spec-val">可用 {{ serverSpecs.available_mem_gb }} / 总 {{ serverSpecs.total_mem_gb }} GB</span>
         </div>
         <div class="spec-row">
-          <span class="spec-label">推荐并发</span><span class="spec-val spec-highlight">{{ serverSpecs.recommended_workers }} 个任务</span>
+          <span class="spec-label">平台会话闸</span><span class="spec-val">{{ serverSpecs.session_gate }} 路</span>
         </div>
         <div class="spec-row">
-          <span class="spec-label">当前设置</span><span class="spec-val">{{ serverSpecs.current_workers }} 个任务</span>
+          <span class="spec-label">推荐并发</span><span class="spec-val spec-highlight">付费 {{ serverSpecs.recommended_workers }} / 免费 {{ serverSpecs.recommended_free_workers }}</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">当前设置</span><span class="spec-val">付费 {{ serverSpecs.current_workers }} / 免费 {{ serverSpecs.current_free_workers }}</span>
         </div>
       </div>
 

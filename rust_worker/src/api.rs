@@ -2117,7 +2117,9 @@ async fn set_pause(state: &AppState, keys: &[&str], value: &str, msg: &str) -> J
 /// 并发数配置：?max_workers=N（付费通道）/ ?free_max_workers=N（免费通道）/ ?auto=true
 ///
 /// 两条通道额度独立配置，写进同一个配置表，调度器 5s 内热加载生效
-/// （见 queue::read_runtime_config）。
+/// （见 queue::read_runtime_config）。auto 会把两条通道**一起**写成推荐值
+/// （算法见 [`recommend_workers`]）—— 旧版 auto 只写付费通道，免费通道
+/// 永远停在默认值，"智能检测"点完只动了一半。
 async fn queue_config(
     State(state): State<AppState>,
     Query(params): Query<std::collections::HashMap<String, String>>,
@@ -2132,21 +2134,32 @@ async fn queue_config(
             Err(e) => Json(json!({"success": false, "message": e.to_string()})),
         };
     }
-    let specs = tokio::task::spawn_blocking(|| server_specs().clone())
-        .await
-        .unwrap_or(Value::Null);
-    let current = crate::queue::config_get(&state.db, "queue_max_workers").await
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(default_max_workers());
-    let auto = params.get("auto").map(|v| v == "true").unwrap_or(false);
-    let value = if auto {
-        specs["recommended_workers"].as_u64().unwrap_or(current as u64) as usize
-    } else {
-        match params.get("max_workers").and_then(|v| v.parse::<usize>().ok()) {
-            Some(n) if n > 0 => n,
-            _ => {
-                return Json(json!({"success": false, "message": "max_workers 非法"}));
+    if params.get("auto").map(|v| v == "true").unwrap_or(false) {
+        let specs = tokio::task::spawn_blocking(server_specs).await.unwrap_or(Value::Null);
+        // 探测失败（极不可能）时退回当前值，绝不把配置写坏
+        let current = crate::queue::config_get(&state.db, "queue_max_workers").await
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or_else(default_max_workers);
+        let current_free = crate::queue::config_get(&state.db, crate::queue::CFG_FREE_MAX_WORKERS).await
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or_else(default_free_max_workers);
+        let paid = specs["recommended_workers"].as_u64().map(|v| v as usize).unwrap_or(current);
+        let free = specs["recommended_free_workers"].as_u64().map(|v| v as usize).unwrap_or(current_free);
+        for (key, val) in [("queue_max_workers", paid), (crate::queue::CFG_FREE_MAX_WORKERS, free)] {
+            if let Err(e) = crate::queue::config_set(&state.db, key, &val.to_string()).await {
+                return Json(json!({"success": false, "message": e.to_string()}));
             }
+        }
+        return Json(json!({
+            "success": true,
+            "message": format!("已应用推荐并发：付费 {paid} / 免费 {free}"),
+            "data": {"max_workers": paid, "free_max_workers": free},
+        }));
+    }
+    let value = match params.get("max_workers").and_then(|v| v.parse::<usize>().ok()) {
+        Some(n) if n > 0 => n,
+        _ => {
+            return Json(json!({"success": false, "message": "max_workers 非法"}));
         }
     };
     match crate::queue::config_set(&state.db, "queue_max_workers", &value.to_string()).await {
@@ -2155,23 +2168,103 @@ async fn queue_config(
     }
 }
 
-/// 机器规格检测（CPU/内存/推荐并发），结果进程内缓存（探测较重）
-fn server_specs() -> &'static Value {
-    static SPECS: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
-    SPECS.get_or_init(|| {
-        let cpu = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
-        let mem_gb = detect_memory_gb();
-        // 推荐并发：任务全程是 I/O 等待（视频墙钟 + 平台请求），不占 CPU 时间片，
-        // 所以不按核数 1:1 推，而是按核数的 4 倍（每个任务实际只在"醒来上报"的
-        // 瞬间用一点 CPU）。内存仍按每 GB 允许 2 个任务兜底，取小值，夹在 1..=64。
-        let by_cpu = cpu.max(1) * 4;
-        let by_mem = if mem_gb > 0.0 { (mem_gb * 2.0) as usize } else { by_cpu };
-        let recommended = by_cpu.min(by_mem).clamp(1, MAX_WORKERS_CEILING);
-        json!({
-            "cpu_count": cpu,
-            "total_mem_gb": (mem_gb * 10.0).round() / 10.0,
-            "recommended_workers": recommended,
-        })
+/// 每任务内存预算（MB）。实测：rust_worker 整进程含 5 个在跑任务仅约 105MB
+/// （≈21MB/任务），这里按 2 倍余量取 48MB —— 刷课任务全程是 I/O 等待，
+/// 内存大头（HTML 解析缓冲、cookie jar、会话状态）都是短生命周期的小对象。
+const PER_TASK_MEM_MB: usize = 48;
+
+/// 为同机其他项目（faceswap / MySQL / RabbitMQ / nginx）与系统预留的内存（MB）。
+/// 这台机器不是独占跑本服务：并发预算必须按"可用内存 − 预留"计算，
+/// 否则会把邻居的余量也算进自己的额度，负载一上来大家互相 OOM。
+const OTHER_SERVICES_RESERVE_MB: usize = 1024;
+
+/// 由（CPU 核数、内存预算 MB、平台会话闸）推导推荐并发。纯函数便于单测。
+///
+/// 三个上界取小，谁最小谁说了算：
+///   - CPU 上界 = 核数 × 4：任务全程 I/O 等待（视频墙钟 + 平台请求都在 0.5s
+///     全局闸门后面排队），真正烧 CPU 的只有"醒来上报"的瞬间。
+///   - 内存上界 = 预算 / 每任务预算：Rust 侧任务开销极小，8 核机器上它根本
+///     不是瓶颈（可用 6GB → 100+ 任务），只在内存紧的小机器上生效。
+///   - 会话闸 = study::GLOBAL_STUDY_SESSIONS（默认 32）：进程内同时视频会话数。
+///     池里的任务都可能进入视频阶段（免费单 1 会话/任务，付费 turbo 单最多 8），
+///     池 > 闸只会产出"做完登录+扫描后排队等会话"的空转任务，两条通道都不越过它。
+///
+/// `budget_mb` 是调用方算好的**有效内存预算**（主机可用 − 邻居预留，再与
+/// cgroup 硬顶余量取 min），本函数不做环境探测。
+fn recommend_workers(cpu: usize, budget_mb: usize, gate: usize) -> usize {
+    let by_cpu = cpu.max(1) * 4;
+    let by_mem = (budget_mb / PER_TASK_MEM_MB).max(1);
+    by_cpu.min(by_mem).min(gate.max(1)).clamp(1, MAX_WORKERS_CEILING)
+}
+
+/// 服务自身 cgroup 的内存硬顶余量（MB）。
+///
+/// 本服务被 systemd cgroup 管着（线上 drop-in：MemoryMax=3G / MemoryHigh=1G）：
+/// 主机 MemAvailable 再充裕，进程越过 cgroup 硬顶照样被 OOM-kill —— 它是比
+/// "主机可用"更小的盘子，推荐并发必须服从。路径从 /proc/self/cgroup 动态解析
+/// （v1/v2 都兼容）：硬编码服务名换个部署就静默失效。
+/// 读不到（无 cgroup / 无限制）返回 None → 退化为纯主机口径。
+#[cfg(target_os = "linux")]
+fn cgroup_mem_headroom_mb() -> Option<usize> {
+    // /proc/self/cgroup 行格式 "id:controllers:path"（v2 的 controllers 为空）
+    let rel = std::fs::read_to_string("/proc/self/cgroup").ok()?
+        .lines()
+        .find_map(|l| {
+            let mut it = l.split(':');
+            let _id = it.next()?;
+            let ctrl = it.next()?;
+            let path = it.next()?.trim().to_string();
+            if ctrl.is_empty() || ctrl.split(',').any(|c| c == "memory") { Some(path) } else { None }
+        })?;
+    // v2：memory.max / memory.current；v1：memory.limit_in_bytes / memory.usage_in_bytes
+    let (limit_raw, usage_raw) =
+        if let Ok(l) = std::fs::read_to_string(format!("/sys/fs/cgroup{rel}/memory.max")) {
+            (l, std::fs::read_to_string(format!("/sys/fs/cgroup{rel}/memory.current")).unwrap_or_default())
+        } else {
+            (std::fs::read_to_string(format!("/sys/fs/cgroup/memory{rel}/memory.limit_in_bytes")).ok()?,
+             std::fs::read_to_string(format!("/sys/fs/cgroup/memory{rel}/memory.usage_in_bytes")).unwrap_or_default())
+        };
+    let limit: u64 = limit_raw.trim().parse().ok()?;
+    // v2 写 "max"、v1 写超大哨兵值（≈u64::MAX 页对齐）都表示"无限制"
+    if limit > (1u64 << 50) { return None; }
+    let used: u64 = usage_raw.trim().parse().unwrap_or(0);
+    Some((limit.saturating_sub(used) / 1024 / 1024) as usize)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn cgroup_mem_headroom_mb() -> Option<usize> {
+    None // 本地开发（非 Linux）没有 cgroup 口径
+}
+
+/// 机器规格与推荐并发（每次实时探测）。
+///
+/// **不再缓存**：旧实现用 OnceLock 把首次探测结果钉死在进程生命周期里，
+/// 而"可用内存"是动态值 —— 启动时若内存紧张（邻居项目正在跑），算出的低值
+/// 会一直显示到下次重启，这正是"检测不准"的来源之一。读 /proc/meminfo 只有
+/// 几微秒，接口又是低频调用，实时算没有成本问题。
+fn server_specs() -> Value {
+    let cpu = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let total_gb = detect_memory_gb();
+    let avail_gb = detect_available_memory_gb();
+    let gate = crate::study::global_session_limit_public();
+    // 内存预算 = min(主机可用 − 邻居预留, cgroup 硬顶余量)。
+    // 两个口径都要：主机口径防挤爆邻居，cgroup 口径防自己越顶被 OOM-kill。
+    let host_budget = ((avail_gb * 1024.0) as usize).saturating_sub(OTHER_SERVICES_RESERVE_MB);
+    let budget = match cgroup_mem_headroom_mb() {
+        Some(cg) => host_budget.min(cg),
+        None => host_budget,
+    };
+    let recommended = recommend_workers(cpu, budget, gate);
+    json!({
+        "cpu_count": cpu,
+        "total_mem_gb": (total_gb * 10.0).round() / 10.0,
+        "available_mem_gb": (avail_gb * 10.0).round() / 10.0,
+        "per_task_mem_mb": PER_TASK_MEM_MB,
+        "session_gate": gate,
+        // 两条通道的推荐值：当前算法下同源（同一组上界）。分开给字段是给未来
+        // 留口径 —— 比如按通道加权会话倍率（付费 turbo 单 8 路 vs 免费单 1 路）。
+        "recommended_workers": recommended,
+        "recommended_free_workers": recommended,
     })
 }
 
@@ -2211,9 +2304,28 @@ fn detect_memory_gb() -> f64 {
         .unwrap_or(0.0)
 }
 
+/// 可用内存（MemAvailable）。与 MemTotal 的关键区别：它已扣除内核认为
+/// **不可回收**的页（含邻居项目真实占用的常驻集），是"新任务还能吃多少"的
+/// 正确口径。旧代码用 MemTotal 推导并发，等于把 faceswap/MySQL 和页缓存都
+/// 当成了自己的余量（7.8GB 总量里实际可用的常常只有 5-6GB）。
+///
+/// 老内核（<3.14）没有 MemAvailable，退回总量（配合预留常量仍安全）。
+#[cfg(target_os = "linux")]
+fn detect_available_memory_gb() -> f64 {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|s| {
+            s.lines().find(|l| l.starts_with("MemAvailable:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|v| v.parse::<f64>().ok())
+        })
+        .map(|kb| kb / 1024.0 / 1024.0)
+        .unwrap_or_else(detect_memory_gb)
+}
+
 #[cfg(not(target_os = "linux"))]
 fn detect_memory_gb() -> f64 {
-    // Windows：CIM 查询物理内存（按需调用，结果已被 OnceLock 缓存）
+    // Windows：CIM 查询物理内存（仅本地开发预览走这条路径，线上是 Linux）
     let out = std::process::Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command",
                "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory"])
@@ -2225,15 +2337,72 @@ fn detect_memory_gb() -> f64 {
         .unwrap_or(0.0)
 }
 
+#[cfg(not(target_os = "linux"))]
+fn detect_available_memory_gb() -> f64 {
+    // 非 Linux 无 MemAvailable 等价物：退回总量（配上预留常量仍安全）
+    detect_memory_gb()
+}
+
+/// 服务器配置探测接口：返回实时资源与两条通道的推荐值/当前值。
+/// `available_mem_gb` / `session_gate` / `recommended_free_workers` /
+/// `current_free_workers` 是给前端"服务器配置"卡片解释推荐依据用的。
 async fn queue_detect(State(state): State<AppState>) -> Json<Value> {
-    let mut data = tokio::task::spawn_blocking(|| server_specs().clone())
+    let mut data = tokio::task::spawn_blocking(server_specs)
         .await
         .unwrap_or(Value::Null);
     let current = crate::queue::config_get(&state.db, "queue_max_workers").await
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(default_max_workers());
+        .unwrap_or_else(default_max_workers);
+    let current_free = crate::queue::config_get(&state.db, crate::queue::CFG_FREE_MAX_WORKERS).await
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or_else(default_free_max_workers);
     data["current_workers"] = json!(current);
+    data["current_free_workers"] = json!(current_free);
     Json(json!({"success": true, "message": "ok", "data": data}))
+}
+
+#[cfg(test)]
+mod specs_tests {
+    use super::*;
+
+    /// 推荐并发的三条上界（CPU / 内存预算 / 会话闸）必须分别能起决定作用：
+    /// 这是"智能检测"从拍脑袋公式（内存 GB×2）换成可解释算法的回归护栏。
+    /// 第二参数是调用方算好的有效预算（主机可用 − 邻居预留，与 cgroup 余量取 min）。
+    #[test]
+    fn recommend_workers_three_bounds() {
+        // 线上机型：8 核 / 主机可用 6GB − 预留 1GB = 预算 5120MB / 会话闸 32 → 32
+        // （旧公式被"每 GB 养 2 个任务"压到 15，这才是"检测不准"的根源）
+        assert_eq!(recommend_workers(8, 6 * 1024 - 1024, 32), 32);
+        // 闸更小 → 由会话闸决定
+        assert_eq!(recommend_workers(8, 6 * 1024 - 1024, 10), 10);
+        // 预算被 cgroup/内存压到 1024MB → 1024/48 = 21（旧公式会算出 4，差 5 倍）
+        assert_eq!(recommend_workers(8, 1024, 32), 21);
+        // 预算极小 → 至少 1，不推荐 0
+        assert_eq!(recommend_workers(8, 10, 32), 1);
+        // 小核机 → 由 CPU 决定
+        assert_eq!(recommend_workers(2, 4096, 32), 8);
+        // 上限兜底：核数再多也不超过 64
+        assert_eq!(recommend_workers(64, 64 * 1024, 64), 64);
+    }
+
+    /// 线上是 Linux：MemAvailable 必须能读到（读到 0 说明解析坏了，
+    /// 会导致推荐值被错误地压到 1）
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn available_memory_is_detected() {
+        assert!(detect_available_memory_gb() > 0.0, "MemAvailable 解析失败");
+    }
+
+    /// cgroup 口径：能解析出限制时余量必须是正数（线上服务跑在 MemoryMax=3G
+    /// 的 cgroup 下；解析错误会让预算口径失准）。无 cgroup 限制的环境返回 None，
+    /// 属合法降级。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cgroup_headroom_is_sane_when_limited() {
+        if let Some(mb) = cgroup_mem_headroom_mb() {
+            assert!(mb > 0, "cgroup 余量解析异常: {mb}MB");
+        }
+    }
 }
 
 
