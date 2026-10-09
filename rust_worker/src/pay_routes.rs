@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -39,6 +39,9 @@ pub fn router() -> Router<AppState> {
             post(ypay_decode_qr).layer(DefaultBodyLimit::max(11 * 1024 * 1024)),
         )
         .route("/api/ypay/qrcode/{trade_no}", get(ypay_qrcode_png))
+        // APP 分发（对齐 Python ypay_app.py）：管理端「APP 下载」二维码 + APK 直下
+        .route("/api/app/download-qr", get(app_download_qr))
+        .route("/api/ypay/app-download", get(app_download))
 }
 
 // ── 响应辅助 ────────────────────────────────────────────────
@@ -1215,6 +1218,82 @@ async fn ypay_qrcode_png(Path(_trade_no): Path<String>) -> Json<Value> {
     Json(json!({"code": -1, "message": "二维码 PNG 生成未在 Rust worker 实现"}))
 }
 
+// ── APP 分发（对齐 Python ypay_app.py）───────────────────────────────────
+
+/// GET /api/app/download-qr — 返回「APP 下载」二维码（管理端 YpayTab 卡片用）。
+///
+/// 为什么需要：前端管理端「APP 下载」卡片一直在调这个接口，Rust 版此前没有路由
+/// （返回"接口不存在"），卡片永远显示"暂无二维码"，客户没法扫码下载 APP。
+/// 对齐 Python 行为：Accept 带 application/json 回 JSON，浏览器直接打开回 PNG 字节。
+async fn app_download_qr(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let download_url = app_download_url(&crate::pay::get_site_url(&state.db).await);
+    let Some(qr_data_url) = crate::ypay_qr::render_qr_data_url(&download_url) else {
+        return Json(json!({"success": false, "message": "下载二维码生成失败"})).into_response();
+    };
+    let accept = headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !accept.contains("application/json")
+        && (accept.contains("text/html") || accept.contains("image/"))
+    {
+        use base64::Engine as _;
+        if let Some((_, b64)) = qr_data_url.split_once(',') {
+            if let Ok(png) = base64::engine::general_purpose::STANDARD.decode(b64) {
+                let mut resp = png.into_response();
+                resp.headers_mut()
+                    .insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
+                return resp;
+            }
+        }
+    }
+    Json(json!({
+        "success": true,
+        "data": {"qr_image": qr_data_url, "download_url": download_url},
+    }))
+    .into_response()
+}
+
+/// GET /api/ypay/app-download — 直接下发 APK（文件放在 static/ypay-monitor.apk）。
+async fn app_download() -> Response {
+    match tokio::fs::read("static/ypay-monitor.apk").await {
+        Ok(bytes) => {
+            let mut resp = bytes.into_response();
+            let h = resp.headers_mut();
+            h.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/vnd.android.package-archive"),
+            );
+            h.insert(
+                header::CONTENT_DISPOSITION,
+                HeaderValue::from_static("attachment; filename=\"ypay-monitor.apk\""),
+            );
+            resp
+        }
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"code": -1, "message": "APK 文件不存在"})),
+        )
+            .into_response(),
+    }
+}
+
+/// 站点地址 → APK 下载地址（对齐 Python：域名走 https 且不带端口，其余按原样 http）
+fn app_download_url(site_url: &str) -> String {
+    let host = site_url
+        .trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .trim_end_matches('/');
+    let host_no_port = host.split(':').next().unwrap_or(host);
+    let is_domain = host_no_port.contains('.')
+        && !host_no_port.chars().all(|c| c.is_ascii_digit() || c == '.');
+    if is_domain {
+        format!("https://{host_no_port}/api/ypay/app-download")
+    } else {
+        format!("http://{host}/api/ypay/app-download")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::decode_qr_from_image;
@@ -1247,5 +1326,26 @@ mod tests {
         let blank = image::ImageBuffer::from_pixel(64, 64, image::Luma([255u8]));
         assert_eq!(decode_qr_from_image(&png_of(&blank)), None);
         assert_eq!(decode_qr_from_image(b"not an image"), None);
+    }
+
+    /// APP 下载地址拼接：域名 → https（去端口）；IP/本机 → http 原样
+    #[test]
+    fn test_app_download_url() {
+        assert_eq!(
+            super::app_download_url("https://course.refinely.top"),
+            "https://course.refinely.top/api/ypay/app-download"
+        );
+        assert_eq!(
+            super::app_download_url("http://course.refinely.top:8443/"),
+            "https://course.refinely.top/api/ypay/app-download"
+        );
+        assert_eq!(
+            super::app_download_url("http://38.76.190.129:17017"),
+            "http://38.76.190.129:17017/api/ypay/app-download"
+        );
+        assert_eq!(
+            super::app_download_url("http://localhost:8000"),
+            "http://localhost:8000/api/ypay/app-download"
+        );
     }
 }
