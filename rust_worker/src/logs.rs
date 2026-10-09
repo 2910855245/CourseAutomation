@@ -11,16 +11,21 @@
 //!    进程重启后仍能回看历史。写入溢出时直接丢弃并计数，绝不反压业务线程 ——
 //!    日志系统拖垮刷课引擎是比丢日志严重得多的事故。
 //!
-//! **垃圾回收**：`gc_loop` 每 5 分钟跑一次，同时按两个阈值裁剪 ——
-//! 内存按 TTL（`LOG_MEM_TTL_HOURS`）过期淘汰，DB 按 TTL（`LOG_DB_TTL_DAYS`）
+//! **垃圾回收 + 重复合并**：`gc_loop` 每 5 分钟跑一次，同时按两个阈值裁剪 ——
+//! 内存按 TTL（`LOG_MEM_TTL_HOURS`）过期淘汰，DB 按 TTL（`LOG_DB_TTL_DAYS`，默认 30 天）
 //! 删除旧行、再按条数上限（`LOG_DB_MAX_ROWS`）保留最新的一批。
 //! 只按 TTL 不按条数，遇到突发刷屏仍会把库撑大；只按条数不按 TTL，
 //! 则沉寂期也会一直留着几个月前的旧行。两者都设才闭环。
+//! 另：写入侧做**重复合并** —— 同一（级别/分类/订单/节点/归一化正文）在窗口
+//! （`LOG_MERGE_WINDOW_SECS`）内重复出现只对原行累加 `repeat_count`，不再插新行。
+//! 上报成功的正文先做 `studyTime=数字 → ~` 归一（该值每 30 秒变一次，不归一则
+//! 同一节的整段上报全是"新行"）；合并行在面板显示"最近一次正文（×N）"。
+//! 效果：原始日均约 2.5 万行 → 压缩后 30 天历史约 15~20 万行，GC 与面板查询都轻。
 //!
 //! **脱敏**：日志会进后台面板，禁止写入密码/cookie/token。
 //! 账号类信息只记用户名，`detail` 里不放凭据（见 `redact`）。
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -60,13 +65,18 @@ const DEFAULT_MEM_MAX: usize = 5000;
 /// 内存条目存活时长（小时）。
 const DEFAULT_MEM_TTL_HOURS: u64 = 6;
 /// DB 条目存活时长（天）。
-const DEFAULT_DB_TTL_DAYS: u64 = 7;
-/// DB 保留的最大行数（TTL 之外的第二道闸）。
-const DEFAULT_DB_MAX_ROWS: i64 = 50_000;
+const DEFAULT_DB_TTL_DAYS: u64 = 30;
+/// DB 保留的最大行数（TTL 之外的第二道闸；30 天 × 归一化压缩后约 15~20 万行/月）。
+const DEFAULT_DB_MAX_ROWS: i64 = 300_000;
 /// 待落库队列长度。满了就丢，不阻塞业务线程。
 const DB_QUEUE_CAP: usize = 4096;
 /// 单批落库上限。
 const DB_BATCH_MAX: usize = 256;
+/// 重复合并窗口（秒）：同一内容在窗口内重复出现只累加 `repeat_count`，不再插新行。
+/// 超过窗口视为新事件、重新建行 —— 时间线不会被合并糊成一团。
+const DEFAULT_MERGE_WINDOW_SECS: u64 = 600;
+/// 合并索引（指纹 → 行号）内存上限，超过按"最久未见"淘汰。
+const MERGE_INDEX_CAP: usize = 4096;
 /// GC 间隔（秒）。
 const GC_INTERVAL_SECS: u64 = 300;
 
@@ -92,6 +102,24 @@ fn db_ttl_ms() -> i64 {
 
 fn db_max_rows() -> i64 {
     env_u64("LOG_DB_MAX_ROWS", DEFAULT_DB_MAX_ROWS as u64) as i64
+}
+
+fn merge_window_ms() -> i64 {
+    (env_u64("LOG_MERGE_WINDOW_SECS", DEFAULT_MERGE_WINDOW_SECS) as i64) * 1000
+}
+
+/// 距上次出现是否还在合并窗口内（超过 → 视为新事件，重新建行）
+fn within_merge_window(last_ms: i64, now_ms: i64, window_ms: i64) -> bool {
+    now_ms - last_ms <= window_ms
+}
+
+/// 合并行在面板上的呈现：附"（×N）"后缀 —— 后端出文案，前端零改动。
+fn merge_display(message: &str, repeat_count: i64) -> String {
+    if repeat_count > 1 {
+        format!("{message}（×{repeat_count}）")
+    } else {
+        message.to_string()
+    }
 }
 
 pub fn now_ms() -> i64 {
@@ -259,8 +287,55 @@ pub fn info_detail(
 }
 
 // ── 落库后台任务 ─────────────────────────────────────────────────────────
+
+/// 合并索引项：指纹 → 最近一次落库的行号
+struct RecentRow {
+    row_id: i64,
+    last_ms: i64,
+}
+
+/// 指纹用的正文归一化：把 `studyTime=数字` 的值抹成 `~`。
+///
+/// 为什么：上报成功行的 studyTime 每 30 秒变一次，逐字对比会让同一节的整段成功上报
+/// 全部落成新行（历史 5 万行里报满续报/重跑占大头）。归一后同一（订单,节点）在
+/// 窗口内的整串成功上报合并成一行；失败/拒收行正文各不相同，保持独立、不丢信息。
+fn normalize_for_fingerprint(msg: &str) -> std::borrow::Cow<'_, str> {
+    if !msg.contains("studyTime=") {
+        return msg.into();
+    }
+    let mut out = String::with_capacity(msg.len());
+    let mut rest = msg;
+    while let Some(pos) = rest.find("studyTime=") {
+        out.push_str(&rest[..pos]);
+        out.push_str("studyTime=~");
+        rest = &rest[pos + "studyTime=".len()..];
+        let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out.into()
+}
+
+/// 内容指纹：级别/分类/订单/节点/归一化正文 全同即视为"重复"。
+///
+/// **不含 detail**：上报类的详情每次调用都有微小差异（studyId/时间等），
+/// 把详情算进指纹等于没去重（实测首轮合并 0 次）。合并时正文更新为**最新一条**
+/// （详情保留首条）—— 面板显示"最近一次 studyTime（×N）"，逐条详情看实时面板。
+fn fingerprint_of(e: &LogEntry) -> String {
+    format!(
+        "{}|{}|{}|{}|{}",
+        e.level,
+        e.category,
+        e.order_id,
+        e.node_id,
+        normalize_for_fingerprint(&e.message)
+    )
+}
+
 async fn writer_loop(db: crate::db::Db, mut rx: mpsc::Receiver<LogEntry>) {
     let mut batch: Vec<LogEntry> = Vec::with_capacity(DB_BATCH_MAX);
+    // 跨批的合并索引：重复行只累加计数，不许它把库撑成 20 倍
+    let recent: Arc<Mutex<HashMap<String, RecentRow>>> = Arc::new(Mutex::new(HashMap::new()));
     loop {
         // 先阻塞等第一条，避免空转
         match rx.recv().await {
@@ -276,19 +351,70 @@ async fn writer_loop(db: crate::db::Db, mut rx: mpsc::Receiver<LogEntry>) {
         }
         let items = std::mem::take(&mut batch);
         let pool = db.clone_pool();
+        let recent = recent.clone();
         let _ = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let window = merge_window_ms();
+            let now = now_ms();
             let mut conn = pool.get()?;
             let tx = conn.transaction()?;
             {
-                let mut stmt = tx.prepare_cached(
-                    "INSERT INTO system_logs (ts, level, category, order_id, node_id, message, detail)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                let mut ins = tx.prepare_cached(
+                    "INSERT INTO system_logs (ts, level, category, order_id, node_id, message, detail, repeat_count, last_ts)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?1)",
                 )?;
+                let mut upd = tx.prepare_cached(
+                    "UPDATE system_logs SET repeat_count = repeat_count + ?1, last_ts = ?2, message = ?4 WHERE id = ?3",
+                )?;
+                let mut map = match recent.lock() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                // 同批同指纹只 UPDATE 一次：row_id → (增量, 最新时间, 指纹, 最新正文)
+                let mut updates: HashMap<i64, (i64, i64, String, String)> = HashMap::new();
                 for it in &items {
-                    let detail = it.detail.as_ref().map(|d| d.to_string());
-                    stmt.execute(rusqlite::params![
-                        it.ts, it.level, it.category, it.order_id, it.node_id, it.message, detail
-                    ])?;
+                    let fp = fingerprint_of(it);
+                    let hit = map
+                        .get(&fp)
+                        .filter(|r| within_merge_window(r.last_ms, now, window))
+                        .map(|r| r.row_id);
+                    match hit {
+                        Some(row_id) => {
+                            let ent = updates
+                                .entry(row_id)
+                                .or_insert_with(|| (0, it.ts, fp.clone(), it.message.clone()));
+                            ent.0 += 1;
+                            ent.1 = ent.1.max(it.ts);
+                            ent.3 = it.message.clone();
+                            map.insert(fp, RecentRow { row_id, last_ms: it.ts });
+                        }
+                        None => {
+                            let detail = it.detail.as_ref().map(|d| d.to_string());
+                            ins.execute(rusqlite::params![
+                                it.ts, it.level, it.category, it.order_id, it.node_id, it.message, detail
+                            ])?;
+                            let row_id = tx.last_insert_rowid();
+                            map.insert(fp, RecentRow { row_id, last_ms: it.ts });
+                        }
+                    }
+                }
+                for (row_id, (cnt, last, fp, msg)) in updates {
+                    let n = upd.execute(rusqlite::params![cnt, last, row_id, msg])?;
+                    if n == 0 {
+                        // 目标行已被 GC 删掉：清掉陈旧索引（该行日志随之落下，
+                        // 量级极小，不为它做补偿写）
+                        map.remove(&fp);
+                    }
+                }
+                // 索引保活：过窗口的淘汰；仍超上限时按"最久未见"淘汰
+                map.retain(|_, r| within_merge_window(r.last_ms, now, window));
+                if map.len() > MERGE_INDEX_CAP {
+                    let mut v: Vec<(String, i64)> =
+                        map.iter().map(|(k, r)| (k.clone(), r.last_ms)).collect();
+                    v.sort_by_key(|x| x.1);
+                    let excess = map.len() - MERGE_INDEX_CAP;
+                    for (k, _) in v.into_iter().take(excess) {
+                        map.remove(&k);
+                    }
                 }
             }
             tx.commit()?;
@@ -430,7 +556,7 @@ async fn list_logs(
         let rows = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<LogEntry>> {
             let conn = pool.get()?;
             let mut sql = String::from(
-                "SELECT ts, level, category, order_id, node_id, message, detail
+                "SELECT ts, level, category, order_id, node_id, message, detail, repeat_count
                  FROM system_logs WHERE 1=1",
             );
             let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -460,7 +586,11 @@ async fn list_logs(
                     category: r.get(2)?,
                     order_id: r.get(3)?,
                     node_id: r.get(4)?,
-                    message: r.get(5)?,
+                    // 合并行的重复次数以"（×N）"附在文案尾巴上：后端出文案，前端零改动
+                    message: merge_display(
+                        &r.get::<_, String>(5)?,
+                        r.get::<_, Option<i64>>(7)?.unwrap_or(1),
+                    ),
                     detail: detail.and_then(|d| serde_json::from_str(&d).ok()),
                 })
             })?;
@@ -600,6 +730,60 @@ pub fn clip(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 归一化：studyTime 的数值抹成 ~（成功上报每 30 秒变一次，不归一则无法合并）
+    #[test]
+    fn test_normalize_study_time() {
+        assert_eq!(
+            super::normalize_for_fingerprint("上报 studyTime=61 → status=1"),
+            "上报 studyTime=~ → status=1"
+        );
+        assert_eq!(
+            super::normalize_for_fingerprint("a studyTime=1 b studyTime=121 c"),
+            "a studyTime=~ b studyTime=~ c"
+        );
+        assert_eq!(
+            super::normalize_for_fingerprint("撞上平台 20 分钟记账片，退避 405s"),
+            "撞上平台 20 分钟记账片，退避 405s"
+        );
+    }
+
+    /// 指纹合并：归一后同一节的整段成功上报必须合并；正文不同/失败行保持独立
+    #[test]
+    fn test_fingerprint_merges_identical_only() {
+        let mk = |msg: &str, detail: Option<Value>| LogEntry {
+            seq: 0, ts: 1, level: LEVEL_INFO.into(), category: CAT_REPORT.into(),
+            order_id: "ORD-1".into(), node_id: "n1".into(),
+            message: msg.into(), detail,
+        };
+        assert_eq!(fingerprint_of(&mk("x", None)), fingerprint_of(&mk("x", None)));
+        assert_ne!(fingerprint_of(&mk("x", None)), fingerprint_of(&mk("y", None)));
+        // studyTime 数值不同 → 归一后同一指纹（这是去重的主战场）
+        assert_eq!(
+            fingerprint_of(&mk("上报 studyTime=61 → status=1", None)),
+            fingerprint_of(&mk("上报 studyTime=121 → status=1", None))
+        );
+        // 详情差异不得阻碍合并（上报类详情每次都有微小差异）
+        assert_eq!(
+            fingerprint_of(&mk("x", None)),
+            fingerprint_of(&mk("x", Some(json!({"a": 1})))),
+            "详情差异不得阻碍合并"
+        );
+    }
+
+    /// 合并窗口：窗口内合并、超窗即分新行（时间线不被糊成一团）
+    #[test]
+    fn test_within_merge_window() {
+        assert!(within_merge_window(1_000, 1_100, 100));
+        assert!(!within_merge_window(1_000, 1_101, 100));
+    }
+
+    /// 面板呈现：合并行附"（×N）"，单行不加后缀
+    #[test]
+    fn test_merge_display_suffix() {
+        assert_eq!(merge_display("hi", 1), "hi");
+        assert_eq!(merge_display("hi", 1149), "hi（×1149）");
+    }
 
     #[test]
     fn ring_buffer_evicts_oldest_when_full() {

@@ -270,7 +270,11 @@ CREATE TABLE IF NOT EXISTS system_logs (
     order_id VARCHAR(64) DEFAULT '',
     node_id VARCHAR(64) DEFAULT '',
     message TEXT DEFAULT '',
-    detail TEXT
+    detail TEXT,
+    -- 重复合并：同一内容在窗口内重复出现时不再插新行，只累加计数、刷新 last_ts。
+    -- 实测上报类日志把库膨胀 20 倍（5 万行里仅 2 千余行不重复），合并后 GC 与面板都轻。
+    repeat_count INTEGER NOT NULL DEFAULT 1,
+    last_ts INTEGER
 );
 
 -- 教学平台域名（域名监控的落库真源）。同一平台可有多行（主域 + 镜像/备用），
@@ -393,6 +397,15 @@ pub fn ensure_schema(pool: &Pool<SqliteConnectionManager>) -> Result<()> {
     add_missing_columns(&conn, "brush_cards", CARD_PHONE_COLUMN)?;
     add_missing_columns(&conn, "queue_jobs_school", LANE_COLUMN)?;
     add_missing_columns(&conn, "queue_jobs_chaoxing", LANE_COLUMN)?;
+    // system_logs：重复合并所需的计数/最近时间列（老库幂等补列）
+    add_missing_columns(
+        &conn,
+        "system_logs",
+        &[
+            ("repeat_count", "INTEGER NOT NULL DEFAULT 1"),
+            ("last_ts", "INTEGER"),
+        ],
+    )?;
 
     conn.execute_batch(INDEX_DDL).context("建索引失败")?;
 
