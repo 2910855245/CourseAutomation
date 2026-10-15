@@ -33,9 +33,9 @@ pub async fn pricing_config(db: &Db) -> Result<Value> {
     let pool = db.clone_pool();
     tokio::task::spawn_blocking(move || -> Result<Value> {
         let conn = pool.get()?;
-        // 只剩真正在收钱的三档：视频（含打包价/进度折扣）已对所有人免费
+        // 真正在收钱的两档：纯考试 / 纯作业；学习通与视频同口径免费（默认 0）
         let defaults = [
-            ("price_exam_only", 5.0), ("price_homework_only", 3.0), ("price_chaoxing", 8.0),
+            ("price_exam_only", 5.0), ("price_homework_only", 3.0), ("price_chaoxing", 0.0),
         ];
         let mut cfg = serde_json::Map::new();
         for (key, default) in defaults {
@@ -145,8 +145,10 @@ pub fn compute_item_prices(cfg: &Value, orders: &[Value], username: &str) -> Res
     for item in orders {
         let website_id = item["website_id"].as_i64().unwrap_or(1);
         let price = if website_id == 4 {
-            // 学习通一口价（与前端展示一致，不按课程明细计价）
-            cfg["price_chaoxing"].as_f64().unwrap_or(8.0)
+            // 学习通当前只支持刷视频（积分/必学视频，作业与考试未支持，见 cx_scan.rs），
+            // 与学校平台"刷视频免费"同一口径：一口价默认 0 元（即免费单，直接进免费通道）。
+            // 仍读配置：将来若要恢复收费，把后台「学习通一口价」改个数即可。
+            cfg["price_chaoxing"].as_f64().unwrap_or(0.0)
         } else {
             let course_ids: Vec<String> = item["course_ids"].as_array()
                 .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
@@ -296,11 +298,22 @@ async fn create_order(db: &Db, username: &str, password: &str, item: &Value,
 ///
 /// `vid` / `benefit`：营销推广待遇。命中刷课卡时考试费清零（该单也变 0 元），
 /// 并在入队时拿到更高的排队档位（见 `queue::lane_and_priority`）。
-pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str,
+pub async fn create_batch_orders(db: &Db, body: &Value, vid: &str, ip: &str,
                                  benefit: crate::promo::Benefit) -> Result<Value> {
     let username = body["username"].as_str().unwrap_or("").to_string();
     let password = body["password"].as_str().unwrap_or("").to_string();
     let mut orders: Vec<Value> = body["orders"].as_array().cloned().unwrap_or_default();
+
+    // 账号黑名单闸门：被拉黑的账号直接拒绝整批（带 blacklisted 标记，前端弹窗）
+    if crate::blacklist::blocked_reason(db, &username).await.is_some() {
+        tracing::info!(username = %username, "已拒绝黑名单账号下单");
+        return Ok(crate::blacklist::blocked_payload());
+    }
+    // IP 限制闸门：同一 IP 在窗口内最多提交 N 个不同学号（防一台机器批量代刷赚钱）
+    if !crate::blacklist::check_ip_limit(db, ip, &username).await {
+        tracing::warn!(ip = %ip, username = %username, "已拒绝超限 IP 的下单");
+        return Ok(crate::blacklist::ip_limited_payload());
+    }
 
     // 价格唯一真相源是后端：逐单用后端算出的价覆盖客户端传值，且定价事实来自
     // 服务端扫描快照（见 compute_item_prices）。快照缺失/过期会直接拒绝整批。
@@ -570,5 +583,15 @@ mod tests {
         let cfg = test_cfg();
         let orders = vec![json!({"website_id": 4, "course_ids": ["c9"]})];
         assert_eq!(compute_item_prices(&cfg, &orders, "anyone").unwrap(), vec![8.0]);
+    }
+
+    /// 学习通网课免费（政策）：默认配置（未设置 price_chaoxing）→ 0 元。
+    /// 这是"学习通与刷视频同口径免费"的回归护栏；后台仍可把
+    /// 「学习通一口价」改回正数恢复收费（见上一个测试）。
+    #[test]
+    fn test_chaoxing_default_is_free() {
+        let cfg = json!({"price_exam_only": 5.0, "price_homework_only": 3.0});
+        let orders = vec![json!({"website_id": 4, "course_ids": ["c9", "c10"]})];
+        assert_eq!(compute_item_prices(&cfg, &orders, "anyone").unwrap(), vec![0.0]);
     }
 }

@@ -501,7 +501,10 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
             let msg = if school_credential_error(&raw) {
                 "登录失败：账号或密码不正确（或账号不存在/被锁定），请核对后重新提交".to_string()
             } else {
-                format!("登录失败: {raw}")
+                // raw 可能自带 "登录失败: " 前缀（login.rs 的退出文案就是它），
+                // 直接再拼一次会得到「登录失败: 登录失败: ...」（2026-10-14 订单
+                // admin_note 已见），这里先剥一次再拼。
+                format!("登录失败: {}", raw.strip_prefix("登录失败: ").unwrap_or(&raw))
             };
             if school_credential_error(&raw) {
                 // 凭据类失败：直接终态，不进入队列重试（避免把账号刷到锁定）

@@ -411,12 +411,18 @@ async fn report_once(
             format!("上报被重定向，会话失效: {loc}"));
         return Err(anyhow::anyhow!("会话失效重定向: {loc}"));
     }
-    let body: ReportResp = match resp.json().await {
+    // 先取原文再解析：平台故障时（504 网关页 / HTML 错误页）返回的不是 JSON，
+    // 只报 serde 的 "expected value at line 1 column 1" 会把 HTTP 状态和响应体
+    // 一并丢掉 —— 线上只能看到"解析失败"，查不到其实是平台 5xx（真实案例 2026-10-14，
+    // 同日 338 条该错误全部指向 <html>504 Gateway Time-out</html>）。
+    let raw_body = resp.text().await.unwrap_or_default();
+    let body: ReportResp = match serde_json::from_str(&raw_body) {
         Ok(b) => b,
         Err(e) => {
+            let snippet: String = raw_body.trim().chars().take(120).collect();
             crate::logs::warn(crate::logs::CAT_REPORT, &shared.order_id, node_id,
-                format!("上报响应解析失败 node={node_id}: {e}"));
-            return Err(e).with_context(|| "上报响应解析失败");
+                format!("上报响应解析失败 node={node_id} http={status_code} body={snippet}: {e}"));
+            return Err(e).with_context(|| format!("上报响应解析失败（HTTP {status_code}）"));
         }
     };
     // 上报记录（面板「上报」分类的数据源）：请求参数与平台应答各留一份，
@@ -1043,9 +1049,22 @@ pub async fn run_study(task: &TaskInput, push_url: &str, push_token: &str) -> Re
             if mine.is_empty() && dup_mine.is_empty() {
                 continue;
             }
-            match crate::scan::fetch_course_videos(&shared.client, &cookie, &shared.base_url,
-                                                   course_id, "").await {
-                // 列表为空说明这次复核没拿到有效数据（接口异常/课程已下架），
+            // 复核是"撞片判失败的节能否改判完成"的唯一依据，拿不到列表就等于放弃这些节。
+            // 空列表/请求失败多为平台瞬时抖动（实证 2026-10-14 平台 5xx 期间出现 16 次
+            // "节列表为空"，本可改判完成的节被留在 failed），故先短重试再决定跳过。
+            let mut fetched = crate::scan::fetch_course_videos(&shared.client, &cookie, &shared.base_url,
+                                                               course_id, "").await;
+            for attempt in 0..2u64 {
+                let transient = fetched.as_ref().map(|v| v.is_empty()).unwrap_or(true);
+                if !transient {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(600 * (attempt + 1))).await;
+                fetched = crate::scan::fetch_course_videos(&shared.client, &cookie, &shared.base_url,
+                                                           course_id, "").await;
+            }
+            match fetched {
+                // 两次重试后仍为空，说明这次复核确实没拿到有效数据（接口异常/课程已下架），
                 // 不能据此判定"所有节都没完成" —— 那会把正常订单误判成失败。
                 Ok(plat) if plat.is_empty() => {
                     crate::logs::warn(crate::logs::CAT_REPORT, &task.order_id, "",

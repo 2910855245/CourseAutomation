@@ -93,9 +93,31 @@ fn cx_fail(status: &str, error: String) -> Json<Value> {
     }))
 }
 
-async fn scan_chaoxing(Json(req): Json<ScanChaoxingRequest>) -> Json<Value> {
+/// 黑名单命中（学习通链路）：带 `blacklisted` 标记，前端据此弹窗
+fn cx_blacklisted() -> Json<Value> {
+    let msg = crate::blacklist::BLOCKED_MESSAGE;
+    Json(json!({
+        "success": false,
+        "blacklisted": true,
+        "message": msg,
+        "data": {"platform": {
+            "website_id": 4,
+            "name": "学习通",
+            "status": "fail",
+            "error": msg,
+            "courses": [],
+            "tasks": [],
+        }},
+    }))
+}
+
+async fn scan_chaoxing(State(state): State<AppState>, Json(req): Json<ScanChaoxingRequest>) -> Json<Value> {
     if req.username.trim().is_empty() || req.password.is_empty() {
         return cx_fail("fail", "请填写学习通账号与密码".to_string());
+    }
+    // 黑名单：被拉黑的账号连扫描都不放行，进去就是白给一次第三方登录
+    if crate::blacklist::blocked_reason(&state.db, &req.username).await.is_some() {
+        return cx_blacklisted();
     }
     let session = match crate::cx_login::login(&req.username, &req.password).await {
         Ok(s) => s,
@@ -436,9 +458,15 @@ struct ScanRequest {
 
 fn default_true() -> bool { true }
 
-async fn scan_courses(Json(req): Json<ScanRequest>) -> Json<Value> {
+async fn scan_courses(State(state): State<AppState>, Json(req): Json<ScanRequest>) -> Json<Value> {
     if req.username.is_empty() || req.password.is_empty() {
         return Json(json!({"success": false, "message": "username/password 不能为空",
+                           "data": {"platforms": []}}));
+    }
+    // 黑名单：被拉黑的账号不放行扫描（前端据此弹窗，而不是拿失败平台列表去提示）
+    if crate::blacklist::blocked_reason(&state.db, &req.username).await.is_some() {
+        return Json(json!({"success": false, "blacklisted": true,
+                           "message": crate::blacklist::BLOCKED_MESSAGE,
                            "data": {"platforms": []}}));
     }
     let _ = req.force_refresh; // 扫描结果不落盘缓存（见模块头注）

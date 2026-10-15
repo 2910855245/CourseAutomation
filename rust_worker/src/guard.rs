@@ -46,7 +46,6 @@ pub struct RateLimiter {
     strict_limit: u32,
     window: Duration,
     enabled: bool,
-    trust_proxy: bool,
 }
 
 /// 敏感接口前缀：会消耗外部资源 / 触发第三方登录 / 写库 / 涉及金钱
@@ -102,7 +101,6 @@ impl RateLimiter {
             strict_limit: strict,
             window,
             enabled: env_bool("RATE_LIMIT_ENABLED", true),
-            trust_proxy: env_bool("RATE_LIMIT_TRUST_PROXY", true),
         })
     }
 
@@ -157,11 +155,17 @@ fn client_key(req: &Request, trust_proxy: bool) -> String {
         // 只有对端是本机时才采信 XFF：外部直连无法伪造来源
         if peer.map(|p| p.ip().is_loopback()).unwrap_or(false) {
             if let Some(xff) = req.headers().get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-                if let Some(first) = xff.split(',').next() {
-                    let first = first.trim();
-                    if !first.is_empty() {
-                        return first.to_string();
-                    }
+                // 取**最后一个**非空值：nginx 用 $proxy_add_x_forwarded_for =
+                // "客户端自带的 XFF, 真实对端"，客户端能伪造的部分全在前缀里。
+                // 取第一个值等于把来源交给调用方自己声明 —— 一句
+                // `-H 'X-Forwarded-For: 随便写'` 就能绕过 IP 黑名单与 IP 限制。
+                if let Some(last) = xff
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .last()
+                {
+                    return last.to_string();
                 }
             }
             if let Some(real) = req.headers().get("x-real-ip").and_then(|v| v.to_str().ok()) {
@@ -173,6 +177,43 @@ fn client_key(req: &Request, trust_proxy: bool) -> String {
         }
     }
     peer.map(|p| p.ip().to_string()).unwrap_or_else(|| "unknown".into())
+}
+
+/// 是否信任来自回环的 XFF（进程内只读一次，与 RateLimiter 同一开关）
+fn trust_proxy() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| env_bool("RATE_LIMIT_TRUST_PROXY", true))
+}
+
+/// 客户端 IP（与限流同一套"只信任回环来的 XFF"策略，供黑名单等复用）
+pub fn client_ip(req: &Request) -> String {
+    client_key(req, trust_proxy())
+}
+
+/// 客户端 IP 在 request extensions 里的键（由 [`ip_guard`] 注入，供各 handler 取用）
+#[derive(Clone, Debug)]
+pub struct ClientIp(pub String);
+
+/// IP 黑名单闸门：被拉黑的来源 IP 一律 403（连静态页都不给）。
+///
+/// 命中集合在 `blacklist` 模块的进程内缓存里，这里只做一次 HashMap 查询，
+/// 不走数据库。顺带把解析好的客户端 IP 塞进 extensions，下游 handler
+/// （下单限制、风控记录）直接读，不必各自重新解析一遍 XFF。
+pub async fn ip_guard(mut req: Request, next: Next) -> Response {
+    let ip = client_ip(&req);
+    if crate::blacklist::ip_is_blocked(&ip) {
+        tracing::warn!(ip = %ip, path = %req.uri().path(), "命中 IP 黑名单，已拒绝");
+        let mut resp = Json(json!({
+            "success": false,
+            "ip_blocked": true,
+            "message": "当前网络地址已被限制访问",
+        }))
+        .into_response();
+        *resp.status_mut() = StatusCode::FORBIDDEN;
+        return resp;
+    }
+    req.extensions_mut().insert(ClientIp(ip));
+    next.run(req).await
 }
 
 /// 限流中间件
@@ -189,7 +230,7 @@ pub async fn rate_limit(
         return next.run(req).await;
     }
 
-    let ip = client_key(&req, limiter.trust_proxy);
+    let ip = client_ip(&req);
     // 三档分开计数：一次登录/枚举风暴不应该把同一 IP 的正常浏览也拖下水
     let (limit, tier) = limiter.limit_for(&path);
     let bucket = format!("{ip}|{tier}");
@@ -274,7 +315,6 @@ mod tests {
             strict_limit: 1,
             window: Duration::from_secs(60),
             enabled,
-            trust_proxy: true,
         }
     }
 

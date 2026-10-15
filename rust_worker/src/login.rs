@@ -78,6 +78,11 @@ pub async fn login_school(base_url: &str, username: &str, password: &str) -> Res
     // 重试耗尽时把平台最后一次响应带出来：否则线上只能看到"重试10次未成功"，
     // 分不清是验证码识别不过、参数不对，还是文案没被上面的判定命中
     let mut last_note = String::new();
+    // 平台侧故障（5xx / 网关错误页）与「账号密码错」是两码事：前者重试有意义，
+    // 后者重试只会逼近锁号线。这里单独计数，并在退出时给出**不含凭据关键词**的
+    // 文案 —— 否则会被 queue 的 school_credential_error 误判成「凭据错 → 直接终态」。
+    let mut outage_hits = 0u32;
+    let mut last_status = 0u16;
     for _attempt in 0..10 {
         // 获取验证码图片 + 本地 OCR（含合法性预校验，见 fetch_captcha_code）
         let code = fetch_captcha_code(&client, &captcha_url, &login_url).await;
@@ -104,7 +109,9 @@ pub async fn login_school(base_url: &str, username: &str, password: &str) -> Res
 
         let status = resp.status().as_u16();
         let text = resp.text().await.unwrap_or_default();
-        last_note = text.chars().take(120).collect::<String>().replace('\n', " ");
+        last_status = status;
+        last_note = format!("HTTP {status}: {}",
+            text.chars().take(100).collect::<String>().replace('\n', " "));
 
         if text.contains("验证码有误") || text.contains("验证码错误") {
             continue;
@@ -131,7 +138,24 @@ pub async fn login_school(base_url: &str, username: &str, password: &str) -> Res
                 if msg.is_empty() { "账号或密码错误".to_string() } else { msg }
             });
         }
+        // 平台侧异常（别无差别空转 10 次）：504/502/503 网关页、或整页 HTML。
+        // 放在成功/验证码/凭据判定**之后** —— 302 跳转的成功响应也可能带 HTML body，
+        // 提前拦截会把正常登录误判成平台故障。退避后重试，上限 30s。
+        let outage = status >= 500
+            || text.contains("Gateway Time-out")
+            || text.contains("Bad Gateway")
+            || text.contains("Service Unavailable")
+            || text.trim_start().starts_with("<html");
+        if outage {
+            outage_hits += 1;
+            let backoff = (2u64.pow(outage_hits.min(4)) * 2).min(30);
+            tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+            continue;
+        }
         let _ = school_id_index; // 保留变量避免大改，school_ids 恒 None 不会触达
+    }
+    if outage_hits > 0 {
+        bail!("平台暂时不可用（HTTP {last_status}，连续 {outage_hits} 次异常），请稍后重试");
     }
     bail!("登录失败: 重试10次未成功（末次响应: {last_note}）")
 }
