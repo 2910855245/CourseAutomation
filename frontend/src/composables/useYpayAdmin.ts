@@ -49,7 +49,6 @@ export function useYpayAdmin() {
   const channelTestQrImage = ref('')
   const channelTestAllOk = ref(false)
   const qrUploading = ref(false)
-  const qrFileInput = ref<HTMLInputElement | null>(null)
 
   const payTypeLabels: Record<number, string> = { 1: '微信', 2: '支付宝' }
   const ypayStateLabels: Record<string, string> = { '0': '未支付', '1': '已支付', '-1': '已关闭' }
@@ -98,10 +97,12 @@ export function useYpayAdmin() {
     return r
   }
 
-  function triggerQrUpload() { qrFileInput.value?.click() }
-
+  // 说明：triggerQrUpload / qrFileInput 已删除 —— 原来靠 JS 对 display:none 的 file input
+  // 调 .click()，在移动端浏览器会被静默拦截（按钮点了没反应）。
+  // 现由模板里的 <label> 原生触发文件选择，不再需要这里的 ref 与函数。
   async function onQrFileChange(e: Event) {
-    const file = (e.target as HTMLInputElement).files?.[0]
+    const input = e.target as HTMLInputElement
+    const file = input.files?.[0]
     if (!file) return
     qrUploading.value = true
     try {
@@ -115,7 +116,8 @@ export function useYpayAdmin() {
     } catch { store.toast('上传失败', 'error') }
     finally {
       qrUploading.value = false
-      if (qrFileInput.value) qrFileInput.value.value = ''
+      // 直接清事件上的元素，不依赖模板 ref
+      input.value = ''
     }
   }
 
@@ -325,10 +327,10 @@ export function useYpayAdmin() {
     loadingYpayOrders, ypayAccounts, loadingAccounts, showAccountModal, editingAccount,
     accountForm, savingAccount, showCertFields, showChannelTest, channelTestAccount,
     channelTestLoading, channelTestChecks, channelTestQrImage, channelTestAllOk,
-    qrUploading, qrFileInput,
+    qrUploading,
     payTypeLabels, ypayStateLabels, typeLabels, defaultCodes, wxAccounts, aliAccounts,
     channelCodeLabels, channelCodeHelp, codeLabel, fmtHeartbeat, genRandomStr,
-    triggerQrUpload, onQrFileChange, resetAccountForm, openAddAccount, openEditAccount,
+    onQrFileChange, resetAccountForm, openAddAccount, openEditAccount,
     closeAccountModal, loadAccounts, saveAccount, deleteAccount, toggleAccount, testChannel,
     loadYpay, saveYpaySettings, saveYpayKeyOnly, regenerateYpayKey, loadPairQr,
     loadYpayOrders, closeExpiredYpayOrders, clearYpayOrderHistory,
