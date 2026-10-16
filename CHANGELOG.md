@@ -1,3 +1,22 @@
+# 2026-10-16 修复：APP 下载二维码提示「不存在」
+
+## 变更内容
+
+- **根因**：`/api/ypay/app-download` 从 `static/ypay-monitor.apk` 读文件下发，但该文件已缺失
+  （仓库里也从未有过），接口 404 返回 `{"code":-1,"message":"APK 文件不存在"}`。
+  管理端「APP 下载」二维码指向的正是这个地址，于是扫码即显示「不存在」。
+- **脆弱点**：`vite.config.ts` 设了 `emptyOutDir: true`，每次 `npm run build` 都会清空 `static/`，
+  任何手工放进 static/ 的文件（如 APK）都会被下一次构建冲掉。
+- **修法**：APK 改放 `frontend/public/ypay-monitor.apk`（vite 的 publicDir 会在每次构建时
+  自动复制进 static/），并从该处补回 `static/ypay-monitor.apk` 让修复立即生效。
+  APK 取自 Vmq-App-3.0 的最新构建 app-v3.8.apk。
+
+## 验收
+
+- `curl /api/ypay/app-download` → 200、`application/vnd.android.package-archive`、8,973,702 字节
+- 公网 `https://course.refinely.top/api/ypay/app-download` → 200、同大小
+- `course.refinely.top` 与 `refinely.top` 均 200
+
 # 2026-10-15 修复：收款码图片上传按钮「点击没反应」
 
 ## 变更内容
