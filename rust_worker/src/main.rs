@@ -7,6 +7,7 @@
 //! - SQLite 访问层（rusqlite 直连，与 Python 迁移期共享 data/*.db）
 
 mod api;
+mod app_compat;
 mod auth;
 mod blacklist;
 mod crypto;
@@ -223,6 +224,10 @@ async fn main() -> anyhow::Result<()> {
         .merge(api::router(state.clone()))
         .merge(school_exam::router())
         .merge(pay_routes::router())
+        // APP 端契约（Vmq 监控 APP）：/api/ypay/* 与 /pay/api/ypay/* 都要挂
+        // （APP 的 ApiUrl.build 会把 /api/ 自动补成 /pay/api/）。
+        .merge(app_compat::router())
+        .nest("/pay", app_compat::router())
         .merge(promo_routes::router())
         .nest_service("/static", ServeDir::new("static").append_index_html_on_directories(true))
         .fallback(spa_fallback)

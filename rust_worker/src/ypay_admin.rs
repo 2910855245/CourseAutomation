@@ -469,25 +469,28 @@ async fn app_qrcode(State(state): State<AppState>) -> Json<Value> {
         return err("通讯密钥未配置：请先在「基本配置」中生成并保存通讯密钥，再刷新二维码");
     };
 
-    // 配对 payload（含服务地址与通讯密钥）。APP 扫到后据此连接 heartbeat/push 端点。
-    // 密钥只存在于二维码内容里，不单独回显到 JSON。
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
+    // 配对 payload 必须与 APP 契约逐字一致：{"t":"vmq-pair","v":1,"server":..,"key":..,"site":..}
+    // （App 的 PairingUtil.isPairCode 要求 t == "vmq-pair"，缺 t 会被判定"不是配对码"；
+    //   server 缺失会回退 site，两者皆缺则解析失败）。旧的 app/type/heart_url/push_url 字段已废弃。）
     let payload = json!({
-        "app": "ypay-monitor",
-        "type": "pair",
-        "site_url": site_url,
+        "t": "vmq-pair",
+        "v": 1,
+        "server": site_url,
         "key": key,
-        "heart_url": format!("{site_url}/api/ypay/vmq/heart"),
-        "push_url": format!("{site_url}/api/ypay/vmq/push"),
-        "ts": ts,
+        "site": site_url,
     });
     match crate::ypay_qr::render_qr_data_url(&payload.to_string()) {
         Some(qr_image) => ok_msg(
             "ok",
-            json!({"qr_image": qr_image, "site_url": site_url, "key_set": true}),
+            json!({
+                "qr_image": qr_image,
+                "payload": payload.to_string(),
+                "server": site_url,
+                "site": site_url,
+                "site_url": site_url,
+                "key_set": true,
+                "content": format!("{site_url}/api/ypay/pair-confirm?key={key}"),
+            }),
         ),
         None => err("配对二维码生成失败（服务地址或密钥过长）"),
     }

@@ -1,3 +1,27 @@
+# 2026-10-16 关键修复：监控 APP 扫码配对/心跳/推送协议对齐（移植 Refine 的 APP 契约）
+
+## 变更内容
+
+- **根因**：本后端此前自造了一套 APP 方言 —— 配对二维码 `{"type":"pair","app":"ypay-monitor",...}`、
+  心跳/推送挂在 `/api/ypay/vmq/heart|push`、心跳签名 `MD5(t+key)`。而那台 Vmq 监控 APP 是照
+  Vmq/Refine 契约写死的：二维码必须 `t == "vmq-pair"`（否则直接判定"不是配对码"）、接口是
+  `/api/ypay/app-heart|app-push|pair-confirm`（且 APP 会把 `/api/` 自动补成 `/pay/api/`）、
+  心跳 `sign = MD5(key)`、推送 `sign = MD5(type+price+reallyPrice+key)`。两边对不上 ⇒ 扫码/配对/心跳全废。
+- **修法**：新增 `app_compat.rs`，把 APP 侧契约原样补齐，同时挂 `/api/ypay/*` 与 `/pay/api/ypay/*`：
+  `app-heart`（GET/POST）、`app-offline`、`app-push`、`app-info`、`pair-confirm`、`pair-status`，
+  以及无前缀的旧兼容路径 `/appHeart`、`/appPush`。心跳成功后写 `ypay_last_heart`
+  （后台「监控在线」徽标读的就是这个键）。
+- **配对二维码**（`ypay_admin.rs::app_qrcode`）改为契约格式
+  `{"t":"vmq-pair","v":1,"server":...,"key":...,"site":...}`，并额外回吐 `payload` / `content` 便于排查。
+
+## 验收（对 127.0.0.1 与公网 course.refinely.top 双向验证）
+
+- `sign=MD5(key)`：`/pay/api/ypay/app-heart`（GET 与 POST 表单）→ `{"code":0,"msg":"成功"}`；错签名 → `签名错误`
+- `/pay/api/ypay/pair-confirm?key=<key>` → `配对成功`；错 key → `密钥不匹配`
+- `pair-status` → `paired:true`；`app-info` → `status:"1"`
+- 二维码 payload 实测：`{"key":"<16位>","server":"https://course.refinely.top","site":"...","t":"vmq-pair","v":1}`
+- 公网 `https://course.refinely.top/pay/api/ypay/app-heart` → `{"code":0,"msg":"成功"}`
+
 # 2026-10-16 修复：APP 下载二维码提示「不存在」
 
 ## 变更内容
