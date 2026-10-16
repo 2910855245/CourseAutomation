@@ -133,16 +133,17 @@ async fn app_push(State(state): State<AppState>, Query(q): Query<Params>, body: 
         return Json(json!({"code": -1, "msg": "密钥未配置"}));
     };
     let sign = p.get("sign").map(|s| s.trim().to_ascii_lowercase()).unwrap_or_default();
-    let sign_str = format!(
+    let g = |k: &str| p.get(k).cloned().unwrap_or_default();
+    // 主链路：MD5(payId+param+type+price+reallyPrice+key)（App appPush()，payId/param 留空）
+    let cand_main = md5_hex(&format!(
         "{}{}{}{}{}{}",
-        p.get("payId").cloned().unwrap_or_default(),
-        p.get("param").cloned().unwrap_or_default(),
-        p.get("type").cloned().unwrap_or_default(),
-        p.get("price").cloned().unwrap_or_default(),
-        p.get("reallyPrice").cloned().unwrap_or_default(),
-        key,
-    );
-    if sign.is_empty() || sign != md5_hex(&sign_str) {
+        g("payId"), g("param"), g("type"), g("price"), g("reallyPrice"), key
+    ));
+    // 补回调重试链路：App scheduleRetryCallback() 用的是 MD5(type+price+t+key)（源码 line 823），
+    // 与主链路语料不同。不认它的话，首次推送失败后那次重试会被判「签名错误」，
+    // 那一笔就永远不会入账 —— 所以这里必须同时认两种候选。
+    let cand_retry = md5_hex(&format!("{}{}{}{}", g("type"), g("price"), g("t"), key));
+    if sign.is_empty() || (sign != cand_main && sign != cand_retry) {
         return Json(json!({"code": -1, "msg": "签名错误"}));
     }
     let type_str = p.get("type").cloned().unwrap_or_default();
