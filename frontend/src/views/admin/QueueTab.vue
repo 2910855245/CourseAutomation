@@ -338,7 +338,7 @@ function pctText(v: number | undefined) {
                            j.status === 'pending' ? 'warn' : 'muted'
                   ]"
                 >
-                  {{ j.status === 'completed' ? '已完成' : j.status === 'running' ? '执行中' : j.status === 'failed' ? (j.error_message || '失败') : j.status === 'cancelled' ? '已取消' : j.status === 'waiting' ? '等待明天' : j.status === 'retrying' ? '重试中' : j.status === 'pending' ? '待处理' : j.status }}
+                  {{ j.status === 'completed' ? '已完成' : j.status === 'running' ? '执行中' : j.status === 'failed' ? (j.error_message || '失败') : j.status === 'cancelled' ? '已取消' : j.status === 'waiting' ? '待开课' : j.status === 'retrying' ? '重试中' : j.status === 'pending' ? '待处理' : j.status }}
                 </span>
               </td>
               <td>
@@ -363,18 +363,18 @@ function pctText(v: number | undefined) {
                 <div class="action-cell">
                   <span class="action-slot">
                     <button
-                      v-if="j.status === 'pending' || j.status === 'running' || j.status === 'waiting'"
+                      v-if="j.status === 'pending' || j.status === 'running'"
                       class="btn btn-xs btn-danger"
                       @click="cancelQueueJob(j.job_id)"
                     >
                       取消
                     </button>
                     <button
-                      v-if="j.status === 'failed'"
+                      v-if="j.status === 'failed' || j.status === 'waiting'"
                       class="btn btn-xs btn-primary"
                       @click="retryQueueJob(j.job_id)"
                     >
-                      重试
+                      {{ j.status === 'waiting' ? '补刷' : '重试' }}
                     </button>
                   </span>
                   <button

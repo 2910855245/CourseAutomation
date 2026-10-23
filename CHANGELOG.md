@@ -1,3 +1,34 @@
+# 2026-10-23 「待开课」可补刷：开课后补刷成功即算完成
+
+## 问题
+
+上一条修复把「课程未开课」的订单转成了 `waiting`（待开课），但**没人能推进它**：
+- 后台的「重试」按钮只对 `failed` 显示，waiting 的任务点不到
+- 后端 `queue_job_retry` 的 SQL 也只匹配 `failed`/`cancelled`
+- 于是这些单永远卡在"待开课"，客户既看不到结果、也补不了刷
+
+## 变更内容
+
+- **任务与订单都落 `waiting`**：此前任务落 `failed`、订单落 `waiting`，
+  后台列表看到的是红色失败文案。现在统一为 waiting，显示「待开课」标签
+- **waiting 可补刷**：后端 retry 的 SQL 纳入 `waiting`；
+  前端 waiting 行显示「补刷」按钮（failed 仍是「重试」）
+- **补刷不消耗重试额度**：`retry_count` 用 CASE 判断，仅 failed/cancelled 才 +1。
+  管理员可能开课后点一次、没刷完过几天再点一次，都不该把额度推到上限后卡死
+- **补刷时清空订单旧文案**：上一轮的"尚未开课"说明留着会让订单页显示过期信息；
+  同时订单从 waiting 拉回 queued，补刷成功后由 `sync_order_state` 写成 completed
+- waiting 是终态，不再提供「取消」（原来同时有「取消」和「补刷」两个按钮，
+  语义重复且「取消」会把订单置 cancelled —— 与"等开课补刷"背道而驰）
+- 历史数据迁移：5 条因未开课判 failed 的任务改为 waiting
+
+## 验收
+
+- 接口实测：waiting 任务调补刷 → 200，任务 `waiting → retrying`，
+  `retry_count` 保持 4 不变，订单 `waiting → queued` 且旧文案清空
+- 调度器认领后重新识别为未开课 → 回到 waiting，不判失败、不重试
+- 服务器 138 个 Rust 测试全绿；新增单测用真实 DB 验证补刷的 UPDATE 语义
+  （waiting 不加计数 / failed、cancelled 各加 1）
+
 # 2026-10-23 后台队列列表显示客户姓名
 
 ## 变更内容

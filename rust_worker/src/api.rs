@@ -2093,13 +2093,18 @@ async fn abort_running_job(state: &AppState, job_id: &str) -> String {
 async fn queue_job_cancel(State(state): State<AppState>, Path(job_id): Path<String>) -> Json<Value> {
     abort_running_job(&state, &job_id).await;
     queue_job_action(&state, &job_id,
-        "UPDATE {t} SET status='cancelled', finished_at=?1 WHERE job_id=?2 AND status IN ('pending','running','retrying','waiting')",
+        "UPDATE {t} SET status='cancelled', finished_at=?1 WHERE job_id=?2 AND status IN ('pending','running','retrying')",
         "任务已取消", true, false).await
 }
 
 async fn queue_job_retry(State(state): State<AppState>, Path(job_id): Path<String>) -> Json<Value> {
+    // waiting（待开课）的补刷**不消耗重试额度**：管理员可能开课后点一次、
+    // 过几天再点一次，这些都不该把 retry_count 推到上限后卡死。
+    // 只有真失败/已取消的重试才 +1。
     queue_job_action(&state, &job_id,
-        "UPDATE {t} SET status='retrying', retry_count=retry_count+1, error_message='', finished_at=NULL WHERE job_id=?2 AND status IN ('failed','cancelled')",
+        "UPDATE {t} SET status='retrying', error_message='', finished_at=NULL,
+                retry_count=retry_count + CASE WHEN status='waiting' THEN 0 ELSE 1 END
+         WHERE job_id=?2 AND status IN ('failed','cancelled','waiting')",
         "任务已重新入队", false, true).await
 }
 
@@ -2166,8 +2171,14 @@ async fn queue_job_action(state: &AppState, job_id: &str, sql_tpl: &str, ok_msg:
             conn.execute(
                 "UPDATE orders SET status='queued', finished_at=NULL, updated_at=?1
                  WHERE order_id=?2 AND deleted_at IS NULL
-                   AND status IN ('completed','failed','cancelled')",
+                   AND status IN ('completed','failed','cancelled','waiting')",
                 rusqlite::params![now, order_id],
+            )?;
+            // 「待开课」的旧说明要清掉：这次重试可能是开课后的补刷，
+            // 留着上一轮的文案会让订单页显示过期的"尚未开课"。
+            conn.execute(
+                "UPDATE orders SET admin_note='' WHERE order_id=?1 AND deleted_at IS NULL",
+                rusqlite::params![order_id],
             )?;
             log_event(&conn, "order_requeued", "admin", "任务重试，订单已重新入队", &order_id)?;
         }

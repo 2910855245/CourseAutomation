@@ -481,8 +481,10 @@ async fn handle_job_failure(state: &AppState, job: &QueueJob, kind: QueueKind, e
     // （实证 2026-10-21~23：课程 1021759 开课 2026-10-26，8 单被白刷 3 轮
     //  后判失败，白扔 6000+ 次注定被拒的上报。）
     if course_not_started_error(err) {
+        // 任务与订单都落 waiting（待开课）：后台列表能一眼分出
+        // 「学校还没开课，等开课补刷」与「真刷失败了」，并给出「补刷」入口。
         let _ = update_job(state, job, kind,
-                           &[("status", "failed".into()),
+                           &[("status", "waiting".into()),
                              ("error_message", err.to_string()),
                              ("finished_at", now_str())]).await;
         sync_order_state(state, job, "waiting", err).await;
@@ -1019,6 +1021,71 @@ mod tests {
         // 普通失败仍要照常重试
         assert!(!super::course_not_started_error("上报请求失败: connection timed out"));
         assert!(!super::course_not_started_error("登录失败: 账号或密码不正确"));
+    }
+
+    /// 「待开课」补刷不消耗重试额度。
+    ///
+    /// 管理员可能开课后点一次、没刷完过几天再点一次 —— 这些都不该把
+    /// retry_count 推到上限后卡死（重试额度是给"平台抖动"用的，不是给
+    /// "学校还没开课"用的）。
+    ///
+    /// 用真实 DB 跑真实的 UPDATE 语句验证（复刻 SQL 逻辑的单测没有意义）。
+    #[test]
+    fn test_waiting_backfill_does_not_consume_retry_budget() {
+        let dir = std::env::temp_dir().join(format!("rust_worker_backfill_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("backfill.db");
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(path.to_str().unwrap()).unwrap();
+        {
+            let conn = db.clone_pool().get().unwrap();
+            for (jid, st, rc) in [
+                ("JOB-WAIT", "waiting", 0i64),
+                ("JOB-FAIL", "failed", 1),
+                ("JOB-CANC", "cancelled", 0),
+            ] {
+                conn.execute(
+                    "INSERT INTO queue_jobs_school
+                     (job_id, username, password, website_id, job_type, course_ids, status,
+                      priority, lane, progress, total_steps, completed_steps, current_step_name,
+                      error_message, retry_count, max_retries, task_id, order_id, result_data, verified,
+                      created_at, speed_mode)
+                     VALUES (?1,'u','p',1,'video','[]',?2,0,'paid',0,0,0,'','',?3,3,
+                             NULL,?1,'{}',0,'2026-01-01 00:00:00','gentle')",
+                    rusqlite::params![jid, st, rc],
+                ).unwrap();
+            }
+            // 与 api::queue_job_retry 完全相同的 SQL
+            conn.execute(
+                "UPDATE queue_jobs_school SET status='retrying', error_message='', finished_at=NULL,
+                        retry_count=retry_count + CASE WHEN status='waiting' THEN 0 ELSE 1 END
+                 WHERE job_id=?1 AND status IN ('failed','cancelled','waiting')",
+                rusqlite::params!["JOB-WAIT"],
+            ).unwrap();
+            conn.execute(
+                "UPDATE queue_jobs_school SET status='retrying', error_message='', finished_at=NULL,
+                        retry_count=retry_count + CASE WHEN status='waiting' THEN 0 ELSE 1 END
+                 WHERE job_id=?1 AND status IN ('failed','cancelled','waiting')",
+                rusqlite::params!["JOB-FAIL"],
+            ).unwrap();
+            conn.execute(
+                "UPDATE queue_jobs_school SET status='retrying', error_message='', finished_at=NULL,
+                        retry_count=retry_count + CASE WHEN status='waiting' THEN 0 ELSE 1 END
+                 WHERE job_id=?1 AND status IN ('failed','cancelled','waiting')",
+                rusqlite::params!["JOB-CANC"],
+            ).unwrap();
+        }
+        let conn = db.clone_pool().get().unwrap();
+        let get = |jid: &str| -> (String, i64) {
+            conn.query_row("SELECT status, retry_count FROM queue_jobs_school WHERE job_id=?1",
+                           rusqlite::params![jid], |r| Ok((r.get(0)?, r.get(1)?))).unwrap()
+        };
+        // 补刷 waiting：状态复活，重试额度不变（可反复点）
+        assert_eq!(get("JOB-WAIT"), ("retrying".to_string(), 0));
+        // 真失败/已取消的重试：照常 +1
+        assert_eq!(get("JOB-FAIL"), ("retrying".to_string(), 2));
+        assert_eq!(get("JOB-CANC"), ("retrying".to_string(), 1));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
