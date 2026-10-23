@@ -125,16 +125,16 @@ export function useSystemConfig() {
   }
 
   // ── Pricing（收费标准）──
-  // 只剩三档是真正在收钱的：纯考试 / 纯作业 / 学习通一口价。
-  // 原先的"小/中/大课打包价 + 进度折扣 + 最低价"随"刷视频免费"一起下线
-  // —— 后端 price_single_course 已经不看它们了，留着只会让人以为视频要钱。
+  // 真正在收钱的只剩两档：纯考试 / 纯作业；学习通只刷视频（作业考试未支持）
+  // → 一口价默认 0（免费）。原先的"小/中/大课打包价 + 进度折扣 + 最低价"随
+  // "刷视频免费"一起下线 —— 后端 price_single_course 已经不看它们了。
   const packagePricing = reactive({
-    priceExamOnly: 5, priceHomeworkOnly: 3, priceChaoxing: 8,
+    priceExamOnly: 5, priceHomeworkOnly: 3, priceChaoxing: 0,
   })
   const editingPricing = ref(false)
   const savingPricing = ref(false)
   const editPricing = reactive({
-    priceExamOnly: 5, priceHomeworkOnly: 3, priceChaoxing: 8,
+    priceExamOnly: 5, priceHomeworkOnly: 3, priceChaoxing: 0,
   })
 
   async function loadPricing() {
@@ -143,7 +143,7 @@ export function useSystemConfig() {
       const d = res.data || {} as any
       packagePricing.priceExamOnly = d.priceExamOnly || 5
       packagePricing.priceHomeworkOnly = d.priceHomeworkOnly || 3
-      packagePricing.priceChaoxing = d.priceChaoxing || 8
+      packagePricing.priceChaoxing = d.priceChaoxing || 0
       Object.assign(editPricing, { ...packagePricing })
     } catch (e: any) {
       store.toast('加载收费标准失败: ' + (e?.message || '网络错误'), 'error')

@@ -16,12 +16,18 @@ import {
   zhCN,
   dateZhCN,
 } from 'naive-ui'
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 import ToastBridge from '@/components/ToastBridge.vue'
 import ConfirmBridge from '@/components/ConfirmBridge.vue'
+import FloatingContact from '@/components/FloatingContact.vue'
 import { lightThemeOverrides, darkThemeOverrides } from '@/theme'
 import { useAppStore } from '@/stores/app'
 
 const store = useAppStore()
+const route = useRoute()
+// 悬浮「加群」入口只给访客侧看：后台管理页不挂载（运营自己不需要加群入口）
+const showFloatingContact = computed(() => !route.path.startsWith('/admin'))
 </script>
 
 <template>
@@ -42,6 +48,7 @@ const store = useAppStore()
               <router-view v-slot="{ Component }">
                 <component :is="Component" />
               </router-view>
+              <FloatingContact v-if="showFloatingContact" />
             </div>
           </n-message-provider>
         </n-notification-provider>

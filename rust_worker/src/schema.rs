@@ -292,6 +292,40 @@ CREATE TABLE IF NOT EXISTS platform_domains (
     last_checked_at TEXT,
     updated_at TEXT NOT NULL
 );
+
+-- 账号黑名单：被拉黑的学号（按 username 唯一）不允许再扫描/下单刷课。
+-- website_id 只作「拉黑来源平台」的记录与展示，判定**只看 username** ——
+-- 拉黑的是这个账号，不是这个平台上的这一次尝试。
+CREATE TABLE IF NOT EXISTS account_blacklist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username VARCHAR(255) NOT NULL,
+    website_id INTEGER NOT NULL DEFAULT 0,
+    reason TEXT DEFAULT '',
+    created_at VARCHAR(255) NOT NULL,
+    created_by VARCHAR(255) DEFAULT ''
+);
+
+-- IP 黑名单：被拉黑的来源 IP 全站拒绝（guard::ip_guard 中间件直接 403）。
+-- 用来封「一台机器批量提交很多账号赚钱」的机器，而不是某一个学号。
+CREATE TABLE IF NOT EXISTS ip_blacklist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ip VARCHAR(64) NOT NULL,
+    reason TEXT DEFAULT '',
+    created_at VARCHAR(255) NOT NULL,
+    created_by VARCHAR(255) DEFAULT ''
+);
+
+-- 下单来源记录：用于「同一 IP 在 N 小时内最多提交 M 个不同学号」的统计。
+-- 只有**不同**学号才计数（同一学号重试/重复提交不会把额度耗光）。
+-- ts 存本地秒时间戳：字符串 created_at 带 'T' 与 SQLite datetime() 的格式/时区都不一致，
+-- 时间窗口一律用这个整数列比较，避免时区坑。
+CREATE TABLE IF NOT EXISTS ip_submissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ip VARCHAR(64) NOT NULL,
+    username VARCHAR(255) NOT NULL,
+    created_at VARCHAR(255) NOT NULL,
+    ts INTEGER NOT NULL DEFAULT 0
+);
 "#;
 
 /// 索引（统一在建表+补列之后执行，避免老库缺列导致建索引失败）
@@ -322,6 +356,9 @@ CREATE INDEX IF NOT EXISTS ix_system_logs_category ON system_logs (category);
 CREATE INDEX IF NOT EXISTS ix_system_logs_order ON system_logs (order_id);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_pd_site_host ON platform_domains (website_id, host);
 CREATE INDEX IF NOT EXISTS ix_pd_host ON platform_domains (host);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_blacklist_username ON account_blacklist (username);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_ip_blacklist_ip ON ip_blacklist (ip);
+CREATE INDEX IF NOT EXISTS ix_ip_submissions_ip ON ip_submissions (ip, ts);
 "#;
 
 /// ypay_account 老库可能缺失的列（对应 api/database.py 的 _add_columns_if_missing）

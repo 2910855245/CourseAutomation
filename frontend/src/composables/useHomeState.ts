@@ -2,9 +2,24 @@
 import { ref, computed, onScopeDispose } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { api, type PlatformResult, type CourseItem } from '@/api'
+import { useConfirmSingleton } from '@/composables/useConfirm'
 
 export function useHomeState() {
   const store = useAppStore()
+  const { showAlert } = useConfirmSingleton()
+
+  // 被拒绝类提示：必须用弹窗（toast 一闪而过，用户会误以为是网络抖动而反复重试）
+  function notifyBlocked(message: string, title: string) {
+    return showAlert({ title, message, type: 'warning' })
+  }
+  // 账号黑名单
+  function notifyBlacklisted(message?: string) {
+    return notifyBlocked(message || '该账号已被本平台拉黑，无法享用免费刷课', '无法享用免费刷课')
+  }
+  // IP 限制（同一网络提交的账号数超限）
+  function notifyIpLimited(message?: string) {
+    return notifyBlocked(message || '当前网络地址提交的账号数量已达上限，无法继续免费刷课', '提交账号数已达上限')
+  }
 
   // ── Session persistence ──
   const LS_KEY = 'course_platform_remember'
@@ -82,8 +97,9 @@ export function useHomeState() {
   //
   // 取值来源必须是 /api/pricing/calculate 的 chaoxing_price，不能是 /api/pricing：
   // 后者是管理员接口，客户页调用只会 401（此前就是这么写的 —— 结果一口价永远
-  // 停在默认 8，后台改价客户页看不见）。
-  const packagePricing = ref({ priceChaoxing: 8 })
+  // 停在默认值，后台改价客户页看不见）。
+  // 默认 0：学习通只刷视频（作业考试未支持）→ 与学校平台"刷视频免费"同口径。
+  const packagePricing = ref({ priceChaoxing: 0 })
 
   // ── 刷课节奏档位（暴力 / 保守）──
   // 与后端 speed.rs 的 SpeedMode 对应（turbo/gentle 是落库标识；balanced 已下线，
@@ -232,7 +248,8 @@ export function useHomeState() {
     let courses = 0, videos = 0, exams = 0, totalPrice = 0
     const courseBreakdown: { name: string; videos: number; completed: number; price: number }[] = []
     // 学习通是**整批一口价**（后端 compute_item_prices 对 website_id=4 只取一次
-    // price_chaoxing），所以这里也必须只计一次：按门累加会把 ¥8 显示成 ¥8×门数。
+    // price_chaoxing，默认 0 = 免费），所以这里也必须只计一次：按门累加会
+    // 把一口价显示成「一口价 × 门数」。
     let chaoxingVideos = 0
     let hasChaoxing = false
     for (const p of scanData.value) {
@@ -253,8 +270,8 @@ export function useHomeState() {
       }
     }
     if (hasChaoxing) {
-      // 与 submitAndPay 里 wid===4 的取值同源（后台配置的学习通一口价）
-      const fee = packagePricing.value.priceChaoxing || 8
+      // 与 submitAndPay 里 wid===4 的取值同源（后台配置的学习通一口价，0=免费）
+      const fee = packagePricing.value.priceChaoxing || 0
       totalPrice += fee
       courseBreakdown.push({ name: '学习通（一口价）', videos: chaoxingVideos, completed: 0, price: fee })
     }
@@ -312,6 +329,7 @@ export function useHomeState() {
     startScanTimer()
     try {
       const res = await api.courses.scan({ username: username.value.trim(), password: password.value.trim(), include_records: true })
+      if (res?.blacklisted) { await notifyBlacklisted(res.message); return }
       scanData.value = res.data.platforms
       const okPlatforms = scanData.value.filter(p => p.status === 'ok')
       const failed = scanData.value.filter(p => p.status !== 'ok')
@@ -354,6 +372,7 @@ export function useHomeState() {
     startScanTimer()
     try {
       const res = await api.courses.scanChaoxing({ username: chaoxingUsername.value.trim(), password: chaoxingPassword.value.trim() })
+      if (res?.blacklisted) { await notifyBlacklisted(res.message); return }
       const platform = res.data.platform
       scanData.value = [platform]
       if (platform.status !== 'ok') {
@@ -522,7 +541,8 @@ export function useHomeState() {
         const hasVideo = g.v > 0; const hasExam = g.e > 0
         if (wid === 4) {
           taskType = 'chaoxing_points'
-          price = free ? 0 : (packagePricing.value.priceChaoxing || 8)
+          // 学习通一口价：默认 0（免费）；读后台配置是为将来恢复收费留口子
+          price = free ? 0 : (packagePricing.value.priceChaoxing || 0)
         } else {
           taskType = 'video'; if (hasVideo && hasExam) taskType = 'full'; else if (hasExam) taskType = 'exam'
           const backendTotal = g.ids.reduce((s, id) => s + (backendPrices.value[id]?.price || 0), 0)
@@ -535,6 +555,12 @@ export function useHomeState() {
       const orderUsername = isChaoxing ? chaoxingUsername.value.trim() : username.value.trim()
       const orderPassword = isChaoxing ? chaoxingPassword.value.trim() : password.value.trim()
       const batchRes = await api.orders.batch({ username: orderUsername, password: orderPassword, orders })
+      // 黑名单：后端权威拒绝，弹窗告知（不能继续走支付/入队流程）
+      if (batchRes?.blacklisted) { await notifyBlacklisted(batchRes.message); return }
+      // IP 限制：同一网络提交的账号数超限
+      if (batchRes?.ip_limited) { await notifyIpLimited(batchRes.message); return }
+      // 其余业务拒绝（定价快照缺失/过期等）同样中止，不能当"创建成功"继续
+      if (batchRes?.success === false) { store.toast(batchRes.message || '提交失败，请稍后重试', 'error'); return }
       submitSuccess.value = true
       const allOrders = (batchRes?.data?.orders) || []
       const newIds = allOrders.map((o: any) => o.order_id).join(',')
@@ -712,8 +738,6 @@ export function useHomeState() {
   const announcementContent = ref('')
   const announcementTitle = ref('')
   const announcementImage = ref('')
-  const announcementContactType = ref('')
-  const announcementContactValue = ref('')
   const announcementId = ref(0)
 
   async function checkAnnouncement() {
@@ -725,21 +749,11 @@ export function useHomeState() {
       if (serverId > dismissedId) {
         announcementId.value = serverId
         announcementContent.value = res.data.content
-        announcementTitle.value = (res.data as any).title || ''
-        announcementImage.value = (res.data as any).image || ''
-        announcementContactType.value = (res.data as any).contact_type || ''
-        announcementContactValue.value = (res.data as any).contact_value || ''
+        announcementTitle.value = res.data.title || ''
+        announcementImage.value = res.data.image || ''
         showAnnouncement.value = true
       }
     } catch { }
-  }
-
-  /** 复制联系方式（公告里挂微信/QQ 时用） */
-  async function copyAnnouncementContact() {
-    const v = announcementContactValue.value
-    if (!v) return
-    try { await navigator.clipboard.writeText(v); store.toast('联系方式已复制', 'success') }
-    catch { store.toast('复制失败，请手动选择', 'warning') }
   }
 
   function dismissAnnouncement() {
@@ -773,7 +787,6 @@ export function useHomeState() {
     pct, pctClass,
     // Announcement
     showAnnouncement, announcementContent, announcementTitle, announcementImage,
-    announcementContactType, announcementContactValue, copyAnnouncementContact,
     announcementId, checkAnnouncement, dismissAnnouncement,
     // LS_KEY for template
     LS_KEY,

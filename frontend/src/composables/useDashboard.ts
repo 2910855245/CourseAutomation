@@ -23,7 +23,7 @@ export function useDashboard() {
 
   const statusLabel: Record<string, string> = { pending: '待审核', active: '活跃', suspended: '已暂停' }
   const statusClass: Record<string, string> = { pending: 'warn', active: 'ok', suspended: 'bad' }
-  const orderStatusLabel: Record<string, string> = { pending: '待处理', accepted: '已接单', running: '执行中', completed: '已完成', failed: '失败', cancelled: '已取消', waiting: '等待明天', paid: '已支付', queued: '排队中', retrying: '重试中' }
+  const orderStatusLabel: Record<string, string> = { pending: '待处理', accepted: '已接单', running: '执行中', completed: '已完成', failed: '失败', cancelled: '已取消', waiting: '待开课', paid: '已支付', queued: '排队中', retrying: '重试中' }
   const orderStatusClass: Record<string, string> = { pending: 'warn', accepted: 'primary', running: 'primary', completed: 'ok', failed: 'bad', cancelled: 'muted', waiting: 'primary', paid: 'ok', queued: 'primary', retrying: 'warn' }
 
   const maxStatusCount = computed(() => {
@@ -76,6 +76,7 @@ export function useDashboard() {
         { key: 'domain_monitor', label: '域名监控', icon: 'M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9' },
         { key: 'announcement', label: '系统通告', icon: 'M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0' },
         { key: 'logs', label: '运行日志', icon: 'M4 6h16M4 12h16M4 18h10M2 6h.01M2 12h.01M2 18h.01' },
+        { key: 'blacklist', label: '拉黑管理', icon: 'M18.364 5.636l-12.728 12.728A9 9 0 0118.364 5.636zm-12.728 0a9 9 0 0112.728 12.728' },
         { key: 'security', label: '安全中心', icon: 'M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z' },
       ],
     },

@@ -27,7 +27,6 @@ const {
   handleOrderSuccess, goToOrders, submitAndPay, onPaySuccessDone, closePay, savePayQr, switchPayMethod,
   pct, pctClass, LS_KEY,
   showAnnouncement, announcementContent, announcementTitle, announcementImage,
-  announcementContactType, announcementContactValue, copyAnnouncementContact,
   checkAnnouncement, dismissAnnouncement,
   benefit, inviteInfo, myCard, loadBenefit,
 } = useHomeState()
@@ -404,8 +403,8 @@ onMounted(async () => {
                 </div>
 
                 <div class="cr-side">
-                  <!-- 学习通整批一口价，不按门标价（按门标会让人以为每门都收 ¥8） -->
-                  <span v-if="p.website_id === 4" class="cr-done-tag">一口价</span>
+                  <!-- 学习通整批一口价（默认免费），不按门标价 -->
+                  <span v-if="p.website_id === 4" class="cr-free-tag">免费</span>
                   <!-- 持卡免单：标"已免"而不是原价，否则逐门原价与底部合计 ¥0.00 自相矛盾 -->
                   <span v-else-if="benefit.free && coursePrice(c) > 0" class="cr-free-tag">已免 ¥{{ coursePrice(c).toFixed(2) }}</span>
                   <span v-else-if="coursePrice(c) > 0" class="cr-price mono">¥{{ coursePrice(c).toFixed(2) }}</span>
@@ -514,7 +513,7 @@ onMounted(async () => {
           <!-- 计费口径：刷视频免费，答题/考试按门课收费 -->
           <p class="billing-note">
             <template v-if="activeTab === 'chaoxing'">
-              学习通按<b>整批一口价</b>计费 —— 与勾选几门课无关<template v-if="!freeTotal">，本次<span class="mono"> {{ totalText }}</span>，付费后进入快速通道</template><template v-else>；本次由{{ freeTagText }}，直接提交即可开跑</template>
+              学习通<b>网课免费</b>（纯刷视频，作业/考试暂未支持）—— 与勾选几门课无关<template v-if="!freeTotal">；本次<span class="mono"> {{ totalText }}</span>，付费后进入快速通道</template><template v-else>，直接提交即可开跑</template>
             </template>
             <template v-else>
               刷视频<b>免费</b>（免费单串行排队）<template v-if="!freeTotal">；本次含未完成的答题/考试，按门课计费<span class="mono"> {{ totalText }}</span>，付费后进入快速通道、不用排队</template><template v-else>；{{ benefit.free ? freeTagText + '，直接提交即可开跑' : '所选课程没有待完成的答题/考试，直接提交即可开跑' }}</template>
@@ -635,11 +634,6 @@ onMounted(async () => {
           class="announcement-image"
         >
         <div class="announcement-body">{{ announcementContent }}</div>
-        <div v-if="announcementContactValue" class="announcement-contact">
-          <span class="ac-label">{{ announcementContactType || '联系方式' }}</span>
-          <span class="ac-value mono">{{ announcementContactValue }}</span>
-          <button class="btn btn-ghost btn-xs" @click="copyAnnouncementContact">复制</button>
-        </div>
         <div class="announcement-foot">
           <button class="btn btn-primary btn-block" @click="dismissAnnouncement">我知道了</button>
         </div>
@@ -1464,18 +1458,6 @@ onMounted(async () => {
   border-radius: 12px;
   border: 1px solid var(--c-border);
 }
-.announcement-contact {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 var(--space-6) var(--space-4);
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: var(--c-bg);
-  font-size: 12.5px;
-}
-.ac-label { color: var(--c-text-muted); flex-shrink: 0; }
-.ac-value { color: var(--c-text); font-weight: 600; flex: 1; word-break: break-all; }
 
 /* ==================== 营销提示位 ==================== */
 .promo-strip {

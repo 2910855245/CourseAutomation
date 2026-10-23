@@ -67,6 +67,14 @@ pub struct CourseItem {
     /// .name a 的 href（detail_link，对齐 get_courses）
     #[allow(dead_code)]
     pub detail_link: String,
+    /// 开课时间（Unix 秒；0 = 平台没给或解析失败）。
+    ///
+    /// 课程列表页的 `.time` 节点形如「开课时间：2026-10-26 至 2026-12-18」。
+    /// 课程还没开课时，平台会拒收该课程下**所有**节的上报（"课程还未开始!"），
+    /// 整门课一节都刷不动 —— 这种课必须挡在队列外，别白跑一轮会话再把订单判失败
+    /// （实证 2026-10-21~23：课程 1021759 开课 2026-10-26，8 单全误判失败、
+    /// 浪费 6000+ 次注定被拒的上报）。开课后客户重扫即可补刷。
+    pub start_ts: i64,
 }
 
 /// 学校平台 base_url：测试钩子 → 域名监控缓存（动态）→ 静态默认表
@@ -153,6 +161,40 @@ pub async fn fetch_course_list(client: &Client, cookie: &str, base_url: &str) ->
     Ok(parse_course_list(&html))
 }
 
+/// 从课程列表 HTML 的「开课时间」文案里取开课日期，转成 Unix 秒。
+///
+/// 平台渲染形如 `<div class="time"><span class="tit">开课时间：</span><span>2026-10-26<span> 至 <span>2026-12-18</span>`，
+/// 也见过没有「至」段的单日期。取**第一个**日期 = 开课日（第二个是结课日）。
+///
+/// 平台给的是日期（无时分秒），按当天 00:00:00 解释 —— 平台在开课日当天 00:00
+/// 之后即可记录学习时间，所以「开课日 == 今天」要算作已开课。
+fn parse_start_ts(text: &str) -> i64 {
+    // 直接扫 "YYYY-MM-DD"：比逐字符拼装稳（日期里的 '-' 会被误当分隔符丢掉）
+    let bytes = text.as_bytes();
+    // 闭区间：日期紧贴文本末尾时也要能扫到（"开课时间：2026-10-26"）
+    for i in 0..=bytes.len().saturating_sub(10) {
+        if i + 10 > bytes.len() {
+            break;
+        }
+        if bytes[i + 4] != b'-' || bytes[i + 7] != b'-' {
+            continue;
+        }
+        if !bytes[i..i + 10].iter().all(|c| c.is_ascii_digit() || *c == b'-') {
+            continue;
+        }
+        // 前后必须是分隔符（避免把 "12026-10-261" 这种长串里的片段当日期）
+        let before_ok = i == 0 || !bytes[i - 1].is_ascii_digit();
+        let after_ok = i + 10 >= bytes.len() || !bytes[i + 10].is_ascii_digit();
+        if !before_ok || !after_ok {
+            continue;
+        }
+        let date = &text[i..i + 10];
+        let iso = format!("{date}T00:00:00");
+        return crate::pay::parse_iso_secs(&iso).unwrap_or(0);
+    }
+    0
+}
+
 /// 抓取课程列表页原始 HTML（降负载：调用方可复用同一响应做二次解析，
 /// 避免对 /user/index 发第二次 17KB 请求）
 pub async fn fetch_course_list_html(client: &Client, cookie: &str, base_url: &str) -> Result<String> {
@@ -181,6 +223,7 @@ pub fn parse_course_list(html: &str) -> Vec<CourseItem> {
     let item_sel = Selector::parse(".user-course .item").unwrap();
     let name_sel = Selector::parse(".name a").unwrap();
     let status_sel = Selector::parse(".status a").unwrap();
+    let time_sel = Selector::parse(".time").unwrap();
 
     let mut courses = Vec::new();
     let mut seen = HashSet::new();
@@ -203,7 +246,12 @@ pub fn parse_course_list(html: &str) -> Vec<CourseItem> {
         if course_id.is_empty() || !seen.insert(course_id.clone()) {
             continue;
         }
-        courses.push(CourseItem { name, course_id, study_record_url, detail_link });
+        // 开课时间：`.time` 节点整体文本（含"开课时间："前缀与起止两个日期）
+        let time_text = item.select(&time_sel).next()
+            .map(|t| t.text().collect::<String>())
+            .unwrap_or_default();
+        let start_ts = parse_start_ts(&time_text);
+        courses.push(CourseItem { name, course_id, study_record_url, detail_link, start_ts });
     }
     courses
 }
@@ -594,14 +642,49 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
         .collect();
 
     let courses = fetch_course_list(&client, &task.cookie_str, &base_url).await?;
-    let selected: Vec<&CourseItem> = courses.iter()
+    let picked: Vec<&CourseItem> = courses.iter()
         .filter(|c| filter.is_empty() || filter.contains(&c.course_id))
         .collect();
+    // 课程级时间闸：整门课还没开课，平台会拒收该课程下**所有**节的上报
+    //（"课程还未开始!"）。这种课一节都刷不动 —— 挡在队列外，别白跑一轮会话、
+    // 再把订单判失败（实证 2026-10-21~23：课程 1021759 开课 2026-10-26，
+    // 8 单全部误判失败，浪费 6000+ 次注定被拒的上报）。开课后客户重扫即可补刷。
+    let now_secs = crate::queue::local_secs() as i64;
+    let mut not_started: Vec<(&CourseItem, i64)> = Vec::new();
+    let selected: Vec<&CourseItem> = picked.iter()
+        .filter(|c| {
+            if c.start_ts > 0 && c.start_ts > now_secs {
+                not_started.push((c, c.start_ts));
+                false
+            } else {
+                true
+            }
+        })
+        .copied()
+        .collect();
+    if !not_started.is_empty() {
+        let names: Vec<String> = not_started.iter()
+            .map(|(c, ts)| format!("《{}》（{} 开课）", c.name,
+                crate::queue::iso_from_secs(*ts as u64).chars().take(10).collect::<String>()))
+            .collect();
+        let note = format!("尚未开课：{}", names.join("、"));
+        eprintln!("[scan] {note} —— 平台未开放学习时间记录，本轮不刷（开课后重扫可补）");
+        crate::logs::info(crate::logs::CAT_REPORT, &task.order_id, "",
+            format!("扫描发现 {note}，本轮跳过（开课后重扫可补刷）"));
+    }
     // 考试环节要按课程回访考试清单，先把 (course_id, name) 留一份
     let exam_courses: Vec<(String, String)> = selected.iter()
         .map(|c| (c.course_id.clone(), c.name.clone()))
         .collect();
     if selected.is_empty() {
+        // 选中的课全都还没开课 —— 不是"找不到课程"，如实说明原因
+        if !not_started.is_empty() {
+            let names: Vec<String> = not_started.iter()
+                .map(|(c, ts)| format!("《{}》（{} 开课）", c.name,
+                    crate::queue::iso_from_secs(*ts as u64).chars().take(10).collect::<String>()))
+                .collect();
+            anyhow::bail!("所选课程尚未开课：{}，开课后重新提交即可自动补刷", names.join("、"));
+        }
         anyhow::bail!("未找到课程");
     }
 
@@ -675,7 +758,6 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
     }
     // 平台时间锁：未到解锁时间的节平台必然拒收上报（本章节解锁时间未到），
     // 挡在队列外，别白跑一轮会话再把订单判失败。解锁后客户重扫即可补刷。
-    let now_secs = crate::queue::local_secs() as i64;
     let before_lock = all_videos.len();
     all_videos.retain(|v| v.unlock_ts == 0 || v.unlock_ts <= now_secs);
     let locked = before_lock - all_videos.len();
@@ -811,6 +893,49 @@ async fn solve_exams(task: &ScanTaskInput, client: &Client, base_url: &str,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 开课时间解析：从课程列表页的「开课时间」文案里取开课日。
+    ///
+    /// 回归背景（2026-10-23）：课程 1021759 的开课时间是 2026-10-26，平台对
+    /// 该课程下所有节都拒收上报（"课程还未开始!"）。系统此前不认识这个闸，
+    /// 白刷 45 节 × 6 次重试后把订单判失败（8 单受害）。
+    #[test]
+    fn test_parse_start_ts_from_time_node() {
+        // 线上真实形态：起止两个日期连在一起，第二个是结课日
+        let ts = parse_start_ts("开课时间：2026-10-26 至 2026-12-18");
+        assert_eq!(ts, crate::pay::parse_iso_secs("2026-10-26T00:00:00").unwrap());
+        // 只有开课日
+        assert_eq!(parse_start_ts("开课时间：2026-10-26"),
+                   crate::pay::parse_iso_secs("2026-10-26T00:00:00").unwrap());
+        // 没有时间信息 → 0（= 平台没给，按"无闸"处理，不误伤正常课程）
+        assert_eq!(parse_start_ts("开课时间："), 0);
+        assert_eq!(parse_start_ts(""), 0);
+    }
+
+    /// 课程列表解析：`.time` 节点的日期要落到 start_ts，否则扫描侧过滤不了未开课课程。
+    #[test]
+    fn test_parse_course_list_extracts_start_ts() {
+        let html = r#"
+        <div class="user-course">
+          <div class="item">
+            <div class="box">
+              <div class="con">
+                <div class="name"><a href="/user/course?courseId=1021759">服务学习与朋辈实践</a></div>
+                <div class="time">
+                  <span class="tit">开课时间：</span><span>2026-10-26<span> 至 <span>2026-12-18</span>
+                </div>
+                <div class="status"><a href="/user/study_record?courseId=1021759">学习记录</a></div>
+              </div>
+            </div>
+          </div>
+        </div>"#;
+        let courses = parse_course_list(html);
+        assert_eq!(courses.len(), 1);
+        assert_eq!(courses[0].course_id, "1021759");
+        assert_eq!(courses[0].name, "服务学习与朋辈实践");
+        assert_eq!(courses[0].start_ts,
+                   crate::pay::parse_iso_secs("2026-10-26T00:00:00").unwrap());
+    }
 
     #[test]
     fn test_needs_exam_only_for_exam_and_full() {

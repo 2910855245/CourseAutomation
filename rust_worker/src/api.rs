@@ -65,6 +65,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         // 公告发布：前端「系统通告」页 + 首页弹窗依赖
         .route("/api/admin/announcement", post(announcement_publish))
         .route("/api/admin/announcement/disable", post(announcement_disable))
+        // 站点联系方式与赞赏：后台「系统通告」页配置（前台悬浮加群 + 赞赏页读取）
+        .route("/api/admin/site/links", post(site_links_save))
+        // 账号黑名单：拉黑/解除/列表（被拉黑的账号无法再扫描与下单刷课）
+        .merge(crate::blacklist::router())
         .route_layer(middleware::from_fn_with_state(state.clone(), crate::auth::auth_middleware));
 
     Router::new()
@@ -72,6 +76,8 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/api/orders/batch", post(batch_orders))
         // 公告读取（公开：首页弹窗）
         .route("/api/announcement", get(announcement_get))
+        // 站点联系方式与赞赏（公开：悬浮「加群」按钮与赞赏页）
+        .route("/api/site/links", get(site_links_get))
         // 游客可达：Bearer 或 view_token 二选一（handler 内校验）
         .route("/api/orders/{order_id}", get(order_get).delete(order_delete))
         .route("/api/orders/audit-log/{order_id}", get(order_audit_log))
@@ -157,12 +163,15 @@ async fn vmq_push(
 async fn batch_orders(
     State(state): State<AppState>,
     ext: Option<Extension<crate::promo_routes::VisitorId>>,
+    ip_ext: Option<Extension<crate::guard::ClientIp>>,
     Json(body): Json<Value>,
 ) -> Json<Value> {
     let vid = ext.map(|e| e.0.as_str().to_string()).unwrap_or_default();
+    // 客户端 IP 由 guard::ip_guard 注入，用于「同 IP 最多提交 N 个学号」的风控
+    let ip = ip_ext.map(|e| e.0.0).unwrap_or_default();
     // 免费待遇（全局免费开关或本人持有效刷课卡）：命中时订单 0 元并直接进队列
     let benefit = crate::promo::check_benefit(&state.db, &vid).await;
-    match crate::order::create_batch_orders(&state.db, &body, &vid, benefit).await {
+    match crate::order::create_batch_orders(&state.db, &body, &vid, &ip, benefit).await {
         Ok(v) => Json(v),
         Err(e) => Json(json!({"success": false, "message": e.to_string()})),
     }
@@ -208,11 +217,9 @@ async fn system_status(State(state): State<AppState>) -> Json<Value> {
 const ANN_CONTENT: &str = "announcement_content";
 const ANN_ID: &str = "announcement_id";
 const ANN_ACTIVE: &str = "announcement_active";
-/// 公告附加项：标题 / 图片（URL 或 data URL）/ 联系方式（类型 + 值）
+/// 公告附加项：标题 / 图片（URL 或 data URL）
 const ANN_TITLE: &str = "announcement_title";
 const ANN_IMAGE: &str = "announcement_image";
-const ANN_CONTACT_TYPE: &str = "announcement_contact_type";
-const ANN_CONTACT_VALUE: &str = "announcement_contact_value";
 /// 图片体积上限（data URL 直接存库，超过就会把库撑大）
 const ANN_IMAGE_MAX: usize = 700 * 1024;
 
@@ -224,8 +231,6 @@ async fn announcement_get(State(state): State<AppState>) -> Json<Value> {
         .map(|v| v == "1").unwrap_or(false) && !content.trim().is_empty();
     let title = crate::queue::config_get(&state.db, ANN_TITLE).await.unwrap_or_default();
     let image = crate::queue::config_get(&state.db, ANN_IMAGE).await.unwrap_or_default();
-    let contact_type = crate::queue::config_get(&state.db, ANN_CONTACT_TYPE).await.unwrap_or_default();
-    let contact_value = crate::queue::config_get(&state.db, ANN_CONTACT_VALUE).await.unwrap_or_default();
     let visible = |v: String| if active { v } else { String::new() };
     Json(json!({
         "success": true,
@@ -236,8 +241,6 @@ async fn announcement_get(State(state): State<AppState>) -> Json<Value> {
             "active": active,
             "title": visible(title),
             "image": visible(image),
-            "contact_type": visible(contact_type),
-            "contact_value": visible(contact_value),
         },
     }))
 }
@@ -259,10 +262,6 @@ async fn announcement_publish(State(state): State<AppState>, Json(body): Json<Va
     {
         return Json(json!({"success": false, "message": "图片地址不合法（需 http(s) 或上传图片）"}));
     }
-    let contact_type = body["contact_type"].as_str().unwrap_or("").trim()
-        .chars().take(16).collect::<String>();
-    let contact_value = body["contact_value"].as_str().unwrap_or("").trim()
-        .chars().take(120).collect::<String>();
     // 严格递增的 id（同一秒内连续发布也不会撞号）
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
@@ -273,8 +272,6 @@ async fn announcement_publish(State(state): State<AppState>, Json(body): Json<Va
         (ANN_CONTENT, content.as_str()),
         (ANN_TITLE, title.as_str()),
         (ANN_IMAGE, image.as_str()),
-        (ANN_CONTACT_TYPE, contact_type.as_str()),
-        (ANN_CONTACT_VALUE, contact_value.as_str()),
         (ANN_ACTIVE, "1"),
     ];
     for (k, v) in fields {
@@ -293,6 +290,93 @@ async fn announcement_disable(State(state): State<AppState>) -> Json<Value> {
         Ok(()) => Json(json!({"success": true, "message": "公告已下线"})),
         Err(e) => Json(json!({"success": false, "message": e.to_string()})),
     }
+}
+
+// ── 站点联系方式与赞赏（悬浮「加群」按钮 + 独立赞赏页的数据源）──────────────
+//
+// 为什么单独一组、不塞进公告：公告是"会弹窗的一次性通知"，本组是"常驻的
+// 站点内容"（每页的悬浮按钮、赞赏页随时要读）。读取必须公开（前台访客拿不到
+// 管理员 Bearer），写入走管理员鉴权。
+
+/// QQ 群号 / 微信群二维码 / 赞赏码（后两者为 URL 或压缩后的 data URL）/ 赞赏页文案
+const SITE_QQ_GROUP: &str = "site_qq_group";
+const SITE_WECHAT_QR: &str = "site_wechat_qr";
+const SITE_DONATE_QR: &str = "site_donate_qr";
+const SITE_DONATE_NOTE: &str = "site_donate_note";
+/// 图片体积上限：与公告图同一口径（data URL 直接存库）
+const SITE_IMAGE_MAX: usize = 700 * 1024;
+
+/// 图片地址合法性：http(s) 外链或 data:image（本地上传压缩后的 data URL）。
+/// 与公告图同一校验口径 —— 防止 javascript:/file: 之类被写进前端 <img>。
+fn site_image_ok(v: &str) -> bool {
+    v.is_empty()
+        || v.starts_with("http://") || v.starts_with("https://")
+        || v.starts_with("data:image/")
+}
+
+async fn site_links_get(State(state): State<AppState>) -> Json<Value> {
+    let qq_group = crate::queue::config_get(&state.db, SITE_QQ_GROUP).await.unwrap_or_default();
+    let wechat_qr = crate::queue::config_get(&state.db, SITE_WECHAT_QR).await.unwrap_or_default();
+    let donate_qr = crate::queue::config_get(&state.db, SITE_DONATE_QR).await.unwrap_or_default();
+    let donate_note = crate::queue::config_get(&state.db, SITE_DONATE_NOTE).await.unwrap_or_default();
+    Json(json!({
+        "success": true,
+        "message": "ok",
+        "data": {
+            "qq_group": qq_group,
+            "wechat_qr": wechat_qr,
+            "donate_qr": donate_qr,
+            "donate_note": donate_note,
+        },
+    }))
+}
+
+/// 解析保存请求：对外字段名（API 契约）→ 库内配置键的映射 + 校验。
+///
+/// 抽成纯函数的原因很具体：曾经把库内键名（site_wechat_qr）当对外字段名
+/// 去查 body，图片字段于是"保存成功但永远为空" —— 这类映射错位只有
+/// 单测能低成本兜住。语义是**部分更新**：只写 body 里出现的字段，
+/// 只改群号不传图片时绝不会把已配置的二维码清空。
+fn site_links_payload(body: &Value) -> Result<Vec<(&'static str, String)>, String> {
+    let mut writes: Vec<(&'static str, String)> = Vec::new();
+    if let Some(v) = body.get("qq_group").and_then(Value::as_str) {
+        writes.push((SITE_QQ_GROUP, v.trim().chars().take(32).collect()));
+    }
+    for (json_key, cfg_key, label) in [
+        ("wechat_qr", SITE_WECHAT_QR, "微信群二维码"),
+        ("donate_qr", SITE_DONATE_QR, "赞赏码"),
+    ] {
+        if let Some(v) = body.get(json_key).and_then(Value::as_str) {
+            let v = v.trim().to_string();
+            if v.len() > SITE_IMAGE_MAX {
+                return Err(format!("{label}图片过大（请压缩到 700KB 以内）"));
+            }
+            if !site_image_ok(&v) {
+                return Err(format!("{label}地址不合法（需 http(s) 或上传图片）"));
+            }
+            writes.push((cfg_key, v));
+        }
+    }
+    if let Some(v) = body.get("donate_note").and_then(Value::as_str) {
+        writes.push((SITE_DONATE_NOTE, v.trim().chars().take(200).collect()));
+    }
+    Ok(writes)
+}
+
+async fn site_links_save(State(state): State<AppState>, Json(body): Json<Value>) -> Json<Value> {
+    let writes = match site_links_payload(&body) {
+        Ok(w) => w,
+        Err(msg) => return Json(json!({"success": false, "message": msg})),
+    };
+    if writes.is_empty() {
+        return Json(json!({"success": false, "message": "没有要保存的字段"}));
+    }
+    for (k, v) in writes {
+        if let Err(e) = crate::queue::config_set(&state.db, k, &v).await {
+            return Json(json!({"success": false, "message": e.to_string()}));
+        }
+    }
+    Json(json!({"success": true, "message": "已保存"}))
 }
 
 // ── 支付配置（ypay_settings）────────────────────────────────────────────
@@ -1118,11 +1202,12 @@ async fn queue_stats(State(state): State<AppState>) -> Json<Value> {
 }
 
 /// 收费标准键：前端 camelCase ↔ 库内 snake_case（对齐 useSystemConfig.loadPricing）。
-/// 视频打包价（小/中/大课）与进度折扣已随"刷视频免费"下线，只剩真正在收钱的三档。
+/// 视频打包价（小/中/大课）与进度折扣已随"刷视频免费"下线；学习通只刷视频
+/// （作业/考试未支持）→ 默认 0 元免费。真正在收钱的只剩纯考试 / 纯作业两档。
 const PRICING_KEYS: &[(&str, &str, f64)] = &[
     ("priceExamOnly", "price_exam_only", 5.0),
     ("priceHomeworkOnly", "price_homework_only", 3.0),
-    ("priceChaoxing", "price_chaoxing", 8.0),
+    ("priceChaoxing", "price_chaoxing", 0.0),
 ];
 
 async fn pricing(State(state): State<AppState>) -> Json<Value> {
@@ -1230,8 +1315,9 @@ async fn pricing_calculate(State(state): State<AppState>, Json(body): Json<Value
         // chaoxing_price 一并回给前端：学习通是整批一口价、不跟着课程明细算，
         // 而 /api/pricing（配置读取）是管理员接口、客户页拿不到 ——
         // 不在这里带上，客户页就只能显示硬编码的默认价，后台改价永远不生效。
+        // 学习通默认 0 元（免费），这里回 0 前端就显示"免费提交"。
         "data": {"courses": entries, "total": total, "pricing_mode": "package",
-                 "chaoxing_price": cfg["price_chaoxing"].as_f64().unwrap_or(8.0)},
+                 "chaoxing_price": cfg["price_chaoxing"].as_f64().unwrap_or(0.0)},
     }))
 }
 
@@ -1984,13 +2070,13 @@ async fn queue_job_cancel(State(state): State<AppState>, Path(job_id): Path<Stri
     abort_running_job(&state, &job_id).await;
     queue_job_action(&state, &job_id,
         "UPDATE {t} SET status='cancelled', finished_at=?1 WHERE job_id=?2 AND status IN ('pending','running','retrying','waiting')",
-        "任务已取消", true).await
+        "任务已取消", true, false).await
 }
 
 async fn queue_job_retry(State(state): State<AppState>, Path(job_id): Path<String>) -> Json<Value> {
     queue_job_action(&state, &job_id,
         "UPDATE {t} SET status='retrying', retry_count=retry_count+1, error_message='', finished_at=NULL WHERE job_id=?2 AND status IN ('failed','cancelled')",
-        "任务已重新入队", false).await
+        "任务已重新入队", false, true).await
 }
 
 async fn queue_job_delete(State(state): State<AppState>, Path(job_id): Path<String>) -> Json<Value> {
@@ -1998,7 +2084,7 @@ async fn queue_job_delete(State(state): State<AppState>, Path(job_id): Path<Stri
     // 于是"删掉的任务"又出现在列表里（line 上实测过这种反复）。
     abort_running_job(&state, &job_id).await;
     queue_job_action(&state, &job_id,
-        "UPDATE {t} SET deleted_at=?1 WHERE job_id=?2", "任务已删除", true).await
+        "UPDATE {t} SET deleted_at=?1 WHERE job_id=?2", "任务已删除", true, false).await
 }
 
 /// 队列 job 通用动作：定位表 → 执行 UPDATE（?1=now, ?2=job_id）
@@ -2010,8 +2096,16 @@ async fn queue_job_delete(State(state): State<AppState>, Path(job_id): Path<Stri
 ///   - 补投扫描 `find_orders_paid_without_job_sync` 的 NOT EXISTS 不滤 deleted_at，
 ///     有任务行（哪怕已删）就不再补投 → 既不会跑，也不会自愈。
 /// 于是"删了任务"反而把客户卡死。这里让删除/取消的语义变成"这单不要了"。
+///
+/// `reopen_order`：与 `close_order` 对称 ——「重试」把任务复活，就必须同时把订单
+///   从终态拉回来（置 queued）。否则：`queue::sync_order_state` 的回写条件是
+///   `status IN ('pending','accepted','queued','running','paid','waiting')`，订单停在
+///   completed/failed/cancelled 时任务跑完也**不回写**，订单永远显示旧的失败文案；
+///   且重启时 `reclaim_stale_running` 会把这些"订单已终态"的 running 任务直接收尾、
+///   不再重跑。（实证 2026-10-14：后台 retry 复活的任务跑到 100% completed，
+///   订单行仍是 failed —— 就是漏了这一步。）
 async fn queue_job_action(state: &AppState, job_id: &str, sql_tpl: &str, ok_msg: &str,
-                          close_order: bool) -> Json<Value> {
+                          close_order: bool, reopen_order: bool) -> Json<Value> {
     let db = state.db.clone_pool();
     let jid = job_id.to_string();
     let tpl = sql_tpl.to_string();
@@ -2041,6 +2135,17 @@ async fn queue_job_action(state: &AppState, job_id: &str, sql_tpl: &str, ok_msg:
                 rusqlite::params![now, order_id],
             )?;
             log_event(&conn, "order_cancelled", "admin", "任务取消/删除，订单已一并收尾", &order_id)?;
+        }
+        // 与 close_order 对称：重试复活任务时必须把订单从终态拉回 queued，
+        // 否则 sync_order_state 不回写、重启还会被 reclaim_stale_running 收尾。
+        if n > 0 && reopen_order && !order_id.is_empty() {
+            conn.execute(
+                "UPDATE orders SET status='queued', finished_at=NULL, updated_at=?1
+                 WHERE order_id=?2 AND deleted_at IS NULL
+                   AND status IN ('completed','failed','cancelled')",
+                rusqlite::params![now, order_id],
+            )?;
+            log_event(&conn, "order_requeued", "admin", "任务重试，订单已重新入队", &order_id)?;
         }
         Ok(n)
     })
@@ -2402,6 +2507,45 @@ mod specs_tests {
         if let Some(mb) = cgroup_mem_headroom_mb() {
             assert!(mb > 0, "cgroup 余量解析异常: {mb}MB");
         }
+    }
+}
+
+#[cfg(test)]
+mod site_tests {
+    use super::*;
+
+    /// 站点图片地址校验：只放行 http(s) 与上传的 data:image，
+    /// 挡住可注入前端 <img> 的协议（javascript:/file:/data:text 等）
+    #[test]
+    fn site_image_scheme_guard() {
+        assert!(site_image_ok(""));
+        assert!(site_image_ok("https://a.com/x.png"));
+        assert!(site_image_ok("http://a.com/x.png"));
+        assert!(site_image_ok("data:image/jpeg;base64,AAAA"));
+        assert!(!site_image_ok("javascript:alert(1)"));
+        assert!(!site_image_ok("file:///etc/passwd"));
+        assert!(!site_image_ok("data:text/html,<script>"));
+    }
+
+    /// 保存请求的字段映射：对外字段名（qq_group / wechat_qr / donate_qr /
+    /// donate_note）↔ 库内配置键必须一一对应 —— 曾经把库内键名
+    /// （site_wechat_qr）当对外字段名查 body，导致图片"保存成功但永远为空"。
+    #[test]
+    fn site_payload_maps_json_fields_to_config_keys() {
+        let body = json!({"qq_group": " 12345 ", "wechat_qr": "data:image/png;base64,AAA",
+                          "donate_qr": "https://a.com/d.png", "donate_note": " 谢谢支持 "});
+        let w = site_links_payload(&body).unwrap();
+        assert_eq!(w, vec![
+            (SITE_QQ_GROUP, "12345".to_string()),
+            (SITE_WECHAT_QR, "data:image/png;base64,AAA".to_string()),
+            (SITE_DONATE_QR, "https://a.com/d.png".to_string()),
+            (SITE_DONATE_NOTE, "谢谢支持".to_string()),
+        ]);
+        // 部分更新：未传的字段不产生写入（不会清空已配置的图片）
+        let w2 = site_links_payload(&json!({"qq_group": "9"})).unwrap();
+        assert_eq!(w2, vec![(SITE_QQ_GROUP, "9".to_string())]);
+        // 非法图片地址被拒绝
+        assert!(site_links_payload(&json!({"wechat_qr": "javascript:x"})).is_err());
     }
 }
 

@@ -121,7 +121,7 @@ const { cancelEditPricing, editPricing, editingPricing, packagePricing, savePric
           </div>
           <div class="pkg-card">
             <div class="pkg-card-label">
-              学习通（一口价）
+              学习通（一口价 · 0 = 免费）
             </div>
             <div
               v-if="!editingPricing"

@@ -7,7 +7,9 @@
 //! - SQLite 访问层（rusqlite 直连，与 Python 迁移期共享 data/*.db）
 
 mod api;
+mod app_compat;
 mod auth;
+mod blacklist;
 mod crypto;
 mod cx_login;
 mod cx_quiz;
@@ -168,6 +170,12 @@ async fn main() -> anyhow::Result<()> {
     // LLM 用量记账需要一个库句柄（后台看板的 AI 成本统计依赖它）
     llm::init_usage_db(database.clone());
 
+    // IP 黑名单载入进程缓存（中间件每请求都要判，不能查库）
+    match blacklist::load_ip_cache(&database).await {
+        Ok(n) => tracing::info!(blocked_ips = n, "IP 黑名单缓存已载入"),
+        Err(e) => tracing::warn!(error = %e, "IP 黑名单缓存载入失败（本次不拦截任何 IP）"),
+    }
+
     let (progress_tx, _) = tokio::sync::broadcast::channel::<progress::Envelope>(256);
     let state = AppState {
         tasks: Arc::new(DashMap::new()),
@@ -216,6 +224,10 @@ async fn main() -> anyhow::Result<()> {
         .merge(api::router(state.clone()))
         .merge(school_exam::router())
         .merge(pay_routes::router())
+        // APP 端契约（Vmq 监控 APP）：/api/ypay/* 与 /pay/api/ypay/* 都要挂
+        // （APP 的 ApiUrl.build 会把 /api/ 自动补成 /pay/api/）。
+        .merge(app_compat::router())
+        .nest("/pay", app_compat::router())
         .merge(promo_routes::router())
         .nest_service("/static", ServeDir::new("static").append_index_html_on_directories(true))
         .fallback(spa_fallback)
@@ -228,6 +240,9 @@ async fn main() -> anyhow::Result<()> {
         // 限流在 trace 之外（被拦的请求也要留下日志），安全头在最外层
         // （429/404 这类由内层产生的响应同样要带上安全头）。
         .layer(middleware::from_fn_with_state(guard::RateLimiter::from_env(), guard::rate_limit))
+        // IP 黑名单闸门：放在限流之外 —— 黑名单先于节流判定（黑名单 IP 不该再吃配额），
+        // 命中直接 403（含静态页），同时把客户端 IP 注入 extensions 供下单风控取用
+        .layer(middleware::from_fn(guard::ip_guard))
         .layer(middleware::from_fn(guard::security_headers))
         .with_state(state);
 

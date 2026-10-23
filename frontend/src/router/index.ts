@@ -24,6 +24,12 @@ const router = createRouter({
       meta: { title: '邀请有礼' },
     },
     {
+      path: '/donate',
+      name: 'donate',
+      component: () => import('@/views/Donate.vue'),
+      meta: { title: '赞赏' },
+    },
+    {
       path: '/admin',
       name: 'admin',
       component: () => import('@/views/Admin.vue'),

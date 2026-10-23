@@ -7,7 +7,7 @@
  */
 import { onUnmounted } from 'vue'
 import { useDialog } from 'naive-ui'
-import { setConfirmImpl, type ConfirmOptions } from '@/composables/useConfirm'
+import { setAlertImpl, setConfirmImpl, type ConfirmOptions } from '@/composables/useConfirm'
 
 const dialog = useDialog()
 
@@ -40,8 +40,29 @@ function show(opts: ConfirmOptions): Promise<boolean> {
   })
 }
 
+/** 只有「我知道了」一个按钮的提示弹窗（黑名单等拒绝类提示要用弹窗，不能用一闪而过的 toast） */
+function alert(opts: ConfirmOptions): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false
+    const done = () => {
+      if (settled) return
+      settled = true
+      resolve()
+    }
+    dialog.warning({
+      title: opts.title || '提示',
+      content: opts.message,
+      positiveText: opts.confirmText || '我知道了',
+      onPositiveClick: done,
+      onMaskClick: done,
+      onClose: done,
+    })
+  })
+}
+
 setConfirmImpl(show)
-onUnmounted(() => setConfirmImpl(null))
+setAlertImpl(alert)
+onUnmounted(() => { setConfirmImpl(null); setAlertImpl(null) })
 </script>
 
 <template>

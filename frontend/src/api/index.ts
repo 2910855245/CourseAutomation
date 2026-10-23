@@ -75,7 +75,7 @@ export function buildQuery(params?: Record<string, any>): string {
   return qs ? '?' + qs : ''
 }
 
-export interface ApiResponse<T = any> { success: boolean; message: string; data: T }
+export interface ApiResponse<T = any> { success: boolean; message: string; data: T; blacklisted?: boolean; ip_limited?: boolean }
 export interface PlatformResult { website_id: number; name: string; status: string; error?: string; student_name?: string; school_name?: string; student_code?: string; points_total?: number; points_target?: number; courses: CourseItem[] }
 export interface CourseItem { course_id: string; course_name: string; detail_link: string; study_record_url: string; video_total: number; video_completed: number; video_pending: number; video_actionable: number; exam_total: number; exam_done: number; exam_deleted: number; exam_missed: number; exam_actionable: number; exam_pending: number; homework_total: number; homework_done: number; records_loaded: boolean; has_points_system?: boolean; points_total?: number; points_video?: number; points_remaining?: number; days_needed?: number; study_days?: number; total_minutes?: number; work_total?: number; work_pending?: number; work_completed?: number; /** 学习通：课程是否不在有效学习时间内（过期后平台关闭一切学习入口） */ course_ended?: boolean; begin_date?: string; end_date?: string }
 export interface OrderItem {
@@ -91,6 +91,22 @@ export interface OrderItem {
   /** 刷课节奏档位：turbo 暴力 / gentle 保守（balanced 已下线，仅历史订单存在） */
   speed_mode?: string;
   created_at: string; updated_at?: string; accepted_at?: string; started_at?: string; finished_at?: string;
+}
+/** 黑名单账号（按学号唯一；website_id 只是"拉黑来源平台"的记录） */
+export interface BlacklistItem {
+  id: number; username: string; website_id: number; reason: string; created_at: string; created_by: string;
+}
+/** 黑名单 IP（命中即全站 403） */
+export interface IpBlacklistItem {
+  id: number; ip: string; reason: string; created_at: string; created_by: string;
+}
+/** 下单来源记录（按 IP 聚合，供运营"看着拉黑"） */
+export interface IpRecord {
+  ip: string; accounts: number; submissions: number; last_seen: string; blocked: boolean;
+}
+/** IP 限制：同一 IP 在 window_hours 内最多提交 max_accounts 个不同学号 */
+export interface IpLimitConfig {
+  enabled: boolean; max_accounts: number; window_hours: number;
 }
 export interface DashboardAlert {
   level: 'info' | 'warn' | 'danger'
@@ -221,6 +237,19 @@ export const api = {
     fail: (id: string, note?: string) => post<ApiResponse<any>>('/api/admin/orders/' + id + '/fail', { admin_note: note || '' }),
     complete: (id: string) => post<ApiResponse<any>>('/api/admin/orders/' + id + '/complete'),
   },
+  // 风控：账号黑名单 + IP 黑名单 + IP 限制（判定只看学号 / IP，前端弹窗只是提示）
+  adminBlacklist: {
+    accounts: () => get<ApiResponse<{ items: BlacklistItem[] }>>('/api/admin/blacklist'),
+    addAccount: (d: { username: string; website_id?: number; reason?: string }) =>
+      post<ApiResponse<any>>('/api/admin/blacklist', d),
+    removeAccount: (id: number) => del<ApiResponse<any>>('/api/admin/blacklist/' + id),
+    ips: () => get<ApiResponse<{ items: IpBlacklistItem[] }>>('/api/admin/ip-blacklist'),
+    addIp: (d: { ip: string; reason?: string }) => post<ApiResponse<any>>('/api/admin/ip-blacklist', d),
+    removeIp: (id: number) => del<ApiResponse<any>>('/api/admin/ip-blacklist/' + id),
+    ipRecords: () => get<ApiResponse<{ items: IpRecord[] }>>('/api/admin/ip-records'),
+    ipLimitGet: () => get<ApiResponse<IpLimitConfig>>('/api/admin/ip-limit'),
+    ipLimitSet: (d: IpLimitConfig) => post<ApiResponse<IpLimitConfig>>('/api/admin/ip-limit', d),
+  },
   queue: {
     stats: (queue?: string) => get<ApiResponse<any>>('/api/queue/stats' + buildQuery({ queue })),
     jobs: (params?: { status?: string; queue?: string }) =>
@@ -303,10 +332,19 @@ export const api = {
   announcement: {
     get: () => get<ApiResponse<{
       id: number; content: string; active: boolean
-      title?: string; image?: string; contact_type?: string; contact_value?: string
+      title?: string; image?: string
     }>>('/api/announcement'),
-    set: (content: string, extra?: { title?: string; image?: string; contact_type?: string; contact_value?: string }) =>
+    set: (content: string, extra?: { title?: string; image?: string }) =>
       post<ApiResponse<{ id: number }>>('/api/admin/announcement', { content, ...(extra || {}) }),
     disable: () => post<ApiResponse<any>>('/api/admin/announcement/disable'),
+  },
+  // 站点联系方式与赞赏：前台悬浮「加群」按钮 / 赞赏页读 links（公开），
+  // 后台「系统通告」页写 save（鉴权；后端为"部分更新"语义，只提交要改的字段）
+  site: {
+    links: () => get<ApiResponse<{
+      qq_group: string; wechat_qr: string; donate_qr: string; donate_note: string
+    }>>('/api/site/links'),
+    save: (data: { qq_group?: string; wechat_qr?: string; donate_qr?: string; donate_note?: string }) =>
+      post<ApiResponse<any>>('/api/admin/site/links', data),
   },
 }

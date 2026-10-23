@@ -40,7 +40,11 @@ function group(o: OrderItem): Group {
   if (!o.paid) return 'todo'
   return 'running'
 }
+/** 课程还没开课：学校尚未开放学习时间记录，订单转入等待（waiting）。
+    这不是失败也不是"正在刷" —— 标成"待开课"，客户才知道要等开课而不是以为卡住。 */
+function isWaitingCourse(o: OrderItem) { return o.status === 'waiting' }
 function tagLabel(o: OrderItem) {
+  if (isWaitingCourse(o)) return '待开课'
   const g = group(o)
   if (g === 'done') return '已完成'
   if (g === 'failed') return o.status === 'cancelled' ? '已取消' : '失败'
@@ -48,6 +52,7 @@ function tagLabel(o: OrderItem) {
   return '处理中'
 }
 function tagClass(o: OrderItem) {
+  if (isWaitingCourse(o)) return 'warn'
   const g = group(o)
   if (g === 'done') return 'ok'
   if (g === 'failed') return o.status === 'cancelled' ? 'muted' : 'bad'
@@ -55,8 +60,9 @@ function tagClass(o: OrderItem) {
   return 'primary'
 }
 /** 进度条：只要还在跑就显示（0% 也显示，配"等待开始"文案）——
-    此前 0% 时整条隐藏，用户看到"处理中"却什么都没有，以为卡住了 */
-function showProgress(o: OrderItem) { return group(o) === 'running' }
+    此前 0% 时整条隐藏，用户看到"处理中"却什么都没有，以为卡住了。
+    "待开课"（waiting）不显示进度条：它没有在刷课，画一条会让人以为在跑。 */
+function showProgress(o: OrderItem) { return group(o) === 'running' && !isWaitingCourse(o) }
 function pct(o: OrderItem) { return o.progress != null ? o.progress : 0 }
 /** 正在跑但进度还是 0：给一条流动的占位进度，表达"已接单、正在启动" */
 function isIdleProgress(o: OrderItem) { return showProgress(o) && pct(o) <= 0 }
@@ -525,6 +531,10 @@ const fmtMoney = (n: number) => `¥${(n || 0).toFixed(2)}`
           <div v-if="detailOrder.status === 'failed' && detailOrder.admin_note" class="dm-row">
             <span class="dm-label">失败原因</span>
             <span class="dm-value err">{{ detailOrder.admin_note }}</span>
+          </div>
+          <div v-if="isWaitingCourse(detailOrder) && detailOrder.admin_note" class="dm-row">
+            <span class="dm-label">待开课说明</span>
+            <span class="dm-value">{{ detailOrder.admin_note }}</span>
           </div>
           <div v-if="showProgress(detailOrder)" class="dm-progress">
             <div class="ocp-bar">

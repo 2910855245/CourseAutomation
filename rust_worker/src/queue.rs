@@ -454,6 +454,21 @@ async fn sync_order_state(state: &AppState, job: &QueueJob, status: &str, note: 
 /// 直接写死 `status='failed'`，绕过了重试策略 —— 一次网络抖动或 OCR 抖动
 /// 就会把留给它的 3 次重试全部作废，且不写 finished_at。
 async fn handle_job_failure(state: &AppState, job: &QueueJob, kind: QueueKind, err: &str) {
+    // 课程未开课：学校还没开放这门课的学习时间记录，重试多少次都一样，
+    // 而且判失败对客户毫无意义（他没做错任何事）。直接终态 + 订单转 waiting，
+    // 等开课后客户重新提交即可补刷。
+    // （实证 2026-10-21~23：课程 1021759 开课 2026-10-26，8 单被白刷 3 轮
+    //  后判失败，白扔 6000+ 次注定被拒的上报。）
+    if course_not_started_error(err) {
+        let _ = update_job(state, job, kind,
+                           &[("status", "failed".into()),
+                             ("error_message", err.to_string()),
+                             ("finished_at", now_str())]).await;
+        sync_order_state(state, job, "waiting", err).await;
+        tracing::warn!(job_id = %job.job_id, error = %err,
+                       "课程尚未开课，本轮终止（不重试、不判失败；开课后客户可重新提交补刷）");
+        return;
+    }
     if should_retry(job.retry_count, job.max_retries) {
         let _ = update_job(state, job, kind,
                            &[("status", "retrying".into()),
@@ -469,6 +484,14 @@ async fn handle_job_failure(state: &AppState, job: &QueueJob, kind: QueueKind, e
         sync_order_state(state, job, "failed", err).await;
         tracing::warn!(job_id = %job.job_id, error = %err, "任务失败（已用尽重试）");
     }
+}
+
+/// 是不是"课程还没开课"这类不可重试的时间闸。
+///
+/// 认两种来源：扫描侧自己 bail 的"所选课程尚未开课"，
+/// 以及平台回包被识别后 bail 的"课程尚未开课"。
+fn course_not_started_error(err: &str) -> bool {
+    err.contains("尚未开课") || err.contains("还未开始") || err.contains("课程未开放")
 }
 
 /// 执行单个学校任务：登录 → 扫描+刷课 → 状态更新
@@ -501,7 +524,10 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
             let msg = if school_credential_error(&raw) {
                 "登录失败：账号或密码不正确（或账号不存在/被锁定），请核对后重新提交".to_string()
             } else {
-                format!("登录失败: {raw}")
+                // raw 可能自带 "登录失败: " 前缀（login.rs 的退出文案就是它），
+                // 直接再拼一次会得到「登录失败: 登录失败: ...」（2026-10-14 订单
+                // admin_note 已见），这里先剥一次再拼。
+                format!("登录失败: {}", raw.strip_prefix("登录失败: ").unwrap_or(&raw))
             };
             if school_credential_error(&raw) {
                 // 凭据类失败：直接终态，不进入队列重试（避免把账号刷到锁定）
@@ -945,6 +971,22 @@ mod tests {
         // max_retries=0 表示不重试（负数同样按 0 处理，避免 max() 溢出语义歧义）
         assert!(!should_retry(0, 0));
         assert!(!should_retry(0, -1));
+    }
+
+    /// 课程未开课 → 不得进入重试路径（重试多少次平台都会拒收）。
+    ///
+    /// 回归背景（2026-10-23）：课程 1021759 开课 2026-10-26，8 单各重试满 3 次
+    /// 后判失败，白扔 6000+ 次注定被拒的上报。
+    #[test]
+    fn test_course_not_started_is_not_retryable() {
+        assert!(super::course_not_started_error(
+            "所选课程尚未开课：《服务学习与朋辈实践》（2026-10-26 开课），开课后重新提交即可自动补刷"));
+        assert!(super::course_not_started_error(
+            "课程尚未开课（平台未开放本课程的学习时间记录），本轮跳过"));
+        assert!(super::course_not_started_error("课程还未开始!"));
+        // 普通失败仍要照常重试
+        assert!(!super::course_not_started_error("上报请求失败: connection timed out"));
+        assert!(!super::course_not_started_error("登录失败: 账号或密码不正确"));
     }
 
     #[test]

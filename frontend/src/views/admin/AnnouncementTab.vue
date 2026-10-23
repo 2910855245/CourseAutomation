@@ -11,12 +11,64 @@ const announcementText = ref('')
 const announcementActive = ref(false)
 const announcementSaving = ref(false)
 const announcementId = ref(0)
-// 公告附加项：标题 / 图片 / 联系方式（图片支持外链或本地压缩上传）
+// 公告附加项：标题 / 图片（图片支持外链或本地压缩上传）
 const announcementTitle = ref('')
 const announcementImage = ref('')
-const contactType = ref('微信')
-const contactValue = ref('')
-const contactTypes = ['微信', 'QQ', '手机', 'QQ群', '其他']
+
+// 交流群与赞赏：前台悬浮「加群」按钮 + 独立「赞赏」页的数据源（另一组配置键）
+const siteQqGroup = ref('')
+const siteWechatQr = ref('')
+const siteDonateQr = ref('')
+const siteNote = ref('')
+const siteSaving = ref(false)
+
+async function loadSiteLinks() {
+  try {
+    const res = await api.site.links()
+    if (res?.data) {
+      siteQqGroup.value = res.data.qq_group || ''
+      siteWechatQr.value = res.data.wechat_qr || ''
+      siteDonateQr.value = res.data.donate_qr || ''
+      siteNote.value = res.data.donate_note || ''
+    }
+  } catch (e: any) {
+    store.toast(e?.message || '加载交流群配置失败', 'error')
+  }
+}
+
+/** 通用选图：压缩成 data URL 写入目标字段（与公告图同一套压缩逻辑） */
+async function pickSiteImage(e: Event, target: 'wechat' | 'donate') {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  if (!file.type.startsWith('image/')) { store.toast('请选择图片文件', 'warning'); return }
+  try {
+    const dataUrl = await compressImage(file)
+    if (dataUrl.length > 700 * 1024) { store.toast('图片过大，请换一张（压缩后需小于 700KB）', 'error'); return }
+    if (target === 'wechat') siteWechatQr.value = dataUrl
+    else siteDonateQr.value = dataUrl
+  } catch {
+    store.toast('图片处理失败', 'error')
+  } finally {
+    input.value = ''
+  }
+}
+
+async function saveSiteLinks() {
+  siteSaving.value = true
+  try {
+    const res = await api.site.save({
+      qq_group: siteQqGroup.value.trim(),
+      wechat_qr: siteWechatQr.value,
+      donate_qr: siteDonateQr.value,
+      donate_note: siteNote.value.trim(),
+    })
+    if (res?.success === false) { store.toast(res.message || '保存失败', 'error'); return }
+    store.toast('已保存，前台即时生效', 'success')
+  } catch (e: any) {
+    store.toast(e?.message || '保存失败', 'error')
+  } finally { siteSaving.value = false }
+}
 
 async function loadAnnouncement() {
   try {
@@ -27,8 +79,6 @@ async function loadAnnouncement() {
       announcementId.value = res.data.id || 0
       announcementTitle.value = res.data.title || ''
       announcementImage.value = res.data.image || ''
-      contactType.value = res.data.contact_type || '微信'
-      contactValue.value = res.data.contact_value || ''
     }
   } catch (e: any) {
     store.toast(e?.message || '加载公告失败', 'error')
@@ -84,8 +134,6 @@ async function publishAnnouncement() {
     const res = await api.announcement.set(announcementText.value.trim(), {
       title: announcementTitle.value.trim(),
       image: announcementImage.value,
-      contact_type: contactValue.value.trim() ? contactType.value : '',
-      contact_value: contactValue.value.trim(),
     })
     if (res?.success === false) { store.toast(res.message || '发布失败', 'error'); return }
     if (res?.data?.id) announcementId.value = res.data.id
@@ -112,7 +160,10 @@ async function disableAnnouncement() {
   }
 }
 
-onMounted(loadAnnouncement)
+onMounted(() => {
+  loadAnnouncement()
+  loadSiteLinks()
+})
 </script>
 
 <template>
@@ -158,15 +209,6 @@ onMounted(loadAnnouncement)
         </div>
       </div>
       <div class="field">
-        <label>联系方式（可空，弹窗里显示并支持一键复制）</label>
-        <div class="contact-row">
-          <select v-model="contactType" class="text-input contact-type">
-            <option v-for="t in contactTypes" :key="t" :value="t">{{ t }}</option>
-          </select>
-          <input v-model="contactValue" class="text-input" placeholder="例：fuk_help / 123456789">
-        </div>
-      </div>
-      <div class="field">
         <label>公告内容</label>
         <textarea
           v-model="announcementText"
@@ -190,6 +232,74 @@ onMounted(loadAnnouncement)
           @click="disableAnnouncement"
         >
           停用公告
+        </button>
+      </div>
+    </div>
+
+    <div class="settings-card">
+      <div class="card-head">
+        <div class="card-title-wrap">
+          <h3>交流群与赞赏</h3>
+          <p class="settings-hint">
+            前台右下角悬浮「加群」按钮与独立「赞赏」页的数据源；两项都不填则前台不显示入口。
+          </p>
+        </div>
+      </div>
+      <div class="field">
+        <label>QQ 群号（可空，按钮点开后可一键复制）</label>
+        <input
+          v-model="siteQqGroup"
+          class="text-input"
+          placeholder="例：123456789"
+          maxlength="32"
+        >
+      </div>
+      <div class="field">
+        <label>微信群二维码（可空，支持上传或外链）</label>
+        <div class="image-row">
+          <img v-if="siteWechatQr" :src="siteWechatQr" alt="微信群二维码预览" class="image-preview">
+          <div v-else class="image-empty">未选择图片</div>
+          <div class="image-actions">
+            <label class="btn btn-ghost btn-file">
+              选择图片
+              <input type="file" accept="image/*" @change="pickSiteImage($event, 'wechat')">
+            </label>
+            <input v-model="siteWechatQr" class="text-input" placeholder="或粘贴图片链接 https://...">
+            <button v-if="siteWechatQr" class="btn btn-ghost" @click="siteWechatQr = ''">移除</button>
+          </div>
+        </div>
+      </div>
+      <div class="field">
+        <label>赞赏码（可空，支持上传或外链；展示在「赞赏」页）</label>
+        <div class="image-row">
+          <img v-if="siteDonateQr" :src="siteDonateQr" alt="赞赏码预览" class="image-preview">
+          <div v-else class="image-empty">未选择图片</div>
+          <div class="image-actions">
+            <label class="btn btn-ghost btn-file">
+              选择图片
+              <input type="file" accept="image/*" @change="pickSiteImage($event, 'donate')">
+            </label>
+            <input v-model="siteDonateQr" class="text-input" placeholder="或粘贴图片链接 https://...">
+            <button v-if="siteDonateQr" class="btn btn-ghost" @click="siteDonateQr = ''">移除</button>
+          </div>
+        </div>
+      </div>
+      <div class="field">
+        <label>赞赏页文案（可空，显示在赞赏码上方）</label>
+        <input
+          v-model="siteNote"
+          class="text-input"
+          placeholder="例：如果这个站点帮你省下了时间，欢迎请作者喝杯奶茶。"
+          maxlength="200"
+        >
+      </div>
+      <div class="announcement-actions">
+        <button
+          class="btn btn-primary"
+          :disabled="siteSaving"
+          @click="saveSiteLinks"
+        >
+          {{ siteSaving ? '保存中...' : '保存交流群与赞赏' }}
         </button>
       </div>
     </div>
@@ -296,7 +406,7 @@ onMounted(loadAnnouncement)
   flex-wrap: wrap;
 }
 
-/* ==================== 标题 / 图片 / 联系方式 ==================== */
+/* ==================== 标题 / 图片 ==================== */
 .text-input {
   width: 100%;
   padding: 10px 14px;
@@ -355,9 +465,6 @@ onMounted(loadAnnouncement)
   opacity: 0;
   cursor: pointer;
 }
-
-.contact-row { display: flex; gap: 10px; }
-.contact-type { width: 120px; flex-shrink: 0; }
 
 .btn {
   display: inline-flex;

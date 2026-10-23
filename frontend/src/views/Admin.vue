@@ -5,6 +5,7 @@ import { useRealtimeStore } from '@/stores/realtime'
 import { usePlatformNames } from '@/composables/usePlatformNames'
 import { useAdminStore } from '@/stores/admin'
 import { useAuth } from '@/composables/useAuth'
+import { useBlacklist } from '@/composables/useBlacklist'
 import { useDashboard } from '@/composables/useDashboard'
 import { useOrders } from '@/composables/useOrders'
 import { usePayments } from '@/composables/usePayments'
@@ -22,6 +23,7 @@ import PricingTab from '@/views/admin/PricingTab.vue'
 import PromoTab from '@/views/admin/PromoTab.vue'
 import YpayTab from '@/views/admin/YpayTab.vue'
 import AnnouncementTab from '@/views/admin/AnnouncementTab.vue'
+import BlacklistTab from '@/views/admin/BlacklistTab.vue'
 import LogsTab from '@/views/admin/LogsTab.vue'
 
 const store = useAppStore()
@@ -32,6 +34,7 @@ const { adminUser, adminPass, loginErr, currentRole, isLoggedIn, pwForm, changin
 const dashboard = useDashboard()
 const { allSidebarItems, visibleSidebarGroups, sidebarGroups, sidebarCollapsed, mobileSidebarOpen, loadingDash, dash, dashError, fmtDate, fmtShortDate, fmtMoney, loadDashboard, statusLabel, statusClass, orderStatusLabel, orderStatusClass, maxStatusCount, maxBarRevenue, maxBarOrders, totalPlatformOrders } = dashboard
 const orders = useOrders()
+const blacklist = useBlacklist()
 const payments = usePayments()
 const sysConfig = useSystemConfig()
 const ypayAdmin = useYpayAdmin()
@@ -42,7 +45,7 @@ const { load: loadPlatformNames, getName: getPlatformName, platformNames } = use
 // ── Tab switching (orchestrates across composables) ──
 // proxy（网络代理）与旧 risk（风险监控）两页已删除：对应后端接口不存在，页面按钮全是 404。
 // domain_monitor（域名监控）是**后端先行**重建的：接口齐了才挂页签。
-type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'pricing' | 'ypay' | 'promo' | 'domain_monitor' | 'announcement' | 'security' | 'logs'
+type SidebarKey = 'overview' | 'orders' | 'queue' | 'queue_school' | 'queue_chaoxing' | 'pricing' | 'ypay' | 'promo' | 'domain_monitor' | 'announcement' | 'blacklist' | 'security' | 'logs'
 const activeTab = ref<SidebarKey>('overview')
 const expandedSidebarItems = ref<string[]>(['queue'])
 
@@ -59,6 +62,7 @@ function switchTab(tab: SidebarKey) {
     // queue 数据由 watch(activeTab) → setQueueFilter 统一加载，此处不重复调用
   if (tab === 'security') { pwForm.old_password = ''; pwForm.new_password = ''; pwForm.confirm_password = ''; if (currentRole.value === 'admin') sysConfig.loadDeepseekKey() }
   if (tab === 'pricing') sysConfig.loadPricing()
+  if (tab === 'blacklist') blacklist.loadAll()
   if (tab === 'ypay') ypayAdmin.loadYpay()
 
 }
@@ -124,6 +128,7 @@ useAdminStore().init({
   auth: { adminUser, adminPass, loginErr, currentRole, isLoggedIn, pwForm, changingPw, doLogin, logout, changeAdminPassword },
   dashboard,
   orders,
+  blacklist,
   payments,
   sysConfig,
   ypay: ypayAdmin,
@@ -309,6 +314,9 @@ useAdminStore().init({
 
           <!-- Announcement Tab -->
           <AnnouncementTab v-if="activeTab === 'announcement'" />
+
+          <!-- 拉黑管理（账号黑名单 / IP 限制 / IP 黑名单 / 下单来源记录） -->
+          <BlacklistTab v-if="activeTab === 'blacklist'" />
 
           <!-- Logs Tab（运行日志 / 上报记录） -->
           <LogsTab v-if="activeTab === 'logs'" />

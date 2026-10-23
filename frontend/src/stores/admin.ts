@@ -9,6 +9,7 @@
 import { markRaw, shallowRef } from 'vue'
 import { defineStore } from 'pinia'
 import { useAuth } from '@/composables/useAuth'
+import { useBlacklist } from '@/composables/useBlacklist'
 import { useDashboard } from '@/composables/useDashboard'
 import { useOrders } from '@/composables/useOrders'
 import { usePayments } from '@/composables/usePayments'
@@ -23,6 +24,7 @@ export interface AdminStateContainer {
   auth: ReturnType<typeof useAuth>
   dashboard: ReturnType<typeof useDashboard>
   orders: ReturnType<typeof useOrders>
+  blacklist: ReturnType<typeof useBlacklist>
   payments: ReturnType<typeof usePayments>
   sysConfig: ReturnType<typeof useSystemConfig>
   ypay: ReturnType<typeof useYpayAdmin>
