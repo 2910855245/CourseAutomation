@@ -1812,6 +1812,8 @@ async fn admin_order_execute(State(state): State<AppState>, Path(order_id): Path
                                                     crate::llm::MODEL_FLASH).await;
         let exam_enabled = crate::queue::config_get(&state2.db, "exam_solve_enabled").await
             .map(|v| v != "0").unwrap_or(true);
+        // 学生姓名回传槽：扫描时顺带从平台页面取到，落库给后台列表显示
+        let student_name_slot = std::sync::Arc::new(std::sync::Mutex::new(None));
         let task = crate::scan::ScanTaskInput {
             order_id: oid_task.clone(),
             username,
@@ -1825,8 +1827,25 @@ async fn admin_order_execute(State(state): State<AppState>, Path(order_id): Path
             api_key,
             ai_model,
             exam_enabled,
+            student_name_out: Some(student_name_slot.clone()),
         };
         let result = crate::scan::run_scan_and_study(&task, &push_url, &push_token).await;
+        // 姓名落库（只在订单还没有姓名时写入，不覆盖已有值）
+        if let Some(name) = student_name_slot.lock().ok().and_then(|g| g.clone()) {
+            let pool = state2.db.raw_pool().clone();
+            let oid = oid_task.clone();
+            let _ = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                let conn = pool.get()?;
+                conn.execute(
+                    "UPDATE orders SET customer_name = ?1
+                     WHERE order_id = ?2 AND deleted_at IS NULL
+                       AND (customer_name IS NULL OR TRIM(customer_name) = '')",
+                    rusqlite::params![name, oid],
+                )?;
+                Ok(())
+            })
+            .await;
+        }
         match &result {
             Ok(()) => finish_manual_run(&state2, &oid_task, true, "").await,
             Err(e) => finish_manual_run(&state2, &oid_task, false, &e.to_string()).await,
@@ -1978,17 +1997,20 @@ async fn queue_jobs(
                 continue;
             }
             let mut sql = format!(
-                "SELECT job_id, username, order_id, status, progress, current_step_name,
-                        error_message, retry_count, verified, job_type, created_at,
-                        started_at, finished_at, lane, priority
-                 FROM {table} WHERE deleted_at IS NULL"
+                "SELECT q.job_id, q.username, q.order_id, q.status, q.progress, q.current_step_name,
+                        q.error_message, q.retry_count, q.verified, q.job_type, q.created_at,
+                        q.started_at, q.finished_at, q.lane, q.priority,
+                        COALESCE(o.customer_name, '')
+                 FROM {table} q
+                 LEFT JOIN orders o ON o.order_id = q.order_id AND o.deleted_at IS NULL
+                 WHERE q.deleted_at IS NULL"
             );
             let mut args: Vec<String> = Vec::new();
             if !status_filter.is_empty() {
-                sql.push_str(" AND status=?");
+                sql.push_str(" AND q.status=?");
                 args.push(status_filter.clone());
             }
-            sql.push_str(" ORDER BY created_at DESC LIMIT 200");
+            sql.push_str(" ORDER BY q.created_at DESC LIMIT 200");
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map(rusqlite::params_from_iter(args.iter()), |r| {
                 Ok(json!({
@@ -2007,6 +2029,8 @@ async fn queue_jobs(
                     "finished_at": r.get::<_, Option<String>>(12)?,
                     "lane": r.get::<_, Option<String>>(13)?.unwrap_or_else(|| "paid".into()),
                     "priority": r.get::<_, i64>(14).unwrap_or(0),
+                    // 学生姓名：JOIN orders 取，订单没有姓名的历史数据退化成空串
+                    "customer_name": r.get::<_, Option<String>>(15)?.unwrap_or_default(),
                     "queue": queue_tag,
                 }))
             })?

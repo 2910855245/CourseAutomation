@@ -247,6 +247,9 @@ async fn create_order(db: &Db, username: &str, password: &str, item: &Value,
     // 刷课节奏档位：未知/缺省一律落「均衡」，保证老前端与历史数据行为不变
     let speed_mode = crate::speed::SpeedMode::parse(
         item["speed_mode"].as_str().unwrap_or("")).as_str().to_string();
+    // 学生姓名：来自前端扫描结果（扫描时平台页面已带姓名），
+    // 后台列表显示"姓名（学号）"用。只取文本、不做长度以外的加工。
+    let customer_name = item["student_name"].as_str().unwrap_or("").trim().to_string();
     let user_id = user_id.to_string();
 
     // 响应用的副本（闭包 move 后仍可用）
@@ -264,11 +267,12 @@ async fn create_order(db: &Db, username: &str, password: &str, item: &Value,
                                  username, password, website_id, task_type, course_ids,
                                  video_count, exam_count, price, notes, status, paid,
                                  admin_note, created_at, updated_at, speed_mode)
-             VALUES (?1,'','','','unprocessed',?2,'','',?3,?12,?4,?5,?6,?7,?8,?9,'',
+             VALUES (?1,'','','','unprocessed',?2,?13,'',?3,?12,?4,?5,?6,?7,?8,?9,'',
                      'pending',0,'',?10,?10,?11)",
             rusqlite::params![
                 order_id2, user_id, username, website_id, task_type,
                 course_ids, video_count, exam_count, price, now, speed_mode, password,
+                customer_name,
             ],
         )?;
         Ok(())

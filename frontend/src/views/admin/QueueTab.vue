@@ -309,7 +309,14 @@ function pctText(v: number | undefined) {
               :key="j.job_id"
             >
               <td><code class="code-tag">{{ j.job_id?.slice(0, 10) }}...</code></td>
-              <td>{{ j.username || '-' }}</td>
+              <td>
+                <!-- 姓名在上、学号在下：只有学号时人认不出是谁 -->
+                <div v-if="j.customer_name" class="q-user">
+                  <span class="q-user-name">{{ j.customer_name }}</span>
+                  <span class="q-user-code mono">{{ j.username || '-' }}</span>
+                </div>
+                <span v-else>{{ j.username || '-' }}</span>
+              </td>
               <td>
                 <code
                   v-if="j.order_id"
@@ -651,6 +658,22 @@ function pctText(v: number | undefined) {
 .status-tag.bad { background: var(--c-danger-bg); color: var(--c-danger); }
 .status-tag.primary { background: var(--c-primary-bg); color: var(--c-primary); }
 .status-tag.muted { background: var(--c-bg); color: var(--c-text-muted); }
+
+/* ==================== 用户（姓名 + 学号） ==================== */
+.q-user {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.25;
+}
+.q-user-name {
+  font-weight: 600;
+  color: var(--c-text);
+}
+.q-user-code {
+  font-size: 12px;
+  color: var(--c-text-muted);
+}
 
 /* ==================== 进度条 ==================== */
 .q-progress {

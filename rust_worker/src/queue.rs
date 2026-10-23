@@ -356,6 +356,27 @@ async fn sync_completed_steps(state: &AppState, job: &QueueJob, kind: QueueKind)
     .await;
 }
 
+/// 把学生姓名写进订单（后台列表显示"姓名（学号）"）。
+///
+/// 只在**该订单还没有姓名**时写入，不覆盖已有值 ——
+/// 平台页面偶发缺姓名时不该把已记下的名字抹掉。
+async fn save_customer_name(state: &AppState, order_id: &str, name: &str) {
+    let pool = state.db.raw_pool().clone();
+    let order_id = order_id.to_string();
+    let name = name.to_string();
+    let _ = tokio::task::spawn_blocking(move || -> Result<()> {
+        let conn = pool.get()?;
+        conn.execute(
+            "UPDATE orders SET customer_name = ?1
+             WHERE order_id = ?2 AND deleted_at IS NULL
+               AND (customer_name IS NULL OR TRIM(customer_name) = '')",
+            rusqlite::params![name, order_id],
+        )?;
+        Ok(())
+    })
+    .await;
+}
+
 /// 写成功后统一广播 `job.update`（topic `queue`）——队列状态变更的唯一扼流点。
 /// 若任务挂在订单上，额外向 `order:{order_id}` 发一条 `order.update` 作为
 /// 「该订单有变化」的信号；前端收到后应重新拉取该订单，而不是把队列状态
@@ -555,6 +576,9 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
     let exam_enabled = crate::queue::config_get(&state.db, "exam_solve_enabled").await
         .map(|v| v != "0").unwrap_or(true);
 
+    // 学生姓名回传槽：扫描时顺带从平台页面取到，落库给后台列表显示
+    let student_name_slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+
     let task = ScanTaskInput {
         order_id: if job.order_id.is_empty() { job.job_id.clone() } else { job.order_id.clone() },
         username: job.username.clone(),
@@ -569,9 +593,17 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
         api_key,
         ai_model,
         exam_enabled,
+        student_name_out: Some(student_name_slot.clone()),
     };
 
     let result = crate::scan::run_scan_and_study(&task, &state.push_url, &state.push_token).await;
+    // 姓名落库：后台队列/订单列表显示"姓名（学号）"，方便人工核对客户。
+    // 只在订单还没姓名时写入，不覆盖已有值。
+    if let Some(name) = student_name_slot.lock().ok().and_then(|g| g.clone()) {
+        if !job.order_id.is_empty() {
+            save_customer_name(state, &job.order_id, &name).await;
+        }
+    }
     match result {
         Ok(()) => {
             let _ = update_job(state, job, QueueKind::School,

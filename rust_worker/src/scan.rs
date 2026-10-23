@@ -57,6 +57,13 @@ pub struct ScanTaskInput {
     /// 考试环节总开关（关闭时只刷视频，考试留给人工）
     #[serde(default)]
     pub exam_enabled: bool,
+    /// 学生姓名的回传槽（出参）。
+    ///
+    /// 扫描时从课程列表页的用户资料区顺带取到姓名，写进这里，由调用方落库。
+    /// 用出参而不是让 scan 直接写库，是为了保持 scan 层不依赖数据库
+    /// （见 DURATION_CACHE 上面的说明）—— 落库是调用方（队列/接口层）的事。
+    #[serde(skip)]
+    pub student_name_out: Option<Arc<std::sync::Mutex<Option<String>>>>,
 }
 
 /// 课程条目（从 /user/index HTML 解析）
@@ -211,6 +218,35 @@ pub async fn fetch_course_list_html(client: &Client, cookie: &str, base_url: &st
         anyhow::bail!("平台数据库异常");
     }
     Ok(html)
+}
+
+/// 从课程列表页的用户资料区提取学生姓名。
+///
+/// 平台在 `.user-head` 区域渲染「姓名 + 学号」：
+/// `<div class="name">王国梁 <span style="color:#65d23c">251060150507</span></div>`
+/// 三个平台（泰斯/duxing/超贤）结构一致。取 `.user .name` 的**直接文本**，
+/// 剥掉尾部学号 —— 不能用 `.name a`（那是课程名，不是人名）。
+///
+/// 用途：后台队列/订单列表显示"姓名（学号）"，方便人工核对客户。
+/// 拿不到就返回 None（平台改版或会话失效），显示层退化成学号即可。
+pub fn parse_student_name(html: &str) -> Option<String> {
+    use scraper::{Html, Selector};
+    let doc = Html::parse_document(html);
+    // 用户资料区的姓名节点：`.user-head .user .con .name`
+    let sel = Selector::parse(".user-head .user .con .name").ok()?;
+    let node = doc.select(&sel).next()?;
+    let text: String = node.text().collect::<String>();
+    // 去掉尾部的学号数字（"王国梁 251060150507" → "王国梁"）
+    let name = text
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if name.is_empty() || name.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(name)
 }
 
 /// 解析课程列表 HTML（对齐 get_courses_with_diag 的 xpath 提取）：
@@ -641,7 +677,20 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
         .filter(|c| !c.is_empty())
         .collect();
 
-    let courses = fetch_course_list(&client, &task.cookie_str, &base_url).await?;
+    // 一次请求同时拿课程列表与学生姓名：页面里两样都有，不额外发请求
+    let html = fetch_course_list_html(&client, &task.cookie_str, &base_url).await?;
+    let courses = parse_course_list(&html);
+    // 学生姓名：后台列表要显示"姓名（学号）"，方便人工核对客户。
+    // scan 层不碰数据库（见 DURATION_CACHE 的说明），由调用方落库。
+    if let Some(name) = parse_student_name(&html) {
+        if let Some(slot) = &task.student_name_out {
+            if let Ok(mut g) = slot.lock() {
+                if g.is_none() {
+                    *g = Some(name);
+                }
+            }
+        }
+    }
     let picked: Vec<&CourseItem> = courses.iter()
         .filter(|c| filter.is_empty() || filter.contains(&c.course_id))
         .collect();
@@ -910,6 +959,32 @@ mod tests {
         // 没有时间信息 → 0（= 平台没给，按"无闸"处理，不误伤正常课程）
         assert_eq!(parse_start_ts("开课时间："), 0);
         assert_eq!(parse_start_ts(""), 0);
+    }
+
+    /// 姓名提取：后台列表要显示"姓名（学号）"。
+    ///
+    /// 平台在用户资料区渲染「姓名 + 学号」：
+    /// `<div class="name">王国梁 <span style="color:#65d23c">251060150507</span></div>`
+    /// 三个学校平台结构一致（2026-10-23 实测）。
+    #[test]
+    fn test_parse_student_name() {
+        let html = r#"
+        <div class="user-head"><div class="box"><div class="user">
+          <div class="portrait"><a href="/user/member">
+            <img src="/static/home/images/portrait-default.png" alt="王国梁"></a></div>
+          <div class="con">
+            <div class="name">王国梁 <span style="color: #65d23c">251060150507</span></div>
+            <div class="text">个性签名：还没想好要写点什么...</div>
+          </div>
+        </div></div></div>"#;
+        assert_eq!(parse_student_name(html).as_deref(), Some("王国梁"));
+        // 没有资料区 → None（显示层退化成学号）
+        assert_eq!(parse_student_name("<div>登录页</div>"), None);
+        // 只有学号（没有姓名）→ None，不能把学号当名字显示
+        let only_code = r#"<div class="user-head"><div class="box"><div class="user">
+            <div class="con"><div class="name">251060150507</div></div>
+        </div></div></div>"#;
+        assert_eq!(parse_student_name(only_code), None);
     }
 
     /// 课程列表解析：`.time` 节点的日期要落到 start_ts，否则扫描侧过滤不了未开课课程。

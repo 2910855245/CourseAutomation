@@ -549,7 +549,7 @@ export function useHomeState() {
           price = backendTotal
           price = free ? 0 : parseFloat(price.toFixed(2))
         }
-        return { website_id: wid, task_type: taskType, course_ids: g.ids, video_count: g.v, exam_count: g.e, price, course_details: g.details, speed_mode: speedMode.value }
+        return { website_id: wid, task_type: taskType, course_ids: g.ids, video_count: g.v, exam_count: g.e, price, course_details: g.details, speed_mode: speedMode.value, student_name: studentName.value }
       })
       payTotal.value = orders.reduce((s, o) => s + o.price, 0)
       const orderUsername = isChaoxing ? chaoxingUsername.value.trim() : username.value.trim()
