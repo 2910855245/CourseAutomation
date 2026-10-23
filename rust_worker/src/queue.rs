@@ -377,6 +377,22 @@ async fn save_customer_name(state: &AppState, order_id: &str, name: &str) {
     .await;
 }
 
+/// 把课程开课时间写进队列任务（调度器据此到点自动重新入队）。
+async fn save_open_ts(state: &AppState, job_id: &str, kind: QueueKind, open_ts: i64) {
+    let pool = state.db.raw_pool().clone();
+    let job_id = job_id.to_string();
+    let table = kind.table();
+    let _ = tokio::task::spawn_blocking(move || -> Result<()> {
+        let conn = pool.get()?;
+        conn.execute(
+            &format!("UPDATE {table} SET open_ts = ?1 WHERE job_id = ?2"),
+            rusqlite::params![open_ts, job_id],
+        )?;
+        Ok(())
+    })
+    .await;
+}
+
 /// 写成功后统一广播 `job.update`（topic `queue`）——队列状态变更的唯一扼流点。
 /// 若任务挂在订单上，额外向 `order:{order_id}` 发一条 `order.update` 作为
 /// 「该订单有变化」的信号；前端收到后应重新拉取该订单，而不是把队列状态
@@ -580,6 +596,8 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
 
     // 学生姓名回传槽：扫描时顺带从平台页面取到，落库给后台列表显示
     let student_name_slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    // 课程开课时间回传槽：扫描发现课没开课时回传，调度器据此到点自动重新入队
+    let open_ts_slot = std::sync::Arc::new(std::sync::Mutex::new(0i64));
 
     let task = ScanTaskInput {
         order_id: if job.order_id.is_empty() { job.job_id.clone() } else { job.order_id.clone() },
@@ -596,6 +614,7 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
         ai_model,
         exam_enabled,
         student_name_out: Some(student_name_slot.clone()),
+        open_ts_out: Some(open_ts_slot.clone()),
     };
 
     let result = crate::scan::run_scan_and_study(&task, &state.push_url, &state.push_token).await;
@@ -605,6 +624,12 @@ async fn execute_school_job(state: &AppState, job: &QueueJob) {
         if !job.order_id.is_empty() {
             save_customer_name(state, &job.order_id, &name).await;
         }
+    }
+    // 开课时间落库：扫描发现课没开课时记下来，调度器据此在开课那一刻
+    // 自动把任务重新入队跑完（否则订单一直挂在 waiting 等人工点补刷）。
+    let open_ts = open_ts_slot.lock().ok().map(|g| *g).unwrap_or(0);
+    if open_ts > 0 {
+        save_open_ts(state, &job.job_id, QueueKind::School, open_ts).await;
     }
     match result {
         Ok(()) => {
@@ -797,6 +822,61 @@ async fn reclaim_stale_running(state: &AppState, kind: QueueKind) {
     }
 }
 
+/// 「待开课」任务到点自动重新入队。
+///
+/// 课程未开课时任务落 `waiting`（不判失败、不重试）。等课程真的开课了，
+/// 这里把它改回 `retrying`，让调度器正常认领跑完 —— 订单随之变成 completed。
+/// 客户要的是"到点自动刷好"，不是"到点还得有人点补刷"。
+///
+/// `open_ts` 是扫描时从课程列表页「开课时间」解析出来的（Unix 秒）。
+/// 为 0 表示没解析到开课时间（平台没给/格式变了），这类任务保持 waiting，
+/// 仍可由人工点「补刷」推进 —— 自动判断不能瞎猜。
+async fn promote_started_courses(state: &AppState, kind: QueueKind) {
+    let pool = state.db.raw_pool().clone();
+    let table = kind.table();
+    let now = crate::queue::local_secs() as i64;
+    let result = tokio::task::spawn_blocking(move || -> Result<usize> {
+        let conn = pool.get()?;
+        // 只动 waiting 的任务；已经跑完/失败的不碰。
+        // 订单一并拉回 queued：waiting 是终态，不拉回来的话
+        // sync_order_state 不会回写 completed（它的 WHERE 条件不含 waiting）。
+        //
+        // promoted_ts 判据：同一个开课时间只自动尝试一次。
+        // 平台到点仍拒收时，扫描会把同一个 open_ts 写回来 —— 没有这个判据
+        // 就会每 30 秒捞起重跑一轮，白打平台接口。
+        let n = conn.execute(
+            &format!(
+                "UPDATE {table} SET status='retrying', error_message='', finished_at=NULL,
+                        promoted_ts = open_ts
+                 WHERE status='waiting' AND open_ts > 0 AND open_ts <= ?1
+                   AND (promoted_ts IS NULL OR promoted_ts <> open_ts)
+                   AND deleted_at IS NULL"
+            ),
+            rusqlite::params![now],
+        )?;
+        if n > 0 {
+            // 订单同步回 queued（清掉旧的"待开课"说明）
+            conn.execute(
+                "UPDATE orders SET status='queued', admin_note='', finished_at=NULL, updated_at=?1
+                 WHERE deleted_at IS NULL AND status='waiting'
+                   AND order_id IN (SELECT order_id FROM {table}
+                                    WHERE status='retrying' AND open_ts > 0 AND open_ts <= ?1)",
+                rusqlite::params![now],
+            )?;
+        }
+        Ok(n)
+    })
+    .await;
+    match result {
+        Ok(Ok(n)) if n > 0 => {
+            tracing::info!(count = n, queue = kind.name(), "课程已开课，待开课任务自动重新入队");
+        }
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => tracing::warn!(error = %e, queue = kind.name(), "待开课任务自动入队失败"),
+        Err(e) => tracing::warn!(error = %e, queue = kind.name(), "待开课任务自动入队失败（异常）"),
+    }
+}
+
 /// 调度器主循环（每队列一个 tokio task）
 ///
 /// 并发上限与暂停状态都从 system_config 动态读取（管理端可热更新）：
@@ -811,6 +891,9 @@ pub async fn dispatcher_loop(state: Arc<AppState>, kind: QueueKind) {
     reclaim_stale_running(&state, kind).await;
     // 配置缓存：(上次刷新时间, 付费上限, 免费上限, 是否暂停)，避免每轮都查库
     let mut cfg_cache: RuntimeConfig = RuntimeConfig::initial();
+    // 「待开课」自动入队的独立计时器 —— 不能复用 cfg_cache.refreshed_at：
+    // 那个计时器每 5s 被刷新重置，挂在它后面判断永远为 false。
+    let mut last_promote = std::time::Instant::now();
     loop {
         // 显式 false 才停用（常规暂停走 queue_paused 热配置，不重启进程）
         if !dispatcher_enabled() {
@@ -823,6 +906,14 @@ pub async fn dispatcher_loop(state: Arc<AppState>, kind: QueueKind) {
         if cfg_cache.paused {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             continue;
+        }
+
+        // 「待开课」任务：开课时间一到就自动重新入队跑完。
+        // 不这么做，订单会一直挂在 waiting 等人工点补刷 —— 客户要的是
+        // "到点自动刷好"，不是"到点还得有人管"。
+        if last_promote.elapsed() > std::time::Duration::from_secs(30) {
+            last_promote = std::time::Instant::now();
+            promote_started_courses(&state, kind).await;
         }
 
         // 先付费后免费。任一条认领成功就立刻重试另一条（不 sleep），
@@ -1085,6 +1176,65 @@ mod tests {
         // 真失败/已取消的重试：照常 +1
         assert_eq!(get("JOB-FAIL"), ("retrying".to_string(), 2));
         assert_eq!(get("JOB-CANC"), ("retrying".to_string(), 1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 「待开课」到点自动重新入队：只有 open_ts 已到的任务才被捞起。
+    ///
+    /// 用真实 DB 验证（复刻 SQL 逻辑的单测没有意义）。
+    #[test]
+    fn test_promote_started_courses_only_when_open_time_reached() {
+        let dir = std::env::temp_dir().join(format!("rust_worker_promote_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("promote.db");
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(path.to_str().unwrap()).unwrap();
+        let now = crate::queue::local_secs() as i64;
+        {
+            let conn = db.clone_pool().get().unwrap();
+            for (jid, st, ots, pts) in [
+                // 已到开课时间、还没自动试过 → 应被捞起
+                ("JOB-DUE", "waiting", now - 3600i64, 0i64),
+                // 还没到 → 保持 waiting
+                ("JOB-EARLY", "waiting", now + 86400, 0),
+                // 没解析到开课时间 → 保持 waiting（不瞎猜）
+                ("JOB-UNKNOWN", "waiting", 0, 0),
+                // 同一个开课时间已经自动试过了 → 不再重复捞（防死循环）
+                ("JOB-TRIED", "waiting", now - 3600, now - 3600),
+                // 非 waiting 状态 → 不该被碰
+                ("JOB-DONE", "completed", now - 3600, 0),
+            ] {
+                conn.execute(
+                    "INSERT INTO queue_jobs_school
+                     (job_id, username, password, website_id, job_type, course_ids, status,
+                      priority, lane, progress, total_steps, completed_steps, current_step_name,
+                      error_message, retry_count, max_retries, task_id, order_id, result_data, verified,
+                      created_at, speed_mode, open_ts, promoted_ts)
+                     VALUES (?1,'u','p',1,'video','[]',?2,0,'paid',0,0,0,'','',0,3,
+                             NULL,?1,'{}',0,'2026-01-01 00:00:00','gentle',?3,?4)",
+                    rusqlite::params![jid, st, ots, pts],
+                ).unwrap();
+            }
+            // 与 promote_started_courses 相同的 SQL
+            conn.execute(
+                "UPDATE queue_jobs_school SET status='retrying', error_message='', finished_at=NULL,
+                        promoted_ts = open_ts
+                 WHERE status='waiting' AND open_ts > 0 AND open_ts <= ?1
+                   AND (promoted_ts IS NULL OR promoted_ts <> open_ts)
+                   AND deleted_at IS NULL",
+                rusqlite::params![now],
+            ).unwrap();
+        }
+        let conn = db.clone_pool().get().unwrap();
+        let get = |jid: &str| -> String {
+            conn.query_row("SELECT status FROM queue_jobs_school WHERE job_id=?1",
+                           rusqlite::params![jid], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(get("JOB-DUE"), "retrying", "已到开课时间应自动重新入队");
+        assert_eq!(get("JOB-EARLY"), "waiting", "还没到开课时间应保持待开课");
+        assert_eq!(get("JOB-UNKNOWN"), "waiting", "开课时间未知不得瞎猜");
+        assert_eq!(get("JOB-TRIED"), "waiting", "同一开课时间不得反复自动重试");
+        assert_eq!(get("JOB-DONE"), "completed", "已完成的任务不该被碰");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

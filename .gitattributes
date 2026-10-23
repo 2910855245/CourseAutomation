@@ -1,0 +1,26 @@
+# 统一行尾：仓库内一律存 LF，检出时 Windows 转 CRLF。
+#
+# 为什么需要它：这个仓库在 Windows 上开发、Linux 服务器上构建，
+# 之前没有 .gitattributes，靠各机器的 core.autocrlf 各自决定 ——
+# 同一份文件在两边行尾不同，diff 会出现整文件级别的伪差异
+#（实测一次提交里 1946 行改动里只有 239 行是真改动）。
+# 显式声明后，diff 只反映真实改动。
+* text=auto eol=lf
+
+# 二进制：不做任何行尾转换
+*.apk binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.onnx binary
+*.db binary
+*.db-wal binary
+*.db-shm binary
+*.tgz binary
+*.tar.gz binary
+*.zip binary

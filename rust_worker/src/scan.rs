@@ -64,6 +64,13 @@ pub struct ScanTaskInput {
     /// （见 DURATION_CACHE 上面的说明）—— 落库是调用方（队列/接口层）的事。
     #[serde(skip)]
     pub student_name_out: Option<Arc<std::sync::Mutex<Option<String>>>>,
+    /// 课程开课时间的回传槽（出参，Unix 秒；0 = 无闸/未知）。
+    ///
+    /// 扫描发现选中的课还没开课时，把**最早**那个开课时间写进来，
+    /// 由调用方（队列层）落库 —— 调度器据此在开课那一刻自动重新入队，
+    /// 订单不必一直挂在「待开课」等人工干预。
+    #[serde(skip)]
+    pub open_ts_out: Option<Arc<std::sync::Mutex<i64>>>,
 }
 
 /// 课程条目（从 /user/index HTML 解析）
@@ -717,9 +724,18 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
                 crate::queue::iso_from_secs(*ts as u64).chars().take(10).collect::<String>()))
             .collect();
         let note = format!("尚未开课：{}", names.join("、"));
-        eprintln!("[scan] {note} —— 平台未开放学习时间记录，本轮不刷（开课后重扫可补）");
+        eprintln!("[scan] {note} —— 平台未开放学习时间记录，本轮不刷（开课后将自动补刷）");
         crate::logs::info(crate::logs::CAT_REPORT, &task.order_id, "",
-            format!("扫描发现 {note}，本轮跳过（开课后重扫可补刷）"));
+            format!("扫描发现 {note}，本轮跳过（开课后将自动补刷）"));
+        // 开课时间回传：多门都没开课时取最早的那个。
+        // 部分未开课（另有已开课的课）时也要回传 —— 那部分课等开课后再补，
+        // 整单才算真正刷完。
+        let earliest_open = not_started.iter().map(|(_, ts)| *ts).min().unwrap_or(0);
+        if let Some(slot) = &task.open_ts_out {
+            if let Ok(mut g) = slot.lock() {
+                *g = earliest_open;
+            }
+        }
     }
     // 考试环节要按课程回访考试清单，先把 (course_id, name) 留一份
     let exam_courses: Vec<(String, String)> = selected.iter()
@@ -732,7 +748,16 @@ pub async fn run_scan_and_study(task: &ScanTaskInput, push_url: &str,
                 .map(|(c, ts)| format!("《{}》（{} 开课）", c.name,
                     crate::queue::iso_from_secs(*ts as u64).chars().take(10).collect::<String>()))
                 .collect();
-            anyhow::bail!("所选课程尚未开课：{}，开课后重新提交即可自动补刷", names.join("、"));
+            // 开课时间回传给调用方（队列层落库）：调度器据此在开课那一刻
+            // 自动把任务重新入队跑完，订单不必一直挂在「待开课」等人工点补刷。
+            // 多门课都没开课时取**最早**的那个 —— 最早开课的那门先能跑。
+            let earliest_open = not_started.iter().map(|(_, ts)| *ts).min().unwrap_or(0);
+            if let Some(slot) = &task.open_ts_out {
+                if let Ok(mut g) = slot.lock() {
+                    *g = earliest_open;
+                }
+            }
+            anyhow::bail!("所选课程尚未开课：{}，开课后将自动补刷", names.join("、"));
         }
         anyhow::bail!("未找到课程");
     }

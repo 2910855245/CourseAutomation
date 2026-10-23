@@ -399,6 +399,21 @@ const CARD_PHONE_COLUMN: &[(&str, &str)] = &[("phone", "VARCHAR(32) DEFAULT ''")
 /// 老库缺列时默认 'paid' —— 历史任务都是付费单，落付费池即当前行为。
 const LANE_COLUMN: &[(&str, &str)] = &[("lane", "VARCHAR(16) DEFAULT 'paid'")];
 
+/// 课程开课时间（Unix 秒；0 = 未知/不适用）。
+///
+/// 「课程未开课」被平台拒收时，把该课程的开课时间记在这里，
+/// 调度器就能在**开课那一刻自动把任务重新入队**跑完，
+/// 而不是让订单一直挂在「待开课」等人工点「补刷」。
+const OPEN_TS_COLUMN: &[(&str, &str)] = &[("open_ts", "INTEGER DEFAULT 0")];
+
+/// 已经为哪个开课时间自动尝试过补刷（Unix 秒；0 = 没试过）。
+///
+/// 没有它会出死循环：平台到点仍拒收时，扫描会把**同一个** open_ts 写回来，
+/// 自动入队又把它捞起 → 每 30 秒一轮，白打平台接口。
+/// 记下"为这个 open_ts 试过了"，同一个开课时间只自动尝试一次；
+/// 平台改了开课日期（open_ts 变了）才会再次自动尝试。
+const PROMOTED_TS_COLUMN: &[(&str, &str)] = &[("promoted_ts", "INTEGER DEFAULT 0")];
+
 /// 幂等补列：表里缺失的列用 ALTER TABLE ADD COLUMN 补上（已存在的跳过）
 fn add_missing_columns(
     conn: &rusqlite::Connection,
@@ -434,6 +449,8 @@ pub fn ensure_schema(pool: &Pool<SqliteConnectionManager>) -> Result<()> {
     add_missing_columns(&conn, "brush_cards", CARD_PHONE_COLUMN)?;
     add_missing_columns(&conn, "queue_jobs_school", LANE_COLUMN)?;
     add_missing_columns(&conn, "queue_jobs_chaoxing", LANE_COLUMN)?;
+    add_missing_columns(&conn, "queue_jobs_school", OPEN_TS_COLUMN)?;
+    add_missing_columns(&conn, "queue_jobs_school", PROMOTED_TS_COLUMN)?;
     // system_logs：重复合并所需的计数/最近时间列（老库幂等补列）
     add_missing_columns(
         &conn,

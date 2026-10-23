@@ -1814,6 +1814,8 @@ async fn admin_order_execute(State(state): State<AppState>, Path(order_id): Path
             .map(|v| v != "0").unwrap_or(true);
         // 学生姓名回传槽：扫描时顺带从平台页面取到，落库给后台列表显示
         let student_name_slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+        // 课程开课时间回传槽：课没开课时记下来，供调度器到点自动重新入队
+        let open_ts_slot = std::sync::Arc::new(std::sync::Mutex::new(0i64));
         let task = crate::scan::ScanTaskInput {
             order_id: oid_task.clone(),
             username,
@@ -1828,6 +1830,7 @@ async fn admin_order_execute(State(state): State<AppState>, Path(order_id): Path
             ai_model,
             exam_enabled,
             student_name_out: Some(student_name_slot.clone()),
+            open_ts_out: Some(open_ts_slot.clone()),
         };
         let result = crate::scan::run_scan_and_study(&task, &push_url, &push_token).await;
         // 姓名落库（只在订单还没有姓名时写入，不覆盖已有值）
