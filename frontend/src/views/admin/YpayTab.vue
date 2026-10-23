@@ -2,7 +2,7 @@
 import { useAdminStore } from '@/stores/admin'
 const { orders } = useAdminStore().state().orders
 const { payTestAccountId, closePayTest, payTestChannelName, payTestChecks, payTestExpired, payTestLoading, payTestPaid, payTestPolling, payTestQrImage, payTestReallyPrice, showPayTest, startChannelPayTest } = useAdminStore().state().payments
-const { accountForm, aliAccounts, channelCodeHelp, channelCodeLabels, channelTestAccount, channelTestAllOk, channelTestChecks, channelTestLoading, channelTestQrImage, clearYpayOrderHistory, closeAccountModal, closeExpiredYpayOrders, codeLabel, deleteAccount, downloadQrImage, downloadQrLoading, editingAccount, fmtHeartbeat, loadYpay, loadYpayOrders, onQrFileChange, openAddAccount, openEditAccount, pairQrImage, pairQrLoading, payTypeLabels, qrFileInput, qrUploading, regenerateYpayKey, saveAccount, saveYpaySettings, savingAccount, showAccountModal, showCertFields, showChannelTest, testChannel, toggleAccount, triggerQrUpload, typeLabels, wxAccounts, ypayForm, ypayOrderFilters, ypayOrderStatusFilter, ypayOrders, ypayOrdersPage, ypayOrdersTotal, ypaySaving, ypayStateLabels, ypayStatus, ypayTab } = useAdminStore().state().ypay
+const { accountForm, aliAccounts, channelCodeHelp, channelCodeLabels, channelTestAccount, channelTestAllOk, channelTestChecks, channelTestLoading, channelTestQrImage, clearYpayOrderHistory, closeAccountModal, closeExpiredYpayOrders, codeLabel, deleteAccount, downloadQrImage, downloadQrLoading, editingAccount, fmtHeartbeat, loadYpay, loadYpayOrders, onQrFileChange, openAddAccount, openEditAccount, pairQrImage, pairQrLoading, payTypeLabels, qrUploading, regenerateYpayKey, saveAccount, saveYpaySettings, savingAccount, showAccountModal, showCertFields, showChannelTest, testChannel, toggleAccount, typeLabels, wxAccounts, ypayForm, ypayOrderFilters, ypayOrderStatusFilter, ypayOrders, ypayOrdersPage, ypayOrdersTotal, ypaySaving, ypayStateLabels, ypayStatus, ypayTab } = useAdminStore().state().ypay
 </script>
 
 <template>
@@ -746,17 +746,12 @@ const { accountForm, aliAccounts, channelCodeHelp, channelCodeLabels, channelTes
                   rows="3"
                   :placeholder="accountForm.type === 'wxpay' ? '粘贴 wxp:// 链接或上传收款码图片' : '粘贴收款码链接或内容'"
                 />
-                <input
-                  ref="qrFileInput"
-                  type="file"
-                  accept="image/*"
-                  style="display:none"
-                  @change="onQrFileChange"
-                >
-                <button
+                <!-- 用 <label> 原生触发文件选择：原先 JS 对 display:none 的
+                     input 调 .click() 会被移动端浏览器静默拦截（按钮点了没反应、也无报错）。
+                     input 改为视觉隐藏而非 display:none，label 的点击才能可靠唤起选择框。 -->
+                <label
                   class="btn btn-sm btn-upload-qr"
-                  :disabled="qrUploading"
-                  @click="triggerQrUpload"
+                  :class="{ 'is-busy': qrUploading }"
                 >
                   <svg
                     v-if="!qrUploading"
@@ -774,7 +769,13 @@ const { accountForm, aliAccounts, channelCodeHelp, channelCodeLabels, channelTes
                   /></svg>
                   <span v-if="qrUploading">解码中...</span>
                   <span v-else>上传图片</span>
-                </button>
+                  <input
+                    class="qr-file-input"
+                    type="file"
+                    accept="image/*"
+                    @change="onQrFileChange"
+                  >
+                </label>
               </div>
             </div>
 
@@ -1691,6 +1692,7 @@ const { accountForm, aliAccounts, channelCodeHelp, channelCodeLabels, channelTes
 
 .btn-upload-qr {
   flex-shrink: 0;
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1711,6 +1713,26 @@ const { accountForm, aliAccounts, channelCodeHelp, channelCodeLabels, channelTes
 
 .btn-upload-qr:active:not(:disabled) {
   transform: scale(.97);
+}
+
+/* 控制器而非禁用：label 没有 disabled 属性 */
+.btn-upload-qr.is-busy {
+  opacity: .6;
+  pointer-events: none;
+}
+
+/* 视觉隐藏但保留可点面积：display:none \u7684 file input 在移动端点不动，
+   这里用 clip 隐藏，label 的点击仍能原生唤起选择框 */
+.qr-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* 测试项 */
